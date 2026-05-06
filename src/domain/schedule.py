@@ -1,4 +1,4 @@
-﻿"""
+"""
 Domain Entity: Schedule
 ------------------------
 Represents one complete, conflict-free exam schedule assignment.
@@ -8,7 +8,7 @@ Fields:
 
 Notes:
     - Use @dataclass or Pydantic BaseModel.
-    - This object is YIELDED by ScheduleGenerator -- never stored in a list.
+    - This object is YIELDED by ScheduleGenerator — never stored in a list.
     - Immutable after construction (use frozen=True if dataclass).
 """
 

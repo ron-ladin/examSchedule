@@ -1,4 +1,4 @@
-﻿"""
+"""
 Infrastructure Adapter: FileDataProvider
 -----------------------------------------
 Implements IDataProvider by reading data from text files.
@@ -12,18 +12,19 @@ Methods to implement:
 
     get_courses() -> List[Course]
         Parses courses.txt ($$$$-separated records).
-        Record structure:
+        Each record structure:
             $$$$
             <Course Name>
             <5-digit Course ID>
             <Instructor Name>
-            <program_id>,<year>,<semester>,<requirement>   (one or more lines)
+            <program_id>,<year>,<semester>,<requirement>  ← one or more lines
             <Evaluation>
-        Maps "SPRI" -> "SPRING" in semester field before building CourseOffering.
+        Maps "SPRI" → "SPRING" in semester field before building CourseOffering.
+        Returns a list of Course objects with their offerings populated.
 
     get_exam_periods() -> List[ExamPeriod]
         Parses exam_periods.txt ($$$$-separated records).
-        Record structure:
+        Each record structure:
             $$$$
             <Semester>,<Moed>
             <StartDate>, <EndDate>
@@ -37,8 +38,8 @@ Methods to implement:
         Raises ValueError if count > 5 or any entry is not a valid program ID.
 
 Notes:
-    - Use pathlib.Path for all file access -- never os.path.
-    - Use logging for warnings (e.g. skipped records) -- no print().
+    - Use pathlib.Path for all file access — never os.path.
+    - Use logging for warnings (e.g., skipped records) — no print().
     - All parsing logic belongs here, not in domain classes.
 """
 

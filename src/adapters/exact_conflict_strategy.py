@@ -1,4 +1,4 @@
-﻿"""
+"""
 Infrastructure Adapter: ExactConflictStrategy
 ----------------------------------------------
 Implements IConflictStrategy using the Version 1.0 conflict rule.
@@ -9,11 +9,11 @@ Methods to implement:
         Returns True if placing both courses on the same date is a conflict.
 
         Conflict rule:
-            Two courses conflict if:
+            Two courses conflict on a date if:
                 1. They share at least one (program_id, year) pair across their offerings, AND
                 2. NOT both courses are "Elective" in that shared offering.
 
-            Logic:
+            In code terms:
                 for each offering1 in course1.offerings:
                     for each offering2 in course2.offerings:
                         if offering1.program_id == offering2.program_id
@@ -23,12 +23,12 @@ Methods to implement:
                                 return True
                 return False
 
-        The `date` parameter is accepted for interface compatibility
-        but is not used in version 1.0 (conflicts are date-agnostic).
+        The `date` parameter is accepted for interface compatibility but
+        is not used in this version (conflicts are date-agnostic in v1.0).
 
 Notes:
     - Implements IConflictStrategy from interfaces/.
-    - Keep this class thin -- conflict logic only, no file I/O.
+    - Keep this class thin — conflict logic only, no file I/O.
 """
 
 from src.interfaces.i_conflict_strategy import IConflictStrategy

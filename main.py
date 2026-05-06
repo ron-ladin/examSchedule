@@ -1,4 +1,4 @@
-﻿"""
+"""
 Entry Point: main.py
 ---------------------
 CLI entry point for the Exam Scheduling System.
@@ -21,6 +21,6 @@ Usage:
 
 Notes:
     - All paths must be handled as pathlib.Path objects.
-    - No business logic here -- only wiring and CLI parsing.
-    - No print() calls -- logging only.
+    - No business logic here — only wiring and CLI parsing.
+    - No print() calls — logging only.
 """

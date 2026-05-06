@@ -1,4 +1,4 @@
-﻿"""
+"""
 Infrastructure Adapter: TextFileExporter
 -----------------------------------------
 Implements IOutputExporter by writing schedules to a human-readable text file.
@@ -16,6 +16,7 @@ Methods to implement:
             --- Moed: Aleph ---
             Schedule #1:
               - <Course Name> | Date: DD-MM-YYYY | Instructor: <Name>
+              - ...
 
             --- Moed: Bet ---
             Schedule #1:
@@ -31,11 +32,11 @@ Methods to implement:
             - "SPRI" from domain data must appear as "SPRING" in output.
             - Use itertools.groupby for grouping logic.
             - Use f-strings for all line formatting.
-            - Use pathlib.Path.open() for writing -- never hardcoded paths.
+            - Use pathlib.Path.open() for writing — never hardcoded paths.
 
 Notes:
-    - Must stream -- do NOT collect all schedules into a list before writing.
-    - Use logging -- no print() calls.
+    - Must stream — do NOT collect all schedules into a list before writing.
+    - Use logging — no print() calls.
 """
 
 from src.interfaces.i_output_exporter import IOutputExporter

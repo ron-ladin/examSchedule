@@ -1,4 +1,4 @@
-﻿"""
+"""
 Domain Entity: CourseOffering
 ------------------------------
 Represents a single program's enrollment in a course.
@@ -11,7 +11,7 @@ Fields:
 
 Notes:
     - Use @dataclass or Pydantic BaseModel.
-    - No file I/O here -- pure data container.
+    - No file I/O here — pure data container.
     - "SPRI" from the file must be mapped to "SPRING" BEFORE constructing this object.
 """
 

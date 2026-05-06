@@ -1,4 +1,4 @@
-﻿"""
+"""
 Interface: IOutputExporter
 ---------------------------
 Contract for writing generated schedules to an output destination.
@@ -6,7 +6,7 @@ Contract for writing generated schedules to an output destination.
 Abstract methods to implement:
     - export_schedules(schedules: Iterator[Schedule]) -> None
         Consumes the schedule generator and writes output.
-        Must group results by Semester then Moed.
+        Must group results by Semester → Moed → Schedule number.
         Output format:
             === SEMESTER: FALL ===
             --- Moed: Aleph ---
@@ -17,8 +17,8 @@ Abstract methods to implement:
 
 Notes:
     - Use ABC and @abstractmethod from the abc module.
-    - Accepts an Iterator (generator) -- must NOT convert to list.
-    - Implementations live in adapters/ -- NOT here.
+    - Accepts an Iterator (generator) — must NOT convert to list.
+    - Implementations live in adapters/ — NOT here.
 """
 
 from abc import ABC, abstractmethod

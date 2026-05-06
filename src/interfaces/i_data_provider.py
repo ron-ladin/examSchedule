@@ -1,4 +1,4 @@
-﻿"""
+"""
 Interface: IDataProvider
 -------------------------
 Contract for reading all input data needed by the scheduling engine.
@@ -6,6 +6,8 @@ Contract for reading all input data needed by the scheduling engine.
 Abstract methods to implement:
     - get_courses() -> List[Course]
         Returns all courses parsed from the data source.
+        Only courses with evaluation_type == "Exam" need to be scheduled,
+        but filtering can happen here or in the engine.
 
     - get_exam_periods() -> List[ExamPeriod]
         Returns all exam periods (semester + moed + date ranges + exclusions).
@@ -16,7 +18,7 @@ Abstract methods to implement:
 
 Notes:
     - Use ABC and @abstractmethod from the abc module.
-    - Implementations live in adapters/ -- NOT here.
+    - Implementations live in adapters/ — NOT here.
     - The domain layer depends only on this interface, never on a concrete adapter.
 """
 
