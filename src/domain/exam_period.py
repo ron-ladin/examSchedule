@@ -7,7 +7,7 @@ Fields:
     - semester       (str)           : "FALL" | "SPRI" | "SUMM"
     - moed           (str)           : "Aleph" | "Bet" | "Gimel"
     - date_ranges    (List[Tuple[date, date]]) : list of (start, end) inclusive date ranges
-    - excluded_dates (List[date])    : individual dates that cannot be used
+    - excluded_dates (Set[date])     : individual dates that cannot be used
 
 Methods to implement:
     - get_valid_dates() -> List[date]
@@ -25,7 +25,7 @@ Notes:
 
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import List, Tuple
+from typing import List, Set, Tuple
 
 from src.domain.semester import normalize_semester
 
@@ -35,7 +35,7 @@ class ExamPeriod:
     semester: str  # FALL / SPRI / SUMM
     moed: str      # Aleph / Bet / Gimel
     date_ranges: List[Tuple[date, date]]
-    excluded_dates: List[date] = field(default_factory=list)
+    excluded_dates: Set[date] = field(default_factory=set)
 
     def get_valid_dates(self) -> List[date]:
         valid_dates: List[date] = []

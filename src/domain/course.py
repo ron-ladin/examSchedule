@@ -55,3 +55,18 @@ class Course:
         return self.has_exam() and bool(
             self.get_relevant_offerings(selected_programs, semester)
         )
+
+    def is_elective_for(
+        self,
+        selected_programs: List[str],
+        semester: str,
+    ) -> bool:
+        relevant_offerings = self.get_relevant_offerings(
+            selected_programs=selected_programs,
+            semester=semester,
+        )
+
+        return bool(relevant_offerings) and all(
+            offering.is_elective()
+            for offering in relevant_offerings
+        )

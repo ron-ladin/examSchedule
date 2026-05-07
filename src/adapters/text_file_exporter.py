@@ -9,7 +9,7 @@ Constructor args:
 Methods to implement:
 
     export_schedules(
-        schedules_by_period: Dict[str, List[Schedule]],
+        schedules_by_period: Dict[str, Iterable[Schedule]],
         courses_by_id: Dict[str, Course]
     ) -> None
         Writes generated schedules to output_path.
@@ -38,11 +38,12 @@ Methods to implement:
 
 Notes:
     - Use logging — no print() calls.
-    - This exporter receives schedules already grouped by period from the application layer.
+    - This exporter receives schedules grouped by period as iterables, so schedules
+      can be consumed one by one without loading all schedules into memory at once.
 """
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, Iterable
 
 import logging
 
@@ -62,7 +63,7 @@ class TextFileExporter(IOutputExporter):
 
     def export_schedules(
         self,
-        schedules_by_period: Dict[str, List[Schedule]],
+        schedules_by_period: Dict[str, Iterable[Schedule]],
         courses_by_id: Dict[str, Course],
     ) -> None:
         logger.info("Writing schedules output to %s", self.output_path)
@@ -79,14 +80,13 @@ class TextFileExporter(IOutputExporter):
                     file=file,
                     semester=semester,
                     moed=moed,
-                    schedules_count=len(schedules),
                 )
 
-                if not schedules:
-                    file.write("No valid schedules found.\n\n")
-                    continue
+                schedules_count = 0
 
                 for schedule_number, schedule in enumerate(schedules, start=1):
+                    schedules_count += 1
+
                     self._write_schedule(
                         file=file,
                         schedule_number=schedule_number,
@@ -94,16 +94,17 @@ class TextFileExporter(IOutputExporter):
                         courses_by_id=courses_by_id,
                     )
 
+                if schedules_count == 0:
+                    file.write("No valid schedules found.\n\n")
+
     def _write_period_header(
         self,
         file,
         semester: str,
         moed: str,
-        schedules_count: int,
     ) -> None:
         file.write(f"=== SEMESTER: {display_semester(semester)} ===\n")
-        file.write(f"--- Moed: {moed} ---\n")
-        file.write(f"Total schedules found: {schedules_count}\n\n")
+        file.write(f"--- Moed: {moed} ---\n\n")
 
     def _write_schedule(
         self,

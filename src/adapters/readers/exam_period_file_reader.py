@@ -12,7 +12,7 @@ Responsible only for:
 
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Set, Tuple
 
 from src.domain.exam_period import ExamPeriod
 from src.domain.semester import normalize_semester
@@ -67,10 +67,10 @@ class ExamPeriodFileReader:
         semester, moed = self._parse_period_header(record[0])
         start_date, end_date = self._parse_date_range(record[1])
 
-        excluded_dates: List[date] = []
+        excluded_dates: Set[date] = set()
 
         for line in record[2:]:
-            excluded_dates.extend(self._parse_excluded_dates(line))
+            excluded_dates.update(self._parse_excluded_dates(line))
 
         return ExamPeriod(
             semester=semester,
@@ -103,21 +103,21 @@ class ExamPeriodFileReader:
 
         return self.VALID_MOEDS[key]
 
-    def _parse_excluded_dates(self, line: str) -> List[date]:
+    def _parse_excluded_dates(self, line: str) -> Set[date]:
         clean_line = line.strip()
 
         if clean_line.startswith("-"):
             clean_line = clean_line[1:].strip()
 
         if not clean_line:
-            return []
+            return set()
 
         if "," in clean_line:
             start_date, end_date = self._parse_date_range(clean_line)
-            return self._build_date_list(start_date, end_date)
+            return self._build_date_set(start_date, end_date)
 
         first_token = clean_line.split()[0]
-        return [self._parse_date(first_token)]
+        return {self._parse_date(first_token)}
 
     def _parse_date_range(self, line: str) -> Tuple[date, date]:
         parts = [
@@ -141,12 +141,12 @@ class ExamPeriodFileReader:
     def _parse_date(self, value: str) -> date:
         return datetime.strptime(value, self.DATE_FORMAT).date()
 
-    def _build_date_list(self, start_date: date, end_date: date) -> List[date]:
-        dates: List[date] = []
+    def _build_date_set(self, start_date: date, end_date: date) -> Set[date]:
+        dates: Set[date] = set()
         current_date = start_date
 
         while current_date <= end_date:
-            dates.append(current_date)
+            dates.add(current_date)
             current_date += timedelta(days=1)
 
         return dates
