@@ -19,7 +19,7 @@ Abstract methods to implement:
 Notes:
     - Use ABC and @abstractmethod from the abc module.
     - Implementations live in adapters/ — NOT here.
-    - The domain layer depends only on this interface, never on a concrete adapter.
+    - The engine/application layer depends on this interface, not on a concrete adapter.
 """
 
 from abc import ABC, abstractmethod

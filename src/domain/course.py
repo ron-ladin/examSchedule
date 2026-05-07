@@ -34,7 +34,7 @@ class Course:
         self.offerings.append(offering)
 
     def has_exam(self) -> bool:
-        return self.evaluation_type == "Exam"
+        return self.evaluation_type.strip().lower() == "exam"
 
     def get_relevant_offerings(
         self,

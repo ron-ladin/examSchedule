@@ -48,6 +48,7 @@ import logging
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule
+from src.domain.semester import display_semester
 from src.interfaces.i_output_exporter import IOutputExporter
 
 
@@ -100,9 +101,7 @@ class TextFileExporter(IOutputExporter):
         moed: str,
         schedules_count: int,
     ) -> None:
-        display_semester = self._display_semester(semester)
-
-        file.write(f"=== SEMESTER: {display_semester} ===\n")
+        file.write(f"=== SEMESTER: {display_semester(semester)} ===\n")
         file.write(f"--- Moed: {moed} ---\n")
         file.write(f"Total schedules found: {schedules_count}\n\n")
 
@@ -121,7 +120,14 @@ class TextFileExporter(IOutputExporter):
         )
 
         for course_id, exam_date in sorted_assignments:
-            course = courses_by_id[course_id]
+            course = courses_by_id.get(course_id)
+
+            if course is None:
+                logger.warning(
+                    "Course id %s was not found in courses_by_id",
+                    course_id,
+                )
+                continue
 
             file.write(
                 f"  - {course.name} | "
@@ -138,12 +144,3 @@ class TextFileExporter(IOutputExporter):
 
         semester, moed = period_key.split(" - ", 1)
         return semester.strip(), moed.strip()
-
-    def _display_semester(self, semester: str) -> str:
-        semester_names = {
-            "FALL": "FALL",
-            "SPRI": "SPRING",
-            "SUMM": "SUMMER",
-        }
-
-        return semester_names.get(semester, semester)

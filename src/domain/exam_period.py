@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import List, Tuple
 
+from src.domain.semester import normalize_semester
+
 
 @dataclass(frozen=True)
 class ExamPeriod:
@@ -50,4 +52,4 @@ class ExamPeriod:
         return valid_dates
 
     def get_key(self) -> str:
-        return f"{self.semester} - {self.moed}"
+        return f"{normalize_semester(self.semester)} - {self.moed}"
