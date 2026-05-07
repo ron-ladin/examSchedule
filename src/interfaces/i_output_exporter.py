@@ -4,25 +4,43 @@ Interface: IOutputExporter
 Contract for writing generated schedules to an output destination.
 
 Abstract methods to implement:
-    - export_schedules(schedules: Iterator[Schedule]) -> None
-        Consumes the schedule generator and writes output.
+    - export_schedules(
+          schedules_by_period: Dict[str, List[Schedule]],
+          courses_by_id: Dict[str, Course]
+      ) -> None
+
+        Writes all generated schedules to an output destination.
+
         Must group results by Semester → Moed → Schedule number.
         Output format:
             === SEMESTER: FALL ===
             --- Moed: Aleph ---
             Schedule #1:
               - <Course Name> | Date: DD-MM-YYYY | Instructor: <Name>
+
         Schedules within each moed must be sorted chronologically by exam date.
-        "SPRI" must appear as "SPRING" in output.
+        "SPRI" may appear as "SPRING" in output if the concrete exporter chooses
+        to display user-friendly semester names.
 
 Notes:
     - Use ABC and @abstractmethod from the abc module.
-    - Accepts an Iterator (generator) — must NOT convert to list.
     - Implementations live in adapters/ — NOT here.
+    - This interface defines only the contract, not the output formatting logic.
 """
 
 from abc import ABC, abstractmethod
+from typing import Dict, List
+
+from src.domain.course import Course
+from src.domain.schedule import Schedule
 
 
 class IOutputExporter(ABC):
-    pass
+
+    @abstractmethod
+    def export_schedules(
+        self,
+        schedules_by_period: Dict[str, List[Schedule]],
+        courses_by_id: Dict[str, Course],
+    ) -> None:
+        pass

@@ -23,7 +23,22 @@ Notes:
 """
 
 from abc import ABC, abstractmethod
+from typing import List
+
+from src.domain.course import Course
+from src.domain.exam_period import ExamPeriod
 
 
 class IDataProvider(ABC):
-    pass
+
+    @abstractmethod
+    def get_courses(self) -> List[Course]:
+        pass
+
+    @abstractmethod
+    def get_exam_periods(self) -> List[ExamPeriod]:
+        pass
+
+    @abstractmethod
+    def get_selected_programs(self) -> List[str]:
+        pass
