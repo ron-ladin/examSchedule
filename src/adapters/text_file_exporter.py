@@ -8,8 +8,11 @@ Constructor args:
 
 Methods to implement:
 
-    export_schedules(schedules: Iterator[Schedule]) -> None
-        Consumes the schedule generator and writes to output_path.
+    export_schedules(
+        schedules_by_period: Dict[str, Iterable[Schedule]],
+        courses_by_id: Dict[str, Course]
+    ) -> None
+        Writes generated schedules to output_path.
 
         Output structure:
             === SEMESTER: FALL ===
@@ -30,17 +33,115 @@ Methods to implement:
             - Within each moed, number schedules starting from #1.
             - Within each schedule, sort courses chronologically by exam date.
             - "SPRI" from domain data must appear as "SPRING" in output.
-            - Use itertools.groupby for grouping logic.
             - Use f-strings for all line formatting.
             - Use pathlib.Path.open() for writing — never hardcoded paths.
 
 Notes:
-    - Must stream — do NOT collect all schedules into a list before writing.
     - Use logging — no print() calls.
+    - This exporter receives schedules grouped by period as iterables, so schedules
+      can be consumed one by one without loading all schedules into memory at once.
 """
 
+from pathlib import Path
+from typing import Dict, Iterable
+
+import logging
+
+from src.domain.course import Course
+from src.domain.schedule import Schedule
+from src.domain.semester import display_semester
 from src.interfaces.i_output_exporter import IOutputExporter
 
 
+logger = logging.getLogger(__name__)
+
+
 class TextFileExporter(IOutputExporter):
-    pass
+
+    def __init__(self, output_path: Path):
+        self.output_path = Path(output_path)
+
+    def export_schedules(
+        self,
+        schedules_by_period: Dict[str, Iterable[Schedule]],
+        courses_by_id: Dict[str, Course],
+    ) -> None:
+        logger.info("Writing schedules output to %s", self.output_path)
+
+        with self.output_path.open("w", encoding="utf-8") as file:
+            if not schedules_by_period:
+                file.write("No exam periods found.\n")
+                return
+
+            for period_key, schedules in schedules_by_period.items():
+                semester, moed = self._split_period_key(period_key)
+
+                self._write_period_header(
+                    file=file,
+                    semester=semester,
+                    moed=moed,
+                )
+
+                schedules_count = 0
+
+                for schedule_number, schedule in enumerate(schedules, start=1):
+                    schedules_count += 1
+
+                    self._write_schedule(
+                        file=file,
+                        schedule_number=schedule_number,
+                        schedule=schedule,
+                        courses_by_id=courses_by_id,
+                    )
+
+                if schedules_count == 0:
+                    file.write("No valid schedules found.\n\n")
+
+    def _write_period_header(
+        self,
+        file,
+        semester: str,
+        moed: str,
+    ) -> None:
+        file.write(f"=== SEMESTER: {display_semester(semester)} ===\n")
+        file.write(f"--- Moed: {moed} ---\n\n")
+
+    def _write_schedule(
+        self,
+        file,
+        schedule_number: int,
+        schedule: Schedule,
+        courses_by_id: Dict[str, Course],
+    ) -> None:
+        file.write(f"Schedule #{schedule_number}:\n")
+
+        sorted_assignments = sorted(
+            schedule.assignments.items(),
+            key=lambda item: item[1],
+        )
+
+        for course_id, exam_date in sorted_assignments:
+            course = courses_by_id.get(course_id)
+
+            if course is None:
+                logger.warning(
+                    "Course id %s was not found in courses_by_id",
+                    course_id,
+                )
+                continue
+
+            file.write(
+                f"  - {course.name} | "
+                f"Course ID: {course.id} | "
+                f"Date: {exam_date.strftime('%d-%m-%Y')} | "
+                f"Instructor: {course.instructor}\n"
+            )
+
+        file.write("\n")
+
+    def _split_period_key(self, period_key: str) -> tuple[str, str]:
+        if " - " not in period_key:
+            return period_key, "Unknown"
+
+        semester, moed = period_key.split(" - ", 1)
+        return semester.strip(), moed.strip()
