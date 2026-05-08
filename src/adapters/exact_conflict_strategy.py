@@ -1,34 +1,40 @@
-﻿"""
+"""
 Infrastructure Adapter: ExactConflictStrategy
 ----------------------------------------------
 Implements IConflictStrategy using the Version 1.0 conflict rule.
 
 Methods to implement:
 
-    is_conflict(course1: Course, course2: Course, date: date) -> bool
-        Returns True if placing both courses on the same date is a conflict.
+    is_conflict(
+        course1: Course,
+        course2: Course,
+        selected_programs: List[str],
+        semester: str
+    ) -> bool
+
+        Returns True if placing both courses on the same date would be a conflict.
 
         Conflict rule:
-            Two courses conflict if:
-                1. They share at least one (program_id, year) pair across their offerings, AND
-                2. NOT both courses are "Elective" in that shared offering.
+            Two courses conflict on a date if:
+                1. They share at least one selected program_id,
+                2. They are in the same study year,
+                3. They are in the same semester,
+                4. NOT both courses are "Elective" in that shared offering.
 
-            Logic:
-                for each offering1 in course1.offerings:
-                    for each offering2 in course2.offerings:
-                        if offering1.program_id == offering2.program_id
-                           and offering1.year == offering2.year:
-                            if NOT (offering1.requirement == "Elective"
-                                    and offering2.requirement == "Elective"):
+            In code terms:
+                for each relevant offering1 in course1:
+                    for each relevant offering2 in course2:
+                        if same program, same year, same semester:
+                            if NOT both elective:
                                 return True
                 return False
 
-        The `date` parameter is accepted for interface compatibility
-        but is not used in version 1.0 (conflicts are date-agnostic).
+        The date equality check is handled by ScheduleGenerator.
+        This class only decides whether two courses are allowed to share a date.
 
 Notes:
     - Implements IConflictStrategy from interfaces/.
-    - Keep this class thin -- conflict logic only, no file I/O.
+    - Keep this class thin — conflict logic only, no file I/O.
 """
 
 from datetime import date
