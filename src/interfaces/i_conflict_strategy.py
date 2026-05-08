@@ -34,19 +34,16 @@ Notes:
 """
 
 from abc import ABC, abstractmethod
-from typing import List
+from datetime import date
+from typing import TYPE_CHECKING
 
-from src.domain.course import Course
+if TYPE_CHECKING:
+    from src.domain.course import Course
 
 
 class IConflictStrategy(ABC):
+    """Contract for conflict detection between two courses on the same date."""
 
     @abstractmethod
-    def is_conflict(
-        self,
-        course1: Course,
-        course2: Course,
-        selected_programs: List[str],
-        semester: str,
-    ) -> bool:
-        pass
+    def is_conflict(self, course1: "Course", course2: "Course", exam_date: date) -> bool:
+        """Return True if assigning both courses to exam_date causes a conflict."""
