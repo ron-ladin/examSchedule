@@ -1,35 +1,3 @@
-﻿"""
-Core Engine: ScheduleGenerator
-
---------------------------------
-Generates ALL valid, conflict-free exam schedules using backtracking.
-
-Constructor args:
-    - conflict_strategy (IConflictStrategy) : injected strategy for conflict checking
-
-Main method to implement:
-    - generate_schedules(courses: List[Course], exam_period: ExamPeriod) -> Iterator[Schedule]
-        Uses backtracking to assign one valid date per course.
-        MUST use `yield` -- never build a full list in memory.
-        Performance requirement: must complete in < 30 seconds on medium datasets.
-
-Internal helpers to implement:
-    - _build_conflict_graph(courses: List[Course]) -> Dict[Course, Set[Course]]
-        Builds the conflict graph ONCE before backtracking starts.
-        Key: course -> set of courses it potentially conflicts with (date-independent).
-        Used during backtracking to prune the search space early.
-
-    - _backtrack(assignment, remaining, valid_dates, ...) -> Iterator[Schedule]
-        Recursive core. For each unassigned course, tries every valid date
-        from the exam period. Yields a Schedule when all courses are assigned
-        without conflict.
-
-Notes:
-    - Build the conflict graph ONCE -- do NOT recompute per recursive call.
-    - Use IConflictStrategy.is_conflict() -- never hardcode conflict logic here.
-    - Valid dates come from ExamPeriod.get_valid_dates().
-"""
-
 from datetime import date
 from typing import Dict, Iterator, List, Set
 
@@ -43,44 +11,54 @@ class ScheduleGenerator:
     """Generates all conflict-free exam schedules via backtracking."""
 
     def __init__(self, conflict_strategy: IConflictStrategy) -> None:
-        # Save the rule-checker (strategy) so we can use it later to find conflicts.
-        self._conflict_strategy = conflict_strategy
+        # Inject the conflict rule — engine never touches ExactConflictStrategy directly
+        self._strategy = conflict_strategy
 
     def generate_schedules(
-        self, courses: List[Course], exam_period: ExamPeriod
+        self,
+        courses: List[Course],
+        exam_period: ExamPeriod,
     ) -> Iterator[Schedule]:
-        # Step 1: Get all the days we are allowed to have exams on (no holidays/weekends).
+        """Yield every valid conflict-free schedule for the given exam period.
+
+        Uses a conflict graph + MCV heuristic to prune the search space before
+        starting backtracking. Yields lazily — never builds a list in memory.
+        """
+        # Resolve the allowed dates from the period (excludes weekends & holidays)
         valid_dates = exam_period.get_valid_dates()
-        
-        # Step 2: Safety check. If there are no valid days or no courses, stop right here.
         if not valid_dates or not courses:
             return
 
-        # Step 3: Build a map of "enemies" (courses that cannot be on the same day).
-        # We do this only ONCE before the hard work begins, to save time.
+        # Build the conflict graph once — reused across every backtrack step
         conflict_graph = self._build_conflict_graph(courses)
-        
-        # Step 4: Start the backtracking process. 
-        # 'yield from' means we will pass the found schedules directly to the outside world,
-        # one by one, without saving them all in a massive list in our computer's memory.
-        yield from self._backtrack({}, list(courses), valid_dates, conflict_graph)
 
-    def _build_conflict_graph(
-        self, courses: List[Course]
-    ) -> Dict[Course, Set[Course]]:
-        # Create an empty dictionary. Every course gets an empty set of "enemies".
+        # Most-Constrained-Variable (MCV) heuristic:
+        # courses with more conflicts are harder to place, so assign them first.
+        # This causes failures to surface early, pruning large branches of the search tree.
+        ordered = sorted(courses, key=lambda c: len(conflict_graph[c]), reverse=True)
+
+        # Hand off to the recursive backtracker with an empty initial assignment
+        yield from self._backtrack({}, ordered, valid_dates, conflict_graph, exam_period)
+
+    def _build_conflict_graph(self, courses: List[Course]) -> Dict[Course, Set[Course]]:
+        """Return an adjacency map: course → set of courses it conflicts with.
+
+        Iterates every pair exactly once (i, j where j > i) to avoid double-work.
+        The result is symmetric: if A conflicts with B then B also conflicts with A.
+
+        This O(n²) pass is done once so the backtracker can do O(1) neighbor lookups
+        instead of re-running the strategy on every step.
+        """
         graph: Dict[Course, Set[Course]] = {c: set() for c in courses}
-
-        # Check every possible pair of courses to see if they conflict.
-        for i, course_a in enumerate(courses):
-            for course_b in courses[i + 1:]:
-                # We use date.min (a fake date) because in Version 1.0, 
-                # conflicts depend only on the program and year, not the actual date.
-                if self._conflict_strategy.is_conflict(course_a, course_b, date.min):
-                    # If they conflict, add them to each other's enemy list.
-                    graph[course_a].add(course_b)
-                    graph[course_b].add(course_a)
-
+        for i, a in enumerate(courses):
+            for b in courses[i + 1:]:
+                # We ask: "would A and B conflict IF placed on the same date?"
+                # The specific date doesn't change that answer (v1.0 conflict depends only
+                # on program/year/semester overlap), so date.min is passed as a placeholder.
+                # The backtracker enforces the "same date" part via the `blocked` set.
+                if self._strategy.is_conflict(a, b, date.min):
+                    graph[a].add(b)
+                    graph[b].add(a)
         return graph
 
     def _backtrack(
@@ -89,42 +67,41 @@ class ScheduleGenerator:
         remaining: List[Course],
         valid_dates: List[date],
         conflict_graph: Dict[Course, Set[Course]],
+        exam_period: ExamPeriod,
     ) -> Iterator[Schedule]:
-        
-        # BASE CASE: Are we out of courses? 
-        # If 'remaining' is empty, it means we successfully scheduled everything!
+        """Recursively assign dates to courses, yielding a Schedule when all are placed.
+
+        Classic backtracking pattern — choose, explore, un-choose:
+          1. Pick the next unassigned course (head of `remaining`).
+          2. Try every valid date that isn't blocked by an already-assigned neighbor.
+          3. Recurse with the new assignment; yield any complete schedules found.
+          4. Undo the assignment before trying the next date (backtrack).
+
+        `assignment` is mutated in-place and restored after each branch, so it never
+        holds more than one partial solution at a time — O(n) memory regardless of
+        how many schedules exist.
+        """
+        # Base case: every course has been assigned — emit one complete schedule
         if not remaining:
-            # We must make a copy of our dictionary using dict(assignment).
-            # If we don't copy it, the backtracking will accidentally delete our correct answers later.
-            yield Schedule(assignments=dict(assignment))
+            # Copy assignment so the yielded Schedule is independent of future mutations
+            yield Schedule(period=exam_period, assignments=dict(assignment))
             return
 
-        # Get the very first course from the remaining list.
-        current_course = remaining[0]
-        # Keep the rest of the list for the next recursive calls.
-        rest = remaining[1:]
+        course = remaining[0]
 
-        # Try to put 'current_course' on every possible allowed date.
-        for candidate_date in valid_dates:
-            
-            # PRUNING (Optimization): Check if this date is safe.
-            # Look at all the courses we already scheduled. 
-            # If any of them is an "enemy" of 'current_course' AND is scheduled on this exact date,
-            # then we have a conflict.
-            conflict_found = any(
-                assigned_date == candidate_date
-                for neighbor, assigned_date in assignment.items()
-                if neighbor in conflict_graph[current_course]
-            )
+        # Collect dates already taken by conflicting neighbors (already assigned).
+        # Building this set once per call keeps the inner loop O(1) per date.
+        blocked = {assignment[n] for n in conflict_graph[course] if n in assignment}
 
-            # If the date is safe (no enemies on this day):
-            if not conflict_found:
-                # 1. CHOOSE: Assign the course to this date.
-                assignment[current_course] = candidate_date
-                
-                # 2. EXPLORE: Call this same function again to schedule the 'rest' of the courses.
-                yield from self._backtrack(assignment, rest, valid_dates, conflict_graph)
-                
-                # 3. UN-CHOOSE (Backtrack): We finished exploring this path. 
-                # Remove the course from this date so the loop can try the next date.
-                del assignment[current_course]
+        for d in valid_dates:
+            if d not in blocked:
+                # Choose: tentatively place this course on date d
+                assignment[course] = d
+
+                # Explore: recurse on the remaining courses
+                yield from self._backtrack(
+                    assignment, remaining[1:], valid_dates, conflict_graph, exam_period
+                )
+
+                # Un-choose: remove the assignment so the next iteration starts clean
+                del assignment[course]
