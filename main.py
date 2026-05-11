@@ -51,7 +51,8 @@ def main() -> None:
         programs_path=args.programs,
     )
     exporter = TextFileExporter(output_path=args.output)
-    conflict_strategy = ExactConflictStrategy()
+    selected_programs = data_provider.get_selected_programs()
+    conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
 
     controller = AppController(
         data_provider=data_provider,
