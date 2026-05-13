@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 
 class AppController:
+    # This class connects all the parts of the system together.
+    # It does not contain business logic — it just calls the right components in the right order.
 
     def __init__(
         self,
@@ -53,27 +55,34 @@ class AppController:
         self._generator = ScheduleGenerator(conflict_strategy)
 
     def run(self) -> None:
+        # Step 1: find out which programs the user selected
         logger.info("Starting exam schedule generation")
 
         selected_programs = self._data_provider.get_selected_programs()
         logger.info("Selected programs: %s", selected_programs)
 
+        # Step 2: load all courses and exam periods from the data source
         all_courses = self._data_provider.get_courses()
         exam_periods = self._data_provider.get_exam_periods()
 
-        # Full lookup table — only courses that received an assignment will appear in output
+        # Build a dict for fast course lookup by ID (used later by the exporter)
         courses_by_id = {course.id: course for course in all_courses}
 
+        # Step 3: for each exam period, generate all valid schedules
         schedules_by_period: Dict[str, Iterable[Schedule]] = {}
         for period in exam_periods:
+            # Keep only courses that have exams and belong to the selected programs
             relevant_courses = [
                 c for c in all_courses
                 if c.is_relevant_for_period(selected_programs, period.semester)
             ]
             logger.info("Period %s: %d relevant courses", period.get_key(), len(relevant_courses))
+
+            # generate_schedules returns a lazy iterator — no schedules are computed yet
             schedules_by_period[period.get_key()] = self._generator.generate_schedules(
                 relevant_courses, period
             )
 
+        # Step 4: pass everything to the exporter, which writes the output file
         self._exporter.export_schedules(schedules_by_period, courses_by_id)
         logger.info("Export complete")
