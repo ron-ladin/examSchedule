@@ -95,20 +95,15 @@ logger = logging.getLogger(__name__)
 
 
 class TextFileExporter(IOutputExporter):
-    # This class is responsible for writing the final exam schedules to a text file.
-    # It receives data from the engine and formats it into a readable output.
 
     def __init__(self, output_path: Path):
         self.output_path = Path(output_path)
 
-    # The main method that implements the IOutputExporter interface. It takes the schedules
-    # grouped by period and the course details, and writes everything to the output file.
     def export_schedules(
         self,
         schedules_by_period: Dict[str, Iterable[Schedule]],
         courses_by_id: Dict[str, Course],
     ) -> None:
-        # Main method: opens the output file and writes all schedules into it
         logger.info("Writing schedules to %s", self.output_path)
 
         with self.output_path.open("w", encoding="utf-8") as file:
@@ -116,13 +111,11 @@ class TextFileExporter(IOutputExporter):
                 file.write("No exam periods found.\n")
                 return
 
-            # Loop over each exam period (e.g. "FALL - Aleph", "SPRI - Bet")
             for period_key, schedules in schedules_by_period.items():
                 semester, moed = self._split_period_key(period_key)
                 self._write_period_header(file, semester, moed)
 
                 count = 0
-                # enumerate starts at 1 so schedule numbers are human-friendly
                 for schedule_number, schedule in enumerate(schedules, start=1):
                     count += 1
                     self._write_schedule(file, schedule_number, schedule, courses_by_id)
@@ -131,7 +124,6 @@ class TextFileExporter(IOutputExporter):
                     file.write("No valid schedules found.\n\n")
 
     def _write_period_header(self, file, semester: str, moed: str) -> None:
-        # Writes the two header lines that introduce each exam period block
         file.write(f"=== SEMESTER: {display_semester(semester)} ===\n")
         file.write(f"--- Moed: {moed} ---\n\n")
 
@@ -144,11 +136,9 @@ class TextFileExporter(IOutputExporter):
     ) -> None:
         file.write(f"Schedule #{schedule_number}:\n")
 
-        # Sort assignments by date so the output is in chronological order
         sorted_assignments = sorted(schedule.assignments.items(), key=lambda item: item[1])
 
         for course_id, exam_date in sorted_assignments:
-            # Look up the full course object to get its name and instructor
             course = courses_by_id.get(course_id)
             if course is None:
                 logger.warning("Course id %s was not found in courses_by_id", course_id)
@@ -162,7 +152,6 @@ class TextFileExporter(IOutputExporter):
         file.write("\n")
 
     def _split_period_key(self, period_key: str) -> tuple[str, str]:
-        # Period keys look like "FALL - Aleph" — split on " - " to get semester and moed
         if " - " not in period_key:
             return period_key, "Unknown"
         semester, moed = period_key.split(" - ", 1)
