@@ -1,60 +1,77 @@
-"""
-Unit Tests: ExamPeriod
------------------------
-Tests for ExamPeriod.get_valid_dates() logic.
-
-Test cases to implement:
-    1. Dates within range and not excluded → included in result.
-    2. Dates in excluded_dates set         → NOT included in result.
-    3. Weekend dates (Friday/Saturday)     → NOT included in result.
-    4. Dates outside date_ranges           → NOT included in result.
-    5. Excluded date ranges (start, end)   → all dates in range excluded.
-    6. Empty date_ranges                   → returns empty list.
-
-Notes:
-    - Build ExamPeriod objects directly — no file parsing.
-    - Use datetime.date objects for all date comparisons.
-    - Import ExamPeriod from src.domain.exam_period.
-"""
-
-# Import date so we can create real date objects for the test.
 from datetime import date
 
-# Import the ExamPeriod domain entity that we want to test.
 from src.domain.exam_period import ExamPeriod
 
 
-def test_exam_period_can_be_created_with_excluded_dates():
-    """
-    Checks that an ExamPeriod object can be created with excluded_dates.
-
-    This test is important because ExamPeriod contains mutable fields:
-    - date_ranges is a list
-    - excluded_dates is a set
-
-    The purpose of this test is to make sure that creating an ExamPeriod
-    with excluded dates works correctly and does not crash.
-    """
-
-    # Create an ExamPeriod for FALL semester, Moed Aleph.
-    # The exam period has one valid date range:
-    # from 29-01-2026 until 11-03-2026.
-    # One date, 31-01-2026, is excluded and cannot be used for exams.
+def test_get_valid_dates_includes_dates_inside_range():
     period = ExamPeriod(
         semester="FALL",
         moed="Aleph",
-        date_ranges=[(date(2026, 1, 29), date(2026, 3, 11))],
-        excluded_dates={date(2026, 1, 31)}
+        date_ranges=[(date(2026, 1, 29), date(2026, 1, 31))],
     )
 
-    # Verify that the semester was saved correctly.
-    assert period.semester == "FALL"
+    assert period.get_valid_dates() == [
+        date(2026, 1, 29),
+        date(2026, 1, 30),
+        date(2026, 1, 31),
+    ]
 
-    # Verify that the moed was saved correctly.
-    assert period.moed == "Aleph"
 
-    # Verify that the date range was saved correctly.
-    assert period.date_ranges == [(date(2026, 1, 29), date(2026, 3, 11))]
+def test_get_valid_dates_excludes_dates_in_excluded_dates():
+    period = ExamPeriod(
+        semester="FALL",
+        moed="Aleph",
+        date_ranges=[(date(2026, 1, 29), date(2026, 2, 2))],
+        excluded_dates={date(2026, 1, 31), date(2026, 2, 1)},
+    )
 
-    # Verify that the excluded date was saved correctly.
-    assert period.excluded_dates == {date(2026, 1, 31)}
+    assert period.get_valid_dates() == [
+        date(2026, 1, 29),
+        date(2026, 1, 30),
+        date(2026, 2, 2),
+    ]
+
+
+def test_dates_outside_date_ranges_are_not_included():
+    period = ExamPeriod(
+        semester="FALL",
+        moed="Aleph",
+        date_ranges=[(date(2026, 1, 29), date(2026, 1, 31))],
+    )
+
+    valid_dates = period.get_valid_dates()
+
+    assert date(2026, 1, 28) not in valid_dates
+    assert date(2026, 2, 1) not in valid_dates
+
+
+def test_multiple_date_ranges_are_combined():
+    period = ExamPeriod(
+        semester="FALL",
+        moed="Bet",
+        date_ranges=[
+            (date(2026, 1, 29), date(2026, 1, 30)),
+            (date(2026, 2, 3), date(2026, 2, 4)),
+        ],
+    )
+
+    assert period.get_valid_dates() == [
+        date(2026, 1, 29),
+        date(2026, 1, 30),
+        date(2026, 2, 3),
+        date(2026, 2, 4),
+    ]
+
+
+def test_empty_date_ranges_returns_empty_list():
+    period = ExamPeriod(semester="SPRI", moed="Aleph", date_ranges=[])
+
+    assert period.get_valid_dates() == []
+
+
+def test_get_key_normalizes_semester():
+    period = ExamPeriod(semester="SPRING", moed="Bet", date_ranges=[])
+
+    assert period.get_key() == "SPRI - Bet"
+
+
