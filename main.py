@@ -10,8 +10,8 @@ Responsibilities:
            --periods   : path to exam_periods.txt
            --output    : path to output file (e.g. schedules.txt)
     2. Instantiate concrete adapters:
-           FileDataProvider, TextFileExporter, ExactConflictStrategy
-    3. Instantiate AppController with the adapters injected.
+           FileDataProvider, TextFileExporter, ExactConflictStrategy, ScheduleGenerator
+    3. Instantiate AppController with all dependencies injected.
     4. Call controller.run() to execute the full pipeline.
     5. Configure logging (level=INFO) before running.
 
@@ -33,6 +33,7 @@ from src.adapters.exact_conflict_strategy import ExactConflictStrategy
 from src.adapters.file_data_provider import FileDataProvider
 from src.adapters.text_file_exporter import TextFileExporter
 from src.engine.app_controller import AppController
+from src.engine.schedule_generator import ScheduleGenerator
 
 
 def main() -> None:
@@ -50,14 +51,16 @@ def main() -> None:
         periods_path=args.periods,
         programs_path=args.programs,
     )
-    exporter = TextFileExporter(output_path=args.output)
     selected_programs = data_provider.get_selected_programs()
+    exporter = TextFileExporter(output_path=args.output)
     conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
+    generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
 
     controller = AppController(
         data_provider=data_provider,
         exporter=exporter,
-        conflict_strategy=conflict_strategy,
+        generator=generator,
+        selected_programs=selected_programs,
     )
     controller.run()
 
