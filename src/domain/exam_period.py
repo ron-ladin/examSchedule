@@ -30,7 +30,7 @@ from typing import List, Set, Tuple
 from src.domain.semester import normalize_semester
 
 
-@dataclass(frozen=True)
+@dataclass
 class ExamPeriod:
     semester: str  # FALL / SPRI / SUMM
     moed: str      # Aleph / Bet / Gimel
