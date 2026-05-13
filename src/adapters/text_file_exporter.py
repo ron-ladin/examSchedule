@@ -8,39 +8,162 @@ Constructor args:
 
 Methods to implement:
 
-    export_schedules(schedules: Iterator[Schedule]) -> None
-        Consumes the schedule generator and writes to output_path.
+    export_schedules(
+        schedules_by_period: Dict[str, Iterable[Schedule]],
+        courses_by_id: Dict[str, Course]
+    ) -> None
+        Writes generated schedules to output_path.
 
-        Output structure:
+        Input contract:
+            - schedules_by_period: keys are period keys in the format
+              "<SEMESTER> - <Moed>" (e.g. "FALL - Aleph", "SPRI - Bet").
+              Values are Iterable[Schedule] that must be consumed one at a time
+              — do NOT convert to list.
+            - courses_by_id: maps course_id (str) → Course. Use this to look up
+              the course name and instructor for each assignment.
+
+        Output structure (written to output_path):
             === SEMESTER: FALL ===
             --- Moed: Aleph ---
+
             Schedule #1:
-              - <Course Name> | Date: DD-MM-YYYY | Instructor: <Name>
+              - <Course Name> | Course ID: <id> | Date: DD-MM-YYYY | Instructor: <Name>
+              - ...
+
+            Schedule #2:
               - ...
 
             --- Moed: Bet ---
-            Schedule #1:
-              ...
+            ...
 
             === SEMESTER: SPRING ===
             ...
 
         Rules:
-            - Group by Semester first, then by Moed.
-            - Within each moed, number schedules starting from #1.
-            - Within each schedule, sort courses chronologically by exam date.
-            - "SPRI" from domain data must appear as "SPRING" in output.
-            - Use itertools.groupby for grouping logic.
+            - Group by Semester first, then by Moed (one header pair per period key).
+            - Within each period, number schedules starting from 1.
+            - Within each schedule, sort course lines chronologically by exam date.
+            - If a period produces zero schedules, write "No valid schedules found."
+            - If schedules_by_period is empty, write "No exam periods found."
+            - "SPRI" from period keys must appear as "SPRING" in output
+              (use display_semester from src.domain.semester).
             - Use f-strings for all line formatting.
-            - Use pathlib.Path.open() for writing — never hardcoded paths.
+            - Use pathlib.Path.open() for file writing — never hardcoded paths.
+            - Use logging (logger.info / logger.warning) — no print() calls.
+            - Log a warning and skip the line if a course_id is not in courses_by_id.
+
+    _write_period_header(file, semester: str, moed: str) -> None
+        Writes the two header lines for one exam period block:
+            === SEMESTER: <display_semester(semester)> ===
+            --- Moed: <moed> ---
+
+        Followed by a blank line.
+
+    _write_schedule(file, schedule_number: int, schedule: Schedule,
+                    courses_by_id: Dict[str, Course]) -> None
+        Writes one numbered schedule block:
+            Schedule #<n>:
+              - <name> | Course ID: <id> | Date: DD-MM-YYYY | Instructor: <name>
+              ...
+        Courses must be sorted chronologically (earliest exam date first).
+        Ends with a blank line.
+        Logs a warning (and skips the line) for any course_id not in courses_by_id.
+
+    _split_period_key(period_key: str) -> tuple[str, str]
+        Splits a period key string of the form "<SEMESTER> - <Moed>"
+        into (semester, moed).
+        If the separator " - " is missing, return (period_key, "Unknown").
 
 Notes:
-    - Must stream — do NOT collect all schedules into a list before writing.
     - Use logging — no print() calls.
+    - This exporter receives schedules grouped by period as iterables, so schedules
+      can be consumed one by one without loading all schedules into memory at once.
 """
 
+from pathlib import Path
+from typing import Dict, Iterable
+
+import logging
+
+from src.domain.course import Course
+from src.domain.schedule import Schedule
+from src.domain.semester import display_semester
 from src.interfaces.i_output_exporter import IOutputExporter
 
 
+logger = logging.getLogger(__name__)
+
+
 class TextFileExporter(IOutputExporter):
-    pass
+    # This class is responsible for writing the final exam schedules to a text file.
+    # It receives data from the engine and formats it into a readable output.
+
+    def __init__(self, output_path: Path):
+        self.output_path = Path(output_path)
+
+    # The main method that implements the IOutputExporter interface. It takes the schedules
+    # grouped by period and the course details, and writes everything to the output file.
+    def export_schedules(
+        self,
+        schedules_by_period: Dict[str, Iterable[Schedule]],
+        courses_by_id: Dict[str, Course],
+    ) -> None:
+        # Main method: opens the output file and writes all schedules into it
+        logger.info("Writing schedules to %s", self.output_path)
+
+        with self.output_path.open("w", encoding="utf-8") as file:
+            if not schedules_by_period:
+                file.write("No exam periods found.\n")
+                return
+
+            # Loop over each exam period (e.g. "FALL - Aleph", "SPRI - Bet")
+            for period_key, schedules in schedules_by_period.items():
+                semester, moed = self._split_period_key(period_key)
+                self._write_period_header(file, semester, moed)
+
+                count = 0
+                # enumerate starts at 1 so schedule numbers are human-friendly
+                for schedule_number, schedule in enumerate(schedules, start=1):
+                    count += 1
+                    self._write_schedule(file, schedule_number, schedule, courses_by_id)
+
+                if count == 0:
+                    file.write("No valid schedules found.\n\n")
+
+    def _write_period_header(self, file, semester: str, moed: str) -> None:
+        # Writes the two header lines that introduce each exam period block
+        file.write(f"=== SEMESTER: {display_semester(semester)} ===\n")
+        file.write(f"--- Moed: {moed} ---\n\n")
+
+    def _write_schedule(
+        self,
+        file,
+        schedule_number: int,
+        schedule: Schedule,
+        courses_by_id: Dict[str, Course],
+    ) -> None:
+        file.write(f"Schedule #{schedule_number}:\n")
+
+        # Sort assignments by date so the output is in chronological order
+        sorted_assignments = sorted(schedule.assignments.items(), key=lambda item: item[1])
+
+        for course_id, exam_date in sorted_assignments:
+            # Look up the full course object to get its name and instructor
+            course = courses_by_id.get(course_id)
+            if course is None:
+                logger.warning("Course id %s was not found in courses_by_id", course_id)
+                continue
+            file.write(
+                f"  - {course.name} | Course ID: {course.id} | "
+                f"Date: {exam_date.strftime('%d-%m-%Y')} | "
+                f"Instructor: {course.instructor}\n"
+            )
+
+        file.write("\n")
+
+    def _split_period_key(self, period_key: str) -> tuple[str, str]:
+        # Period keys look like "FALL - Aleph" — split on " - " to get semester and moed
+        if " - " not in period_key:
+            return period_key, "Unknown"
+        semester, moed = period_key.split(" - ", 1)
+        return semester.strip(), moed.strip()
