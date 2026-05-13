@@ -84,7 +84,7 @@ class ScheduleGenerator:
         # Base case: every course has been assigned — emit one complete schedule
         if not remaining:
             # Copy assignment so the yielded Schedule is independent of future mutations
-            yield Schedule(period=exam_period, assignments=dict(assignment))
+            yield Schedule(period=exam_period, assignments={c.id: d for c, d in assignment.items()})
             return
 
         course = remaining[0]

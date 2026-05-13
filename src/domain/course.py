@@ -30,6 +30,9 @@ class Course:
     evaluation_type: str  # Exam / Project / Attendance
     offerings: List[CourseOffering] = field(default_factory=list)
 
+    def __hash__(self) -> int:
+        return hash(self.id)
+
     def add_offering(self, offering: CourseOffering) -> None:
         self.offerings.append(offering)
 
