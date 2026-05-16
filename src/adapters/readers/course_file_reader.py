@@ -42,7 +42,17 @@ class CourseFileReader:
         for record in records:
             courses.append(self._parse_course_record(record))
 
+        self._validate_unique_course_ids(courses)
+
         return courses
+
+    def _validate_unique_course_ids(self, courses: List[Course]) -> None:
+        seen_ids = set()
+
+        for course in courses:
+            if course.id in seen_ids:
+                raise ValueError(f"Duplicate course id found: {course.id}")
+            seen_ids.add(course.id)
 
     def _read_records(self) -> List[List[str]]:
         content = self.courses_path.read_text(encoding="utf-8")
@@ -66,8 +76,8 @@ class CourseFileReader:
         return records
 
     def _parse_course_record(self, record: List[str]) -> Course:
-        if len(record) < 4:
-            raise ValueError(f"Course record must contain at least 4 lines: {record}")
+        if len(record) < 5:
+            raise ValueError(f"Course record must contain at least 5 lines: {record}")
 
         course_name = record[0]
         course_id = record[1]

@@ -33,7 +33,10 @@ class ProgramSelectorReader:
 
         if len(programs) > self.MAX_SELECTED_PROGRAMS:
             raise ValueError("You can select up to 5 programs only.")
-
+        
+        if len(programs) != len(set(programs)):
+            raise ValueError("Selected programs must be unique.")
+        
         for program_id in programs:
             if not self._is_valid_program_id(program_id):
                 raise ValueError(f"Invalid program id: {program_id}")

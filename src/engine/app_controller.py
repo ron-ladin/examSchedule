@@ -13,11 +13,13 @@ Main method:
     - run() -> None
         1. Logs selected programs.
         2. Loads all courses and exam periods from the data provider.
-        3. For each ExamPeriod, filters courses relevant to the selected programs
+        3. Validates that selected programs exist in the course data.
+        4. Sorts exam periods by semester and moed.
+        5. For each ExamPeriod, filters courses relevant to the selected programs
            and evaluation_type == "Exam".
-        4. Calls generator.generate_schedules(courses, period) — receives a lazy iterator.
-        5. Passes all period iterators to exporter.export_schedules().
-        6. Logs progress using the logging module — no print() calls.
+        6. Calls generator.generate_schedules(courses, period) — receives a lazy iterator.
+        7. Passes all period iterators to exporter.export_schedules().
+        8. Logs progress using the logging module — no print() calls.
 
 Notes:
     - Never import FileDataProvider, TextFileExporter, ExactConflictStrategy,
@@ -57,20 +59,66 @@ class AppController:
         logger.info("Selected programs: %s", self._selected_programs)
 
         all_courses = self._data_provider.get_courses()
+        self._validate_selected_programs_exist(all_courses)
+
         exam_periods = self._data_provider.get_exam_periods()
+        exam_periods = self._sort_exam_periods(exam_periods)
 
         courses_by_id = {course.id: course for course in all_courses}
 
         schedules_by_period: Dict[str, Iterable[Schedule]] = {}
+
         for period in exam_periods:
+            period_key = period.get_key()
+
+            if period_key in schedules_by_period:
+                raise ValueError(f"Duplicate exam period found: {period_key}")
+
             relevant_courses = [
-                c for c in all_courses
-                if c.is_relevant_for_period(self._selected_programs, period.semester)
+                course for course in all_courses
+                if course.is_relevant_for_period(self._selected_programs, period.semester)
             ]
-            logger.info("Period %s: %d relevant courses", period.get_key(), len(relevant_courses))
-            schedules_by_period[period.get_key()] = self._generator.generate_schedules(
-                relevant_courses, period
+
+            logger.info(
+                "Period %s: %d relevant courses",
+                period_key,
+                len(relevant_courses),
+            )
+
+            schedules_by_period[period_key] = self._generator.generate_schedules(
+                relevant_courses,
+                period,
             )
 
         self._exporter.export_schedules(schedules_by_period, courses_by_id)
         logger.info("Export complete")
+
+    def _sort_exam_periods(self, exam_periods):
+        semester_order = {"FALL": 1, "SPRI": 2, "SUMM": 3}
+        moed_order = {"Aleph": 1, "Bet": 2, "Gimel": 3}
+
+        return sorted(
+            exam_periods,
+            key=lambda period: (
+                semester_order[period.semester],
+                moed_order[period.moed],
+            ),
+        )
+
+    def _validate_selected_programs_exist(self, courses) -> None:
+        available_programs = {
+            offering.program_id
+            for course in courses
+            for offering in course.offerings
+        }
+
+        missing_programs = [
+            program_id
+            for program_id in self._selected_programs
+            if program_id not in available_programs
+        ]
+
+        if missing_programs:
+            raise ValueError(
+                f"Selected program ids do not exist in the course data: {missing_programs}"
+            )
