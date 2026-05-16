@@ -80,10 +80,9 @@ Notes:
       can be consumed one by one without loading all schedules into memory at once.
 """
 
+import logging
 from pathlib import Path
 from typing import Dict, Iterable
-
-import logging
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule
@@ -105,6 +104,8 @@ class TextFileExporter(IOutputExporter):
         courses_by_id: Dict[str, Course],
     ) -> None:
         logger.info("Writing schedules to %s", self.output_path)
+
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with self.output_path.open("w", encoding="utf-8") as file:
             if not schedules_by_period:
@@ -143,6 +144,7 @@ class TextFileExporter(IOutputExporter):
             if course is None:
                 logger.warning("Course id %s was not found in courses_by_id", course_id)
                 continue
+
             file.write(
                 f"  - {course.name} | Course ID: {course.id} | "
                 f"Date: {exam_date.strftime('%d-%m-%Y')} | "
@@ -154,5 +156,6 @@ class TextFileExporter(IOutputExporter):
     def _split_period_key(self, period_key: str) -> tuple[str, str]:
         if " - " not in period_key:
             return period_key, "Unknown"
+
         semester, moed = period_key.split(" - ", 1)
         return semester.strip(), moed.strip()

@@ -133,8 +133,8 @@ class ExamPeriodFileReader:
         end_token = parts[1].split()[0]
         end_date = self._parse_date(end_token)
 
-        if start_date >= end_date:
-            raise ValueError(f"Start date must be before end date: {line}")
+        if start_date > end_date:
+            raise ValueError(f"Start date must be before or equal to end date: {line}")
 
         return start_date, end_date
 
