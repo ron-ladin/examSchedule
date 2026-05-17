@@ -219,3 +219,6 @@ __marimo__/
 
 # Project notes
 BUGS_AND_FIXES.md
+
+# Locally generated exam schedule output
+output/

@@ -111,3 +111,55 @@ def test_ignores_programs_that_were_not_selected():
     strategy = ExactConflictStrategy(selected_programs=["83101"])
 
     assert strategy.is_conflict(left, right) is False
+
+
+# Course with no offerings can never conflict — defensive against empty data
+def test_no_conflict_when_course_has_no_offerings():
+    left = Course(id="11111", name="Empty Course", instructor="Dr. None", evaluation_type="Exam")
+    right = _course("22222", "83101", 1, "FALL", "Obligatory")
+    strategy = ExactConflictStrategy(selected_programs=["83101"])
+
+    assert strategy.is_conflict(left, right) is False
+    assert strategy.is_conflict(right, left) is False
+
+
+# Multi-program offerings: courses share program 83101 but each ALSO offers a non-selected
+# program. The unselected program should not be checked, but 83101 should still trigger.
+def test_conflict_detected_across_multi_program_offerings():
+    left = Course(id="11111", name="A", instructor="x", evaluation_type="Exam")
+    left.add_offering(CourseOffering("83101", 1, "FALL", "Obligatory"))
+    left.add_offering(CourseOffering("99999", 1, "FALL", "Obligatory"))  # not selected
+
+    right = Course(id="22222", name="B", instructor="x", evaluation_type="Exam")
+    right.add_offering(CourseOffering("83101", 1, "FALL", "Obligatory"))
+    right.add_offering(CourseOffering("88888", 1, "FALL", "Obligatory"))  # not selected
+
+    strategy = ExactConflictStrategy(selected_programs=["83101"])
+    assert strategy.is_conflict(left, right) is True
+
+
+# Selected list is empty → no conflicts can be detected (every offering is filtered out)
+def test_empty_selected_programs_yields_no_conflicts():
+    left = _course("11111", "83101", 1, "FALL", "Obligatory")
+    right = _course("22222", "83101", 1, "FALL", "Obligatory")
+    strategy = ExactConflictStrategy(selected_programs=[])
+
+    assert strategy.is_conflict(left, right) is False
+
+
+# Conflict relation should be symmetric: is_conflict(a,b) == is_conflict(b,a)
+def test_conflict_is_symmetric():
+    left = _course("11111", "83101", 1, "FALL", "Obligatory")
+    right = _course("22222", "83101", 1, "FALL", "Elective")
+    strategy = ExactConflictStrategy(selected_programs=["83101"])
+
+    assert strategy.is_conflict(left, right) == strategy.is_conflict(right, left)
+
+
+# Conflict triggered through normalized semester aliases (SPRING vs SPRI must still match)
+def test_conflict_with_semester_aliases():
+    left = _course("11111", "83101", 1, "SPRING", "Obligatory")
+    right = _course("22222", "83101", 1, "SPRI", "Obligatory")
+    strategy = ExactConflictStrategy(selected_programs=["83101"])
+
+    assert strategy.is_conflict(left, right) is True

@@ -121,3 +121,204 @@ def test_program_reader_rejects_non_five_digit_program(tmp_path):
 
     with pytest.raises(ValueError):
         provider.get_selected_programs()
+
+
+# A course with several offerings must produce multiple CourseOffering objects
+def test_course_with_multiple_offerings(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    courses_path.write_text(
+        """Physics
+11111
+Prof. Newton
+83101, 1, FALL, Obligatory
+83102, 1, FALL, Obligatory
+83108, 2, FALL, Elective
+Exam
+""",
+        encoding="utf-8",
+    )
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+    courses = provider.get_courses()
+
+    assert len(courses) == 1
+    assert len(courses[0].offerings) == 3
+
+
+# 4-digit course id must be rejected — protects against typos in source data
+def test_course_reader_rejects_invalid_course_id(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    courses_path.write_text(
+        """Calculus
+1234
+Dr. Cohen
+83101, 1, FALL, Obligatory
+Exam
+""",
+        encoding="utf-8",
+    )
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+
+    with pytest.raises(ValueError):
+        provider.get_courses()
+
+
+# Duplicate course IDs across records must be caught
+def test_course_reader_rejects_duplicate_course_ids(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    courses_path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+83101, 1, FALL, Obligatory
+Exam
+$$$$
+Algebra
+11111
+Dr. Levi
+83101, 1, FALL, Obligatory
+Exam
+""",
+        encoding="utf-8",
+    )
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+
+    with pytest.raises(ValueError):
+        provider.get_courses()
+
+
+# Invalid evaluation type must be rejected
+def test_course_reader_rejects_invalid_evaluation_type(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    courses_path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+83101, 1, FALL, Obligatory
+Quiz
+""",
+        encoding="utf-8",
+    )
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+
+    with pytest.raises(ValueError):
+        provider.get_courses()
+
+
+# Invalid requirement type must be rejected
+def test_course_reader_rejects_invalid_requirement(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    courses_path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+83101, 1, FALL, Mandatory
+Exam
+""",
+        encoding="utf-8",
+    )
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+
+    with pytest.raises(ValueError):
+        provider.get_courses()
+
+
+# Year out of range must be rejected (only 1-4 valid)
+def test_course_reader_rejects_invalid_year(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    courses_path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+83101, 7, FALL, Obligatory
+Exam
+""",
+        encoding="utf-8",
+    )
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+
+    with pytest.raises(ValueError):
+        provider.get_courses()
+
+
+# The aliases "SPRING" and "SUMMER" should be stored normalized as "SPRI"/"SUMM"
+def test_spring_alias_normalized_to_spri(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    courses_path.write_text(
+        """Lab
+11111
+Dr. T
+83101, 1, SPRING, Obligatory
+Exam
+""",
+        encoding="utf-8",
+    )
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+    courses = provider.get_courses()
+    assert courses[0].offerings[0].semester == "SPRI"
+
+
+# Period with reversed dates (end before start) must be rejected
+def test_exam_period_reader_rejects_reversed_date_range(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    periods_path.write_text(
+        """FALL, Aleph
+07-01-2026, 05-01-2026
+""",
+        encoding="utf-8",
+    )
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+
+    with pytest.raises(ValueError):
+        provider.get_exam_periods()
+
+
+# Invalid moed must be rejected
+def test_exam_period_reader_rejects_invalid_moed(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    periods_path.write_text(
+        """FALL, NotAMoed
+05-01-2026, 07-01-2026
+""",
+        encoding="utf-8",
+    )
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+
+    with pytest.raises(ValueError):
+        provider.get_exam_periods()
+
+
+# Single excluded date (not a range) must be parsed correctly
+def test_exam_period_reader_parses_single_excluded_date(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    periods_path.write_text(
+        """FALL, Aleph
+05-01-2026, 09-01-2026
+- 07-01-2026
+""",
+        encoding="utf-8",
+    )
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+    periods = provider.get_exam_periods()
+
+    assert date(2026, 1, 7) in periods[0].excluded_dates
+    assert date(2026, 1, 5) not in periods[0].excluded_dates
+
+
+# Empty programs file must be rejected
+def test_program_reader_rejects_empty_programs(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    programs_path.write_text("", encoding="utf-8")
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+
+    with pytest.raises(ValueError):
+        provider.get_selected_programs()
+
+
+# Duplicate program IDs must be rejected
+def test_program_reader_rejects_duplicate_programs(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    programs_path.write_text("83101,83101", encoding="utf-8")
+    provider = FileDataProvider(courses_path, periods_path, programs_path)
+
+    with pytest.raises(ValueError):
+        provider.get_selected_programs()
