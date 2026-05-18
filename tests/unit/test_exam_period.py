@@ -83,3 +83,83 @@ def test_get_key_displays_normalized_semester():
     )
 
     assert exam_period.get_key() == "SPRI - Bet"
+
+
+# Excluding an entire range of dates: 10 days minus a 3-day excluded range = 7 days
+# (minus any Saturdays in the range)
+def test_get_valid_dates_excludes_range_of_dates():
+    exam_period = ExamPeriod(
+        semester="FALL",
+        moed="Aleph",
+        date_ranges=[(date(2026, 1, 12), date(2026, 1, 16))],  # Mon-Fri, no Sat
+        excluded_dates={date(2026, 1, 13), date(2026, 1, 14), date(2026, 1, 15)},
+    )
+
+    assert exam_period.get_valid_dates() == [
+        date(2026, 1, 12),
+        date(2026, 1, 16),
+    ]
+
+
+# All dates in the range are excluded → list should come back empty
+def test_get_valid_dates_returns_empty_when_all_excluded():
+    exam_period = ExamPeriod(
+        semester="FALL",
+        moed="Aleph",
+        date_ranges=[(date(2026, 1, 12), date(2026, 1, 14))],  # Mon, Tue, Wed
+        excluded_dates={date(2026, 1, 12), date(2026, 1, 13), date(2026, 1, 14)},
+    )
+
+    assert exam_period.get_valid_dates() == []
+
+
+# When the whole period falls on a Saturday → all auto-excluded
+def test_get_valid_dates_returns_empty_when_only_saturdays():
+    exam_period = ExamPeriod(
+        semester="FALL",
+        moed="Aleph",
+        date_ranges=[(date(2026, 1, 10), date(2026, 1, 10))],  # 10-Jan-2026 is Saturday
+    )
+
+    assert exam_period.get_valid_dates() == []
+
+
+# Two distinct date ranges → both should contribute valid dates
+def test_get_valid_dates_handles_multiple_ranges():
+    exam_period = ExamPeriod(
+        semester="FALL",
+        moed="Aleph",
+        date_ranges=[
+            (date(2026, 1, 5), date(2026, 1, 6)),
+            (date(2026, 1, 12), date(2026, 1, 13)),
+        ],
+    )
+
+    assert exam_period.get_valid_dates() == [
+        date(2026, 1, 5),
+        date(2026, 1, 6),
+        date(2026, 1, 12),
+        date(2026, 1, 13),
+    ]
+
+
+# get_key for FALL should display FALL (not transformed)
+def test_get_key_for_fall_semester():
+    exam_period = ExamPeriod(
+        semester="FALL",
+        moed="Aleph",
+        date_ranges=[(date(2026, 1, 5), date(2026, 1, 6))],
+    )
+
+    assert exam_period.get_key() == "FALL - Aleph"
+
+
+# get_key for SUMMER should normalize to "SUMM"
+def test_get_key_for_summer_semester():
+    exam_period = ExamPeriod(
+        semester="SUMMER",
+        moed="Gimel",
+        date_ranges=[(date(2026, 7, 1), date(2026, 7, 2))],
+    )
+
+    assert exam_period.get_key() == "SUMM - Gimel"
