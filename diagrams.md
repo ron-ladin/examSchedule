@@ -1,4 +1,8 @@
-# examSchedule
+# examSchedule — All Diagrams
+
+---
+
+## 1. System Hierarchy
 
 ```mermaid
 %%{init: {'theme': 'dark', 'themeVariables': {'fontSize': '15px'}}}%%
@@ -11,7 +15,7 @@ flowchart TD
     classDef iface   fill:#111111,stroke:#555555,color:#aaaaaa,rx:4,stroke-dasharray:5 3
     classDef file    fill:#0d1117,stroke:#30363d,color:#8b949e,rx:4
 
-    CLI["⌨️  main.py\n─────────────\nCLI · argparse · wiring"]:::cli
+    CLI["main.py\n─────────────\nCLI · argparse · wiring"]:::cli
 
     subgraph CORE["  Engine Layer  "]
         direction LR
@@ -76,56 +80,9 @@ flowchart TD
     Exporter --> F4
 ```
 
-> **University exam scheduler** — given a course catalog, exam windows, and a set of study programs, generates every valid conflict-free timetable using a backtracking CSP solver with an MCV heuristic.
-
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-84%20passed-2ecc71?style=flat-square)
-![Architecture](https://img.shields.io/badge/Architecture-Clean%20%2F%20Ports%20%26%20Adapters-c678dd?style=flat-square)
-![Algorithm](https://img.shields.io/badge/Algorithm-Backtracking%20%2B%20MCV-e5a22e?style=flat-square)
-
 ---
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Domain Model](#domain-model)
-- [Scheduling Algorithm](#scheduling-algorithm)
-- [Project Structure](#project-structure)
-- [Setup](#setup)
-- [Usage](#usage)
-- [Input File Formats](#input-file-formats)
-- [Output Format](#output-format)
-- [Testing](#testing)
-- [All Diagrams](#all-diagrams)
-
----
-
-## Overview
-
-`examSchedule` solves the exam timetabling problem as a **Constraint Satisfaction Problem (CSP)**:
-
-- Reads courses, exam periods, and selected programs from plain-text files
-- Determines which courses conflict — two courses conflict when students in the same program, year, and semester are enrolled in both (unless both are elective)
-- Runs a backtracking search over valid exam dates, using the **Most-Constrained-Variable (MCV)** heuristic to assign the hardest-to-place courses first
-- Yields every valid complete schedule **lazily** — no list of all schedules is ever held in memory
-- Writes results to a structured text file, grouped by semester and moed
-
-**Key design properties:**
-
-| Property | Implementation |
-|---|---|
-| Architecture | Clean Architecture — Ports & Adapters |
-| Algorithm | Backtracking CSP + MCV heuristic |
-| Memory model | Lazy `Iterator[Schedule]` — O(n) stack depth |
-| Conflict graph | Built once O(n²), reused across all backtrack steps |
-| Extensibility | Swap any adapter without touching the engine |
-
----
-
-## Architecture
-
-The system is divided into five strict layers. **Inner layers never import outer layers.**
+## 2. Clean Architecture — Layer Dependencies
 
 ```mermaid
 %%{init: {'theme': 'dark'}}%%
@@ -180,17 +137,9 @@ flowchart LR
     C --> CO
 ```
 
-| Layer | Responsibility |
-|---|---|
-| **CLI** | Parse arguments, wire all dependencies, call `controller.run()` |
-| **Engine** | `AppController` orchestrates the pipeline; `ScheduleGenerator` runs the algorithm |
-| **Interfaces** | Abstract ports (ABCs) — the engine only ever imports these |
-| **Adapters** | Concrete implementations: file I/O, conflict detection, schedule export |
-| **Domain** | Pure data containers + domain rules — zero I/O |
-
 ---
 
-## Domain Model
+## 3. UML Class Diagram
 
 ```mermaid
 classDiagram
@@ -333,7 +282,102 @@ classDiagram
 
 ---
 
-## Scheduling Algorithm
+## 4. Sequence — Full Pipeline
+
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+sequenceDiagram
+    actor User
+    participant CLI as main.py
+    participant AC as AppController
+    participant FDP as FileDataProvider
+    participant SG as ScheduleGenerator
+    participant ECS as ExactConflictStrategy
+    participant TFE as TextFileExporter
+
+    User->>CLI: python main.py --courses --periods --programs --output
+    CLI->>AC: run()
+
+    AC->>FDP: get_selected_programs()
+    FDP-->>AC: ["83101", "83102"]
+
+    AC->>FDP: get_courses()
+    FDP-->>AC: List[Course]
+
+    AC->>AC: _validate_selected_programs_exist(courses)
+
+    AC->>FDP: get_exam_periods()
+    FDP-->>AC: List[ExamPeriod]
+
+    AC->>AC: _sort_exam_periods(periods)
+
+    loop for each ExamPeriod
+        AC->>AC: filter relevant courses
+        AC->>SG: generate_schedules(courses, period)
+        Note over SG: lazy Iterator — not consumed yet
+    end
+
+    AC->>TFE: export_schedules(schedules_by_period, courses_by_id)
+
+    loop for each period
+        loop for each Schedule (lazy)
+            TFE->>SG: next(iterator)
+            SG->>ECS: is_conflict(course1, course2)
+            ECS-->>SG: bool
+            SG-->>TFE: Schedule
+            TFE->>TFE: _write_schedule()
+        end
+    end
+
+    TFE-->>User: schedules.txt written
+```
+
+---
+
+## 5. Sequence — Data Loading
+
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+sequenceDiagram
+    participant AC as AppController
+    participant FDP as FileDataProvider
+    participant CR as CourseFileReader
+    participant EPR as ExamPeriodFileReader
+    participant PSR as ProgramSelectorReader
+
+    AC->>FDP: get_selected_programs()
+    FDP->>PSR: read()
+    PSR->>PSR: validate (5-digit, ≤5, unique)
+    PSR-->>FDP: List[str]
+    FDP-->>AC: ["83101", "83102"]
+
+    AC->>FDP: get_courses()
+    FDP->>CR: read()
+    CR->>CR: _read_records() — split on $$$$
+    loop for each record
+        CR->>CR: _parse_course_record()
+        CR->>CR: _parse_course_offering() per line
+        CR->>CR: validate id, year, semester, evaluation, requirement
+    end
+    CR->>CR: _validate_unique_course_ids()
+    CR-->>FDP: List[Course]
+    FDP-->>AC: List[Course]
+
+    AC->>FDP: get_exam_periods()
+    FDP->>EPR: read()
+    EPR->>EPR: _read_records() — split on $$$$
+    loop for each record
+        EPR->>EPR: _parse_period_header() — semester, moed
+        EPR->>EPR: _parse_date_range() — start, end
+        EPR->>EPR: _parse_excluded_dates() per line
+    end
+    EPR-->>FDP: List[ExamPeriod]
+    FDP-->>AC: List[ExamPeriod]
+```
+
+---
+
+## 6. Scheduling Algorithm — Backtracking + MCV
 
 ```mermaid
 %%{init: {'theme': 'dark'}}%%
@@ -366,165 +410,145 @@ flowchart LR
     BACK -- No courses left --> EMPTY
 ```
 
-**Conflict rule** — two courses conflict when there exists a shared offering where:
-- Same `program_id` · same `year` · same `semester`
-- **Not** both elective (two electives can share a date — students take only one)
-
-Only offerings from **selected programs** are evaluated — courses taken exclusively by unselected programs never conflict.
-
 ---
 
-## Project Structure
+## 7. Conflict Detection Logic
 
-```
-examSchedule/
-├── main.py                          # CLI entry point — argparse + dependency wiring
-├── data/
-│   ├── courses.txt                  # Course catalog with per-program offerings
-│   ├── dates.txt                    # Exam periods, date ranges, and exclusions
-│   └── programs.txt                 # Selected program IDs for this run
-├── src/
-│   ├── domain/                      # Pure data containers — zero I/O
-│   │   ├── course.py
-│   │   ├── course_offering.py
-│   │   ├── exam_period.py
-│   │   ├── schedule.py
-│   │   └── semester.py
-│   ├── interfaces/                  # Abstract ports (ABCs)
-│   │   ├── i_data_provider.py
-│   │   ├── i_conflict_strategy.py
-│   │   ├── i_schedule_generator.py
-│   │   └── i_output_exporter.py
-│   ├── engine/                      # Core logic — depends only on interfaces
-│   │   ├── app_controller.py
-│   │   └── schedule_generator.py
-│   └── adapters/                    # Concrete implementations
-│       ├── exact_conflict_strategy.py
-│       ├── file_data_provider.py
-│       ├── text_file_exporter.py
-│       └── readers/
-│           ├── course_file_reader.py
-│           ├── exam_period_file_reader.py
-│           └── program_selector_reader.py
-├── tests/
-│   ├── unit/                        # 74 tests — isolated, no pipeline I/O
-│   └── e2e/                         # 10 tests — full pipeline, real + synthetic data
-└── diagrams.md                      # Full Mermaid diagram set
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+flowchart TD
+    classDef step  fill:#1e3a5f,stroke:#4a90d9,color:#fff,rx:6
+    classDef check fill:#3d2b00,stroke:#e5a22e,color:#fff,rx:6
+    classDef yes   fill:#1a3a3a,stroke:#e74c3c,color:#ff9999,rx:20
+    classDef no    fill:#1a4731,stroke:#2ecc71,color:#7effa4,rx:20
+
+    START["is_conflict(course1, course2)"]:::step
+
+    LOOP1["For each offering O1\nin course1"]:::step
+    SEL1{O1.program_id\nin selected_programs?}:::check
+
+    LOOP2["For each offering O2\nin course2"]:::step
+    SEL2{O2.program_id\nin selected_programs?}:::check
+
+    MATCH{O1 and O2 share\nprogram + year + semester?}:::check
+    ELEC{Both O1 and O2\nare Elective?}:::check
+
+    CONFLICT([return True\n⚠ CONFLICT]):::yes
+    NO_CONFLICT([return False\n✓ no conflict]):::no
+
+    START --> LOOP1 --> SEL1
+    SEL1 -- No --> LOOP1
+    SEL1 -- Yes --> LOOP2 --> SEL2
+    SEL2 -- No --> LOOP2
+    SEL2 -- Yes --> MATCH
+    MATCH -- No --> LOOP2
+    MATCH -- Yes --> ELEC
+    ELEC -- Yes, both elective --> LOOP2
+    ELEC -- No --> CONFLICT
+    LOOP1 -- exhausted --> NO_CONFLICT
 ```
 
 ---
 
-## Setup
+## 8. Data Flow — Input to Output
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install pytest
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+flowchart LR
+    classDef file    fill:#0d1117,stroke:#30363d,color:#8b949e,rx:4
+    classDef reader  fill:#2e1f00,stroke:#e5a22e,color:#ffd27e,rx:6
+    classDef domain  fill:#1a1a2e,stroke:#e05c5c,color:#ff9999,rx:6
+    classDef engine  fill:#0f2e1a,stroke:#2ecc71,color:#7effa4,rx:6
+    classDef output  fill:#0f2744,stroke:#4a90d9,color:#7ec8f7,rx:6
+
+    F1["courses.txt"]:::file
+    F2["dates.txt"]:::file
+    F3["programs.txt"]:::file
+
+    CR["CourseFileReader\nparse · validate"]:::reader
+    EPR["ExamPeriodFileReader\nparse · validate"]:::reader
+    PSR["ProgramSelectorReader\nparse · validate"]:::reader
+
+    C["List[Course]\n+ CourseOffering"]:::domain
+    EP["List[ExamPeriod]\nvalid dates computed"]:::domain
+    P["List[str]\nselected program IDs"]:::domain
+
+    AC["AppController\nfilter · sort · orchestrate"]:::engine
+    SG["ScheduleGenerator\nbacktrack · MCV · yield"]:::engine
+
+    S["Iterator[Schedule]\nDict[course_id → date]"]:::domain
+
+    TFE["TextFileExporter\nformat · write"]:::engine
+    OUT["schedules.txt"]:::output
+
+    F1 --> CR --> C
+    F2 --> EPR --> EP
+    F3 --> PSR --> P
+    C & EP & P --> AC
+    AC --> SG --> S --> TFE --> OUT
 ```
 
 ---
 
-## Usage
+## 9. Test Architecture
 
-```bash
-python main.py \
-  --programs data/programs.txt \
-  --courses  data/courses.txt \
-  --periods  data/dates.txt \
-  --output   output/schedules.txt
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+flowchart TD
+    classDef layer fill:#1e3a5f,stroke:#4a90d9,color:#fff,rx:6
+    classDef unit  fill:#1a4731,stroke:#2ecc71,color:#7effa4,rx:4
+    classDef e2e   fill:#4a1942,stroke:#c678dd,color:#e0a8ff,rx:4
+    classDef stat  fill:#0d1117,stroke:#30363d,color:#8b949e,rx:4
+
+    UNIT["Unit Tests\n74 functions"]:::layer
+    E2E["E2E Tests\n10 functions"]:::layer
+
+    U1["test_course.py\n12 tests"]:::unit
+    U2["test_course_offering.py\n10 tests"]:::unit
+    U3["test_exam_period.py\n9 tests"]:::unit
+    U4["test_schedule.py\n2 tests"]:::unit
+    U5["test_conflict_strategy.py\n7 tests · 1 parametrized×6"]:::unit
+    U6["test_schedule_generator.py\n12 tests"]:::unit
+    U7["test_file_data_provider.py\n15 tests"]:::unit
+    U8["test_text_file_exporter.py\n7 tests"]:::unit
+
+    E1["test_full_pipeline.py\n10 tests\nsynthetic + real data"]:::e2e
+
+    TOTAL["84 functions · 89 pytest runs\nAll passing ✓"]:::stat
+
+    UNIT --> U1 & U2 & U3 & U4 & U5 & U6 & U7 & U8
+    E2E --> E1
+    UNIT & E2E --> TOTAL
 ```
 
 ---
 
-## Input File Formats
+## 10. Semester Normalization
 
-**`programs.txt`** — comma-separated 5-digit program IDs:
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+flowchart LR
+    classDef input  fill:#2e1f00,stroke:#e5a22e,color:#ffd27e,rx:6
+    classDef norm   fill:#1e3a5f,stroke:#4a90d9,color:#7ec8f7,rx:6
+    classDef disp   fill:#1a4731,stroke:#2ecc71,color:#7effa4,rx:6
+
+    IN1["FALL / fall / Fall"]:::input
+    IN2["SPRI / spri\nSPRING / spring"]:::input
+    IN3["SUMM / summ\nSUMMER / summer"]:::input
+
+    N1["FALL"]:::norm
+    N2["SPRI"]:::norm
+    N3["SUMM"]:::norm
+
+    D1["FALL"]:::disp
+    D2["SPRING"]:::disp
+    D3["SUMMER"]:::disp
+
+    IN1 -- normalize_semester --> N1
+    IN2 -- normalize_semester --> N2
+    IN3 -- normalize_semester --> N3
+
+    N1 -- display_semester --> D1
+    N2 -- display_semester --> D2
+    N3 -- display_semester --> D3
 ```
-83101, 83102, 83108
-```
-
-**`courses.txt`** — records delimited by `$$$$`. Each record: name, ID, instructor, one or more offering lines, evaluation type:
-```
-$$$$
-Calculus 1
-83112
-Dr. Erez Scheiner
-83101, 1, FALL, Obligatory
-83102, 1, FALL, Obligatory
-Exam
-$$$$
-```
-
-Evaluation types: `Exam` · `Project` · `Attendance` — only `Exam` courses are scheduled.
-
-**`dates.txt`** — exam period records delimited by `$$$$`. Excluded lines prefixed with `-`:
-```
-$$$$
-FALL, Aleph
-29-01-2026, 11-03-2026
-- 14-02-2026
-- 02-03-2026, 04-03-2026  Purim
-$$$$
-```
-
-Semesters: `FALL` · `SPRI` · `SUMM` — Moeds: `Aleph` · `Bet` · `Gimel` — Saturdays excluded automatically.
-
----
-
-## Output Format
-
-Results are written to the specified output file, grouped by semester then moed. Courses within each schedule are sorted chronologically.
-
-```
-=== SEMESTER: FALL ===
---- Moed: Aleph ---
-
-Schedule #1:
-  - Physics 1 | Course ID: 83102 | Date: 29-01-2026 | Instructor: Prof. O. Some
-  - Calculus 1 | Course ID: 83112 | Date: 30-01-2026 | Instructor: Dr. Erez Scheiner
-
-Schedule #2:
-  - Physics 1 | Course ID: 83102 | Date: 29-01-2026 | Instructor: Prof. O. Some
-  - Calculus 1 | Course ID: 83112 | Date: 01-02-2026 | Instructor: Dr. Erez Scheiner
-```
-
-If a period produces no valid schedules, the block reads `No valid schedules found.`
-
----
-
-## Testing
-
-```bash
-# Full suite
-python -m pytest tests/ -v
-
-# Unit tests only
-python -m pytest tests/unit/ -v
-
-# E2E tests only
-python -m pytest tests/e2e/ -v
-```
-
-**84 test functions · 89 pytest runs · all passing**
-
-| Suite | Tests | Scope |
-|---|---|---|
-| Unit | 74 | Per-class, isolated — no file I/O, no pipeline |
-| E2E | 10 | Full pipeline — real data files + synthetic edge cases |
-
-| Unit Module | Tests | What it covers |
-|---|---|---|
-| `test_course.py` | 12 | Lifecycle, evaluation type, semester filtering |
-| `test_course_offering.py` | 10 | Relevance, elective flag, same-PYS match |
-| `test_exam_period.py` | 9 | Valid dates, Saturday exclusion, holiday ranges |
-| `test_conflict_strategy.py` | 7 · 1×6 runs | Parametrized conflict matrix |
-| `test_schedule_generator.py` | 12 | MCV ordering, backtracking, lazy iterator |
-| `test_file_data_provider.py` | 15 | Parsing, validation, error messages |
-| `test_text_file_exporter.py` | 7 | Output format, overwrite, semester display |
-| `test_schedule.py` | 2 | Equality, multi-assignment storage |
-
----
-
-## All Diagrams
-
-Full diagram set — architecture layers, sequence diagrams, conflict logic, data flow, test architecture: [diagrams.md](./diagrams.md)

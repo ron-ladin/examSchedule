@@ -5,9 +5,10 @@ from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
 from src.domain.schedule import Schedule
 from src.interfaces.i_conflict_strategy import IConflictStrategy
+from src.interfaces.i_schedule_generator import IScheduleGenerator
 
 
-class ScheduleGenerator:
+class ScheduleGenerator(IScheduleGenerator):
     """Generates all conflict-free exam schedules via backtracking."""
 
     def __init__(self, conflict_strategy: IConflictStrategy) -> None:
@@ -52,11 +53,7 @@ class ScheduleGenerator:
         graph: Dict[Course, Set[Course]] = {c: set() for c in courses}
         for i, a in enumerate(courses):
             for b in courses[i + 1:]:
-                # We ask: "would A and B conflict IF placed on the same date?"
-                # The specific date doesn't change that answer (v1.0 conflict depends only
-                # on program/year/semester overlap), so date.min is passed as a placeholder.
-                # The backtracker enforces the "same date" part via the `blocked` set.
-                if self._strategy.is_conflict(a, b, date.min):
+                if self._strategy.is_conflict(a, b):
                     graph[a].add(b)
                     graph[b].add(a)
         return graph

@@ -22,13 +22,16 @@ from typing import List
 from src.domain.course_offering import CourseOffering
 
 
-@dataclass
+@dataclass(eq=False)
 class Course:
     id: str
     name: str
     instructor: str
     evaluation_type: str  # Exam / Project / Attendance
     offerings: List[CourseOffering] = field(default_factory=list)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Course) and self.id == other.id
 
     def __hash__(self) -> int:
         return hash(self.id)
@@ -59,17 +62,3 @@ class Course:
             self.get_relevant_offerings(selected_programs, semester)
         )
 
-    def is_elective_for(
-        self,
-        selected_programs: List[str],
-        semester: str,
-    ) -> bool:
-        relevant_offerings = self.get_relevant_offerings(
-            selected_programs=selected_programs,
-            semester=semester,
-        )
-
-        return bool(relevant_offerings) and all(
-            offering.is_elective()
-            for offering in relevant_offerings
-        )

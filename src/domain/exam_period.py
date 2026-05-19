@@ -11,15 +11,17 @@ Fields:
 
 Methods to implement:
     - get_valid_dates() -> List[date]
-        Returns all dates that fall within date_ranges
-        and are NOT in excluded_dates.
+        Returns all dates that fall within date_ranges,
+        are NOT in excluded_dates,
+        and are not Saturdays.
 
 Notes:
     - Use datetime.strptime() for all date parsing in the file/data provider layer —
       never string compare dates.
     - Excluded entries can be a single date or a range.
-    - Weekend dates or holidays should be listed in the input file as excluded dates
+    - Holidays should be listed in the input file as excluded dates
       when they cannot be used.
+    - Saturdays are automatically excluded.
     - No file I/O here — pure domain logic.
 """
 
@@ -30,7 +32,7 @@ from typing import List, Set, Tuple
 from src.domain.semester import normalize_semester
 
 
-@dataclass(frozen=True)
+@dataclass
 class ExamPeriod:
     semester: str  # FALL / SPRI / SUMM
     moed: str      # Aleph / Bet / Gimel
@@ -44,12 +46,21 @@ class ExamPeriod:
             current_date = start_date
 
             while current_date <= end_date:
-                if current_date not in self.excluded_dates:
+                if not self._is_excluded_date(current_date):
                     valid_dates.append(current_date)
 
                 current_date += timedelta(days=1)
 
         return valid_dates
+
+    def _is_excluded_date(self, exam_date: date) -> bool:
+        return (
+            exam_date in self.excluded_dates
+            or self._is_saturday(exam_date)
+        )
+
+    def _is_saturday(self, exam_date: date) -> bool:
+        return exam_date.weekday() == 5
 
     def get_key(self) -> str:
         return f"{normalize_semester(self.semester)} - {self.moed}"

@@ -219,3 +219,14 @@ __marimo__/
 
 # Project notes
 BUGS_AND_FIXES.md
+
+# Locally generated exam schedule output
+output/
+
+# VS Code Mermaid extension auto-generated files
+*.mmd
+
+# Local diagram drafts (committed version lives in diagrams.md)
+docs/
+
+
