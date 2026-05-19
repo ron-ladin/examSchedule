@@ -307,7 +307,7 @@ pip install pytest
 
 ---
 
-## Usage
+## How to run
 
 ```bash
 .venv/bin/python main.py \
