@@ -125,18 +125,16 @@ flowchart LR
     main --> AC
     AC --> IDP & IOE & ISG
     SG --> ICS
-    SG ..|> ISG
-    FDP ..|> IDP
-    TFE ..|> IOE
-    ECS ..|> ICS
+    SG -. implements .-> ISG
+    FDP -. implements .-> IDP
+    TFE -. implements .-> IOE
+    ECS -. implements .-> ICS
 
     FDP --> C & EP
     ECS --> C
     SG --> S
     S --> EP
     C --> CO
-
-    note["Dependency rule:\ninner layers know nothing\nabout outer layers"]
 ```
 
 ---
@@ -399,8 +397,8 @@ flowchart LR
     ASSIGN["Assign date\nto course"]:::step
     DONE{All courses\nassigned?}:::check
     BACK["Backtrack —\ndel assignment\ntry next date"]:::bad
-    WIN([Yield Schedule ✓\nDict[course_id → date]]):::good
-    EMPTY([Return — no\nmore schedules]):::bad
+    WIN([Yield Schedule ✓\nassignments: id to date]):::good
+    EMPTY([Return — no more schedules]):::bad
 
     S --> DATES --> GRAPH --> MCV --> TRY --> CHK
     CHK -- No --> ASSIGN --> DONE
