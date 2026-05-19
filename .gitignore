@@ -223,5 +223,10 @@ BUGS_AND_FIXES.md
 # Locally generated exam schedule output
 output/
 
-# Local documentation (diagrams, architecture notes)
+# VS Code Mermaid extension auto-generated files
+*.mmd
+
+# Local diagram drafts (committed version lives in diagrams.md)
 docs/
+
+

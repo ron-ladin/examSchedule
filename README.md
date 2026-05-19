@@ -1,5 +1,80 @@
 # examSchedule
-<img width="1536" height="1024" alt="ChatGPT Image May 2, 2026, 11_23_42 AM" src="https://github.com/user-attachments/assets/1ce7ee46-d956-4f40-bf42-d366cf48f099" />
+
+```mermaid
+%%{init: {'theme': 'dark', 'themeVariables': {'fontSize': '15px'}}}%%
+flowchart TD
+    classDef cli     fill:#0f2744,stroke:#4a90d9,color:#7ec8f7,rx:8,font-weight:bold
+    classDef engine  fill:#0f2e1a,stroke:#2ecc71,color:#7effa4,rx:6,font-weight:bold
+    classDef adapter fill:#2a0f3a,stroke:#c678dd,color:#e0a8ff,rx:6
+    classDef reader  fill:#2e1f00,stroke:#e5a22e,color:#ffd27e,rx:6
+    classDef domain  fill:#1a1a2e,stroke:#e05c5c,color:#ff9999,rx:6
+    classDef iface   fill:#111111,stroke:#555555,color:#aaaaaa,rx:4,stroke-dasharray:5 3
+    classDef file    fill:#0d1117,stroke:#30363d,color:#8b949e,rx:4
+
+    CLI["⌨️  main.py\n─────────────\nCLI · argparse · wiring"]:::cli
+
+    subgraph CORE["  🧠  Engine Layer  "]
+        direction LR
+        Controller["AppController\n─────────────\norchestrates pipeline"]:::engine
+        Generator["ScheduleGenerator\n─────────────\nbacktracking · MCV"]:::engine
+    end
+
+    subgraph PORTS["  🔌  Interfaces (Ports)  "]
+        direction LR
+        IDP["IDataProvider"]:::iface
+        ICS["IConflictStrategy"]:::iface
+        ISG["IScheduleGenerator"]:::iface
+        IOE["IOutputExporter"]:::iface
+    end
+
+    subgraph ADAPT["  🔧  Adapters  "]
+        direction LR
+        Provider["FileDataProvider"]:::adapter
+        Strategy["ExactConflictStrategy"]:::adapter
+        Exporter["TextFileExporter"]:::adapter
+    end
+
+    subgraph READERS["  📖  Readers  "]
+        direction LR
+        CR["CourseFileReader"]:::reader
+        PR["ExamPeriodFileReader"]:::reader
+        RR["ProgramSelectorReader"]:::reader
+    end
+
+    subgraph DOMAIN["  🏛️  Domain  "]
+        direction LR
+        Course["Course\n+ CourseOffering"]:::domain
+        Period["ExamPeriod"]:::domain
+        Schedule["Schedule"]:::domain
+    end
+
+    subgraph FILES["  📁  Files  "]
+        direction LR
+        F1["courses.txt"]:::file
+        F2["dates.txt"]:::file
+        F3["programs.txt"]:::file
+        F4["schedules.txt"]:::file
+    end
+
+    CLI --> Controller
+    Controller --> IDP & ISG & IOE
+
+    IDP -.implements.- Provider
+    ISG -.implements.- Generator
+    IOE -.implements.- Exporter
+    ICS -.implements.- Strategy
+
+    Provider --> CR & PR & RR
+    Generator --> ICS
+    Generator --> Schedule
+    Strategy --> Course
+    Schedule --> Period
+
+    CR --> F1
+    PR --> F2
+    RR --> F3
+    Exporter --> F4
+```
 
 ---
 
@@ -11,157 +86,145 @@ The engine uses a **conflict graph** + **Most-Constrained-Variable (MCV) heurist
 
 ---
 
-## Architecture
-
-```mermaid
-flowchart TD
-    classDef cli        fill:#1e3a5f,stroke:#4a90d9,color:#ffffff,rx:6
-    classDef engine     fill:#1a4731,stroke:#2ecc71,color:#ffffff,rx:6
-    classDef adapter    fill:#4a1942,stroke:#c678dd,color:#ffffff,rx:6
-    classDef domain     fill:#3d2b00,stroke:#e5a22e,color:#ffffff,rx:6
-    classDef data       fill:#1c1c2e,stroke:#7f8c8d,color:#cccccc,rx:6
-    classDef iface      fill:#2c2c2c,stroke:#888888,color:#aaaaaa,rx:6,stroke-dasharray:4 2
-
-    CLI["⌨️  main.py\nCLI Entry Point"]:::cli
-
-    subgraph ENGINE["  Engine Layer  "]
-        Controller["AppController\norchestrates the pipeline"]:::engine
-        Generator["ScheduleGenerator\nbacktracking + MCV heuristic"]:::engine
-    end
-
-    subgraph ADAPTERS["  Adapters Layer  "]
-        Provider["FileDataProvider\nreads & validates input"]:::adapter
-        Strategy["ExactConflictStrategy\nconflict detection"]:::adapter
-        Exporter["TextFileExporter\nwrites schedules.txt"]:::adapter
-    end
-
-    subgraph DOMAIN["  Domain Layer  "]
-        Course["Course\n+ CourseOffering"]:::domain
-        Period["ExamPeriod\ndate ranges & exclusions"]:::domain
-        Schedule["Schedule\ncourse → date map"]:::domain
-    end
-
-    subgraph DATA["  Input Files  "]
-        Courses["📄 courses.txt"]:::data
-        Dates["📄 dates.txt"]:::data
-        Programs["📄 programs.txt"]:::data
-        Output["📄 schedules.txt"]:::data
-    end
-
-    CLI --> Controller
-    Controller --> Provider
-    Controller --> Generator
-    Controller --> Exporter
-
-    Provider --> Courses
-    Provider --> Dates
-    Provider --> Programs
-
-    Generator --> Strategy
-    Generator --> Schedule
-    Strategy --> Course
-    Schedule --> Period
-
-    Exporter --> Output
-```
-
----
-
 ## UML Class Diagram
 
 ```mermaid
 classDiagram
     direction TB
 
-    class AppController {
-        -data_provider: IDataProvider
-        -generator: IScheduleGenerator
-        -exporter: IOutputExporter
-        -selected_programs: List~str~
-        +run() None
+    namespace Domain {
+        class Course {
+            +id : str
+            +name : str
+            +instructor : str
+            +evaluation_type : str
+            +offerings : List~CourseOffering~
+            +add_offering(offering: CourseOffering) None
+            +has_exam() bool
+            +get_relevant_offerings(programs: List, semester: str) List~CourseOffering~
+            +is_relevant_for_period(programs: List, semester: str) bool
+        }
+        class CourseOffering {
+            +program_id : str
+            +year : int
+            +semester : str
+            +requirement : str
+            +is_relevant(programs: List, semester: str) bool
+            +is_elective() bool
+            +same_program_year_semester(other: CourseOffering) bool
+        }
+        class ExamPeriod {
+            +semester : str
+            +moed : str
+            +date_ranges : List~Tuple~date_date~~
+            +excluded_dates : Set~date~
+            +get_valid_dates() List~date~
+            +get_key() str
+        }
+        class Schedule {
+            +period : ExamPeriod
+            +assignments : Dict~str_date~
+        }
     }
 
-    class ScheduleGenerator {
-        -strategy: IConflictStrategy
-        +generate_schedules(courses, period) Iterator~Schedule~
-        -_build_conflict_graph(courses) Dict
-        -_backtrack(assignment, remaining, ...) Iterator~Schedule~
+    namespace Interfaces {
+        class IDataProvider {
+            <<interface>>
+            +get_courses() List~Course~
+            +get_exam_periods() List~ExamPeriod~
+            +get_selected_programs() List~str~
+        }
+        class IOutputExporter {
+            <<interface>>
+            +export_schedules(schedules_by_period: Dict, courses_by_id: Dict) None
+        }
+        class IConflictStrategy {
+            <<interface>>
+            +is_conflict(course1: Course, course2: Course) bool
+        }
+        class IScheduleGenerator {
+            <<interface>>
+            +generate_schedules(courses: List, period: ExamPeriod) Iterator~Schedule~
+        }
     }
 
-    class ExactConflictStrategy {
-        -selected_programs: Set~str~
-        +is_conflict(course1, course2) bool
+    namespace Engine {
+        class AppController {
+            <<controller>>
+            -_data_provider : IDataProvider
+            -_exporter : IOutputExporter
+            -_generator : IScheduleGenerator
+            -_selected_programs : List~str~
+            +run() None
+            -_sort_exam_periods(periods) List~ExamPeriod~
+            -_validate_selected_programs_exist(courses) None
+        }
+        class ScheduleGenerator {
+            <<engine>>
+            -_strategy : IConflictStrategy
+            +generate_schedules(courses: List, period: ExamPeriod) Iterator~Schedule~
+            -_build_conflict_graph(courses: List) Dict~Course_Set~Course~~
+            -_backtrack(assignment remaining valid_dates conflict_graph period) Iterator~Schedule~
+        }
     }
 
-    class Course {
-        +id: str
-        +name: str
-        +instructor: str
-        +evaluation_type: str
-        +offerings: List~CourseOffering~
-        +has_exam() bool
-        +is_relevant_for_period(programs, semester) bool
-        +get_relevant_offerings(programs, semester) List
+    namespace Adapters {
+        class FileDataProvider {
+            <<adapter>>
+            +course_reader : CourseFileReader
+            +exam_period_reader : ExamPeriodFileReader
+            +program_reader : ProgramSelectorReader
+            +get_courses() List~Course~
+            +get_exam_periods() List~ExamPeriod~
+            +get_selected_programs() List~str~
+        }
+        class TextFileExporter {
+            <<adapter>>
+            +output_path : Path
+            +export_schedules(schedules_by_period: Dict, courses_by_id: Dict) None
+            -_write_period_header(file semester: str, moed: str) None
+            -_write_schedule(file n: int, schedule: Schedule, courses_by_id: Dict) None
+            -_split_period_key(period_key: str) Tuple~str_str~
+        }
+        class ExactConflictStrategy {
+            <<adapter>>
+            -_selected_programs : Set~str~
+            +is_conflict(course1: Course, course2: Course) bool
+        }
     }
 
-    class CourseOffering {
-        +program_id: str
-        +year: int
-        +semester: str
-        +requirement: str
-        +is_relevant(programs, semester) bool
-        +is_elective() bool
-        +same_program_year_semester(other) bool
+    namespace Readers {
+        class CourseFileReader {
+            +courses_path : Path
+            +read() List~Course~
+        }
+        class ExamPeriodFileReader {
+            +periods_path : Path
+            +read() List~ExamPeriod~
+        }
+        class ProgramSelectorReader {
+            +programs_path : Path
+            +read() List~str~
+        }
     }
 
-    class ExamPeriod {
-        +semester: str
-        +moed: str
-        +date_ranges: List~Tuple~
-        +excluded_dates: Set~date~
-        +get_valid_dates() List~date~
-        +get_key() str
-    }
+    Course "1" *-- "0..*" CourseOffering : contains
+    Schedule --> ExamPeriod : period
 
-    class Schedule {
-        +period: ExamPeriod
-        +assignments: Dict~str, date~
-    }
-
-    class IDataProvider {
-        <<interface>>
-        +get_courses() List~Course~
-        +get_exam_periods() List~ExamPeriod~
-        +get_selected_programs() List~str~
-    }
-
-    class IConflictStrategy {
-        <<interface>>
-        +is_conflict(c1, c2) bool
-    }
-
-    class IScheduleGenerator {
-        <<interface>>
-        +generate_schedules(courses, period) Iterator~Schedule~
-    }
-
-    class IOutputExporter {
-        <<interface>>
-        +export_schedules(schedules_by_period, courses_by_id) None
-    }
-
-    AppController --> IDataProvider
-    AppController --> IScheduleGenerator
-    AppController --> IOutputExporter
-
-    ScheduleGenerator ..|> IScheduleGenerator
-    ScheduleGenerator --> IConflictStrategy
-    ScheduleGenerator --> Schedule
-
+    FileDataProvider ..|> IDataProvider
+    TextFileExporter ..|> IOutputExporter
     ExactConflictStrategy ..|> IConflictStrategy
+    ScheduleGenerator ..|> IScheduleGenerator
 
-    Course "1" --> "*" CourseOffering
-    Schedule --> ExamPeriod
+    AppController --> IDataProvider : uses
+    AppController --> IScheduleGenerator : uses
+    AppController --> IOutputExporter : uses
+    ScheduleGenerator --> IConflictStrategy : consults
+    ScheduleGenerator ..> Schedule : yields
+
+    FileDataProvider --> CourseFileReader : delegates
+    FileDataProvider --> ExamPeriodFileReader : delegates
+    FileDataProvider --> ProgramSelectorReader : delegates
 ```
 
 ---
@@ -295,3 +358,9 @@ $$$$
 |-------|-------|-------|
 | Unit | 74 | Per-class, no pipeline I/O |
 | E2E | 10 | Full pipeline, real + synthetic data |
+
+---
+
+## All Diagrams
+
+Full diagram set (architecture, sequences, data flow, conflict logic, test strategy): [diagrams.md](./diagrams.md)
