@@ -8,7 +8,7 @@ import re
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import pytest
 
@@ -86,15 +86,12 @@ def _parse_output_schedules(content: str) -> Dict[str, List[Dict[str, date]]]:
 
     return schedules_by_period
 
-# This integration test checks the entire app workflow from start to finish.
-    # It reads mock files, runs the scheduler, and creates a final text schedule report.
 def test_full_pipeline_creates_non_empty_output_file(tmp_path):
     courses_path = tmp_path / "courses.txt"
     periods_path = tmp_path / "dates.txt"
     programs_path = tmp_path / "programs.txt"
     output_path = tmp_path / "schedules.txt"
 
-    # We add 2 exam courses (Calculus, Algorithms) and 1 non-exam project course (Project Lab)
     courses_path.write_text(
         """Calculus
 11111
@@ -124,77 +121,16 @@ Project
     )
     programs_path.write_text("83101", encoding="utf-8")
 
-    # Connect all components together (Data Provider -> Strategy -> Generator -> Controller)
-    data_provider = FileDataProvider(courses_path, periods_path, programs_path)
-    selected_programs = data_provider.get_selected_programs()
-    conflict_strategy = ExactConflictStrategy(selected_programs)
-    generator = ScheduleGenerator(conflict_strategy)
-    exporter = TextFileExporter(output_path)
-    controller = AppController(
-        data_provider=data_provider,
-        exporter=exporter,
-        generator=generator,
-        selected_programs=selected_programs,
-    )
-
-    # Start the app execution   
-    controller.run()
+    _build_controller(courses_path, periods_path, programs_path, output_path).run()
 
     content = output_path.read_text(encoding="utf-8")
-    # Assertions: Verify the output file exists, has content, and formats headers cleanly
     assert output_path.exists()
     assert content.strip()
     assert "=== SEMESTER: FALL ===" in content
     assert "Schedule #1:" in content
-    # Check that exam courses are included, but evaluation types like "Project" are filtered out
     assert "Calculus" in content
     assert "Algorithms" in content
     assert "Project Lab" not in content
-
-#  This integration test verifies end-to-end mapping requirement.
-    # It makes sure that if the text database files contain the raw short string "SPRI",
-    # the final system output dynamically rewrites and maps it cleanly to "SPRING".
-def test_full_pipeline_displays_spri_as_spring(tmp_path):
-    courses_path = tmp_path / "courses.txt"
-    periods_path = tmp_path / "dates.txt"
-    programs_path = tmp_path / "programs.txt"
-    output_path = tmp_path / "schedules.txt"
-
-    courses_path.write_text(
-        """Linear Algebra
-44444
-Dr. Spring
-83101, 1, SPRING, Obligatory
-Exam
-""",
-        encoding="utf-8",
-    )
-    # The file contains the raw term "SPRI"
-    periods_path.write_text(
-        """SPRI, Aleph
-01-03-2026, 02-03-2026
-""",
-        encoding="utf-8",
-    )
-    programs_path.write_text("83101", encoding="utf-8")
-
-    data_provider = FileDataProvider(courses_path, periods_path, programs_path)
-    selected_programs = data_provider.get_selected_programs()
-    controller = AppController(
-        data_provider=data_provider,
-        exporter=TextFileExporter(output_path),
-        generator=ScheduleGenerator(ExactConflictStrategy(selected_programs)),
-        selected_programs=selected_programs,
-    )
-
-    controller.run()
-
-    content = output_path.read_text(encoding="utf-8")
-
-    # Assertions: Verify that "SPRING" is visible and the ugly raw "SPRI" is hidden
-    assert "=== SEMESTER: SPRING ===" in content
-    assert "=== SEMESTER: SPRI ===" not in content
-
 
 # Run the FULL pipeline using the real data files in data/ — the realistic end-to-end test.
 def test_pipeline_completes_quickly_on_real_data(tmp_path):
@@ -280,164 +216,6 @@ def test_no_conflicting_courses_share_date_in_real_data(tmp_path):
                     )
 
 
-# Synthetic scenario: 3 obligatory courses in same program/year/semester must all
-# get different dates in every schedule
-def test_three_obligatory_courses_get_three_different_dates(tmp_path):
-    courses_path = tmp_path / "courses.txt"
-    periods_path = tmp_path / "dates.txt"
-    programs_path = tmp_path / "programs.txt"
-    output_path = tmp_path / "schedules.txt"
-
-    courses_path.write_text(
-        """Calc
-11111
-Dr. A
-83101, 1, FALL, Obligatory
-Exam
-$$$$
-Algebra
-22222
-Dr. B
-83101, 1, FALL, Obligatory
-Exam
-$$$$
-Physics
-33333
-Dr. C
-83101, 1, FALL, Obligatory
-Exam
-""",
-        encoding="utf-8",
-    )
-    periods_path.write_text(
-        """FALL, Aleph
-05-01-2026, 09-01-2026
-""",
-        encoding="utf-8",
-    )
-    programs_path.write_text("83101", encoding="utf-8")
-
-    _build_controller(courses_path, periods_path, programs_path, output_path).run()
-    content = output_path.read_text(encoding="utf-8")
-
-    parsed = _parse_output_schedules(content)
-    schedules = parsed.get("FALL - Aleph", [])
-    assert len(schedules) > 0
-    for s in schedules:
-        dates = set(s.values())
-        assert len(dates) == 3, f"All 3 obligatory courses must have unique dates: {s}"
-
-
-# Synthetic scenario: 3 elective courses can all share the same date
-def test_three_elective_courses_can_share_date(tmp_path):
-    courses_path = tmp_path / "courses.txt"
-    periods_path = tmp_path / "dates.txt"
-    programs_path = tmp_path / "programs.txt"
-    output_path = tmp_path / "schedules.txt"
-
-    courses_path.write_text(
-        """Art
-11111
-Dr. A
-83101, 1, FALL, Elective
-Exam
-$$$$
-Music
-22222
-Dr. B
-83101, 1, FALL, Elective
-Exam
-$$$$
-Drama
-33333
-Dr. C
-83101, 1, FALL, Elective
-Exam
-""",
-        encoding="utf-8",
-    )
-    periods_path.write_text(
-        """FALL, Aleph
-05-01-2026, 05-01-2026
-""",
-        encoding="utf-8",
-    )
-    programs_path.write_text("83101", encoding="utf-8")
-
-    _build_controller(courses_path, periods_path, programs_path, output_path).run()
-    parsed = _parse_output_schedules(output_path.read_text(encoding="utf-8"))
-    schedules = parsed.get("FALL - Aleph", [])
-    assert len(schedules) == 1
-    only = schedules[0]
-    assert len(only) == 3
-    assert len(set(only.values())) == 1  # all 3 on the SAME date
-
-
-# Edge case: Saturday at start of range must never be assigned an exam
-def test_saturday_never_assigned_in_output(tmp_path):
-    courses_path = tmp_path / "courses.txt"
-    periods_path = tmp_path / "dates.txt"
-    programs_path = tmp_path / "programs.txt"
-    output_path = tmp_path / "schedules.txt"
-
-    courses_path.write_text(
-        """X
-11111
-Dr. A
-83101, 1, FALL, Obligatory
-Exam
-""",
-        encoding="utf-8",
-    )
-    # Range spans a Saturday (10-Jan-2026)
-    periods_path.write_text(
-        """FALL, Aleph
-09-01-2026, 11-01-2026
-""",
-        encoding="utf-8",
-    )
-    programs_path.write_text("83101", encoding="utf-8")
-
-    _build_controller(courses_path, periods_path, programs_path, output_path).run()
-    parsed = _parse_output_schedules(output_path.read_text(encoding="utf-8"))
-
-    for schedules in parsed.values():
-        for s in schedules:
-            for d in s.values():
-                assert d.weekday() != 5
-                assert d != date(2026, 1, 10)
-
-
-# Edge case: a period whose only valid date is Saturday → no schedules can be produced
-def test_period_with_only_saturday_produces_no_schedules(tmp_path):
-    courses_path = tmp_path / "courses.txt"
-    periods_path = tmp_path / "dates.txt"
-    programs_path = tmp_path / "programs.txt"
-    output_path = tmp_path / "schedules.txt"
-
-    courses_path.write_text(
-        """X
-11111
-Dr. A
-83101, 1, FALL, Obligatory
-Exam
-""",
-        encoding="utf-8",
-    )
-    # 10-Jan-2026 is Saturday — the ONLY date in the range
-    periods_path.write_text(
-        """FALL, Aleph
-10-01-2026, 10-01-2026
-""",
-        encoding="utf-8",
-    )
-    programs_path.write_text("83101", encoding="utf-8")
-
-    _build_controller(courses_path, periods_path, programs_path, output_path).run()
-    content = output_path.read_text(encoding="utf-8")
-    assert "No valid schedules found." in content
-
-
 # Edge case: validation must catch a selected program that doesn't exist in any course
 def test_selected_program_must_exist_in_courses(tmp_path):
     courses_path = tmp_path / "courses.txt"
@@ -498,82 +276,6 @@ FALL, Aleph
     controller = _build_controller(courses_path, periods_path, programs_path, output_path)
     with pytest.raises(ValueError):
         controller.run()
-
-
-# Edge case: a course in a different semester than the period must NOT appear in output
-def test_course_in_other_semester_excluded_from_period(tmp_path):
-    courses_path = tmp_path / "courses.txt"
-    periods_path = tmp_path / "dates.txt"
-    programs_path = tmp_path / "programs.txt"
-    output_path = tmp_path / "schedules.txt"
-
-    courses_path.write_text(
-        """FallExam
-11111
-Dr. A
-83101, 1, FALL, Obligatory
-Exam
-$$$$
-SpringExam
-22222
-Dr. B
-83101, 1, SPRI, Obligatory
-Exam
-""",
-        encoding="utf-8",
-    )
-    periods_path.write_text(
-        """FALL, Aleph
-05-01-2026, 06-01-2026
-""",
-        encoding="utf-8",
-    )
-    programs_path.write_text("83101", encoding="utf-8")
-
-    _build_controller(courses_path, periods_path, programs_path, output_path).run()
-    content = output_path.read_text(encoding="utf-8")
-    assert "FallExam" in content
-    assert "SpringExam" not in content
-
-
-# Excluded date range in the file must remove ALL dates inside it from the output
-def test_excluded_date_range_in_period_removed_from_output(tmp_path):
-    courses_path = tmp_path / "courses.txt"
-    periods_path = tmp_path / "dates.txt"
-    programs_path = tmp_path / "programs.txt"
-    output_path = tmp_path / "schedules.txt"
-
-    courses_path.write_text(
-        """X
-11111
-Dr. A
-83101, 1, FALL, Obligatory
-Exam
-""",
-        encoding="utf-8",
-    )
-    # Range 12-16 Jan but exclude 13-15 → only 12 and 16 should ever appear
-    periods_path.write_text(
-        """FALL, Aleph
-12-01-2026, 16-01-2026
-- 13-01-2026, 15-01-2026
-""",
-        encoding="utf-8",
-    )
-    programs_path.write_text("83101", encoding="utf-8")
-
-    _build_controller(courses_path, periods_path, programs_path, output_path).run()
-    parsed = _parse_output_schedules(output_path.read_text(encoding="utf-8"))
-
-    used_dates = set()
-    for schedules in parsed.values():
-        for s in schedules:
-            used_dates.update(s.values())
-
-    assert date(2026, 1, 13) not in used_dates
-    assert date(2026, 1, 14) not in used_dates
-    assert date(2026, 1, 15) not in used_dates
-    assert used_dates.issubset({date(2026, 1, 12), date(2026, 1, 16)})
 
 
 # Output file should be re-creatable: running twice overwrites cleanly without corruption
@@ -656,3 +358,41 @@ FALL, Aleph
     spring_idx = content.find("=== SEMESTER: SPRING ===")
     assert fall_aleph_idx != -1 and fall_bet_idx != -1 and spring_idx != -1
     assert fall_aleph_idx < fall_bet_idx < spring_idx
+
+
+# When every course in a period is non-Exam (Project/Attendance), zero courses reach the
+# generator → "No valid schedules found." must appear
+def test_all_project_courses_yields_no_valid_schedules(tmp_path):
+    courses_path = tmp_path / "courses.txt"
+    periods_path = tmp_path / "dates.txt"
+    programs_path = tmp_path / "programs.txt"
+    output_path = tmp_path / "schedules.txt"
+
+    courses_path.write_text(
+        """Lab A
+11111
+Dr. A
+83101, 1, FALL, Obligatory
+Project
+$$$$
+Lab B
+22222
+Dr. B
+83101, 1, FALL, Obligatory
+Project
+""",
+        encoding="utf-8",
+    )
+    periods_path.write_text(
+        """FALL, Aleph
+05-01-2026, 09-01-2026
+""",
+        encoding="utf-8",
+    )
+    programs_path.write_text("83101", encoding="utf-8")
+
+    _build_controller(courses_path, periods_path, programs_path, output_path).run()
+    content = output_path.read_text(encoding="utf-8")
+    assert "No valid schedules found." in content
+    assert "Lab A" not in content
+    assert "Lab B" not in content

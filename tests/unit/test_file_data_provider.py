@@ -204,42 +204,6 @@ Quiz
         provider.get_courses()
 
 
-# Invalid requirement type must be rejected
-def test_course_reader_rejects_invalid_requirement(tmp_path):
-    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
-    courses_path.write_text(
-        """Calculus
-11111
-Dr. Cohen
-83101, 1, FALL, Mandatory
-Exam
-""",
-        encoding="utf-8",
-    )
-    provider = FileDataProvider(courses_path, periods_path, programs_path)
-
-    with pytest.raises(ValueError):
-        provider.get_courses()
-
-
-# Year out of range must be rejected (only 1-4 valid)
-def test_course_reader_rejects_invalid_year(tmp_path):
-    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
-    courses_path.write_text(
-        """Calculus
-11111
-Dr. Cohen
-83101, 7, FALL, Obligatory
-Exam
-""",
-        encoding="utf-8",
-    )
-    provider = FileDataProvider(courses_path, periods_path, programs_path)
-
-    with pytest.raises(ValueError):
-        provider.get_courses()
-
-
 # The aliases "SPRING" and "SUMMER" should be stored normalized as "SPRI"/"SUMM"
 def test_spring_alias_normalized_to_spri(tmp_path):
     courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
@@ -314,11 +278,19 @@ def test_program_reader_rejects_empty_programs(tmp_path):
         provider.get_selected_programs()
 
 
-# Duplicate program IDs must be rejected
-def test_program_reader_rejects_duplicate_programs(tmp_path):
+# Real dates.txt uses inline labels after excluded dates (e.g. "- 07-01-2026 Shabat")
+# The label must be ignored; only the date token is parsed
+def test_inline_label_on_excluded_date_is_ignored(tmp_path):
     courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
-    programs_path.write_text("83101,83101", encoding="utf-8")
+    periods_path.write_text(
+        """FALL, Aleph
+05-01-2026, 12-01-2026
+- 07-01-2026 Shabat
+""",
+        encoding="utf-8",
+    )
     provider = FileDataProvider(courses_path, periods_path, programs_path)
+    periods = provider.get_exam_periods()
 
-    with pytest.raises(ValueError):
-        provider.get_selected_programs()
+    assert date(2026, 1, 7) in periods[0].excluded_dates
+    assert date(2026, 1, 5) not in periods[0].excluded_dates

@@ -222,3 +222,6 @@ BUGS_AND_FIXES.md
 
 # Locally generated exam schedule output
 output/
+
+# Local documentation (diagrams, architecture notes)
+docs/

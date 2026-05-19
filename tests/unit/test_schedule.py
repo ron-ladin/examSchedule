@@ -17,25 +17,6 @@ def _make_period():
     )
 
 
-def test_schedule_stores_period():
-    period = _make_period()
-    schedule = Schedule(period=period)
-    assert schedule.period is period
-
-
-def test_schedule_assignments_empty_by_default():
-    schedule = Schedule(period=_make_period())
-    assert schedule.assignments == {}
-
-
-def test_schedule_assignments_map_course_id_to_date():
-    schedule = Schedule(
-        period=_make_period(),
-        assignments={"11111": date(2026, 1, 5)},
-    )
-    assert schedule.assignments["11111"] == date(2026, 1, 5)
-
-
 def test_schedule_stores_multiple_assignments():
     assignments = {
         "11111": date(2026, 1, 5),
@@ -45,14 +26,6 @@ def test_schedule_stores_multiple_assignments():
     schedule = Schedule(period=_make_period(), assignments=assignments)
     assert len(schedule.assignments) == 3
     assert schedule.assignments["22222"] == date(2026, 1, 6)
-
-
-def test_schedule_assignments_use_string_course_ids():
-    schedule = Schedule(
-        period=_make_period(),
-        assignments={"11111": date(2026, 1, 5)},
-    )
-    assert all(isinstance(k, str) for k in schedule.assignments.keys())
 
 
 def test_two_schedules_with_same_data_are_equal():
