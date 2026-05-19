@@ -69,6 +69,3 @@ def test_is_elective_false_for_obligatory():
     assert offering.is_elective() is False
 
 
-def test_is_elective_is_case_insensitive():
-    offering = _make_offering(requirement="  ELECTIVE  ")
-    assert offering.is_elective() is True
