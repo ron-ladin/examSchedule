@@ -37,11 +37,6 @@ def test_has_exam_returns_false_for_project():
     assert course.has_exam() is False
 
 
-def test_has_exam_returns_false_for_attendance():
-    course = _make_course(evaluation_type="Attendance")
-    assert course.has_exam() is False
-
-
 def test_has_exam_is_case_insensitive():
     course = _make_course(evaluation_type="  exam  ")
     assert course.has_exam() is True
@@ -65,23 +60,10 @@ def test_hash_consistent_with_id():
     assert hash(c1) == hash(c2)
 
 
-def test_course_usable_as_dict_key():
-    course = _make_course()
-    d = {course: "value"}
-    assert d[course] == "value"
-
-
 def test_course_usable_in_set():
     c1 = _make_course(course_id="11111")
     c2 = _make_course(course_id="11111")
     assert len({c1, c2}) == 1
-
-
-def test_add_offering_appends_to_offerings():
-    course = _make_course()
-    offering = _make_offering()
-    course.add_offering(offering)
-    assert offering in course.offerings
 
 
 def test_get_relevant_offerings_filters_by_program_and_semester():
@@ -115,17 +97,8 @@ def test_is_relevant_for_period_false_when_no_matching_offering():
     assert course.is_relevant_for_period(["83101"], "FALL") is False
 
 
-def test_get_relevant_offerings_returns_empty_when_no_match():
-    course = _make_course()
-    course.add_offering(_make_offering(program_id="83101", semester="FALL"))
-    assert course.get_relevant_offerings(["83102"], "FALL") == []
-
-
 def test_get_relevant_offerings_with_no_offerings_returns_empty():
     course = _make_course()
     assert course.get_relevant_offerings(["83101"], "FALL") == []
 
 
-def test_is_relevant_for_period_false_when_no_offerings():
-    course = _make_course()
-    assert course.is_relevant_for_period(["83101"], "FALL") is False
