@@ -13,13 +13,13 @@ flowchart TD
 
     CLI["⌨️  main.py\n─────────────\nCLI · argparse · wiring"]:::cli
 
-    subgraph CORE["  🧠  Engine Layer  "]
+    subgraph CORE["  Engine Layer  "]
         direction LR
         Controller["AppController\n─────────────\norchestrates pipeline"]:::engine
         Generator["ScheduleGenerator\n─────────────\nbacktracking · MCV"]:::engine
     end
 
-    subgraph PORTS["  🔌  Interfaces (Ports)  "]
+    subgraph PORTS["  Interfaces (Ports)  "]
         direction LR
         IDP["IDataProvider"]:::iface
         ICS["IConflictStrategy"]:::iface
@@ -27,28 +27,28 @@ flowchart TD
         IOE["IOutputExporter"]:::iface
     end
 
-    subgraph ADAPT["  🔧  Adapters  "]
+    subgraph ADAPT["  Adapters  "]
         direction LR
         Provider["FileDataProvider"]:::adapter
         Strategy["ExactConflictStrategy"]:::adapter
         Exporter["TextFileExporter"]:::adapter
     end
 
-    subgraph READERS["  📖  Readers  "]
+    subgraph READERS["  Readers  "]
         direction LR
         CR["CourseFileReader"]:::reader
         PR["ExamPeriodFileReader"]:::reader
         RR["ProgramSelectorReader"]:::reader
     end
 
-    subgraph DOMAIN["  🏛️  Domain  "]
+    subgraph DOMAIN["  Domain  "]
         direction LR
         Course["Course\n+ CourseOffering"]:::domain
         Period["ExamPeriod"]:::domain
         Schedule["Schedule"]:::domain
     end
 
-    subgraph FILES["  📁  Files  "]
+    subgraph FILES["  Files  "]
         direction LR
         F1["courses.txt"]:::file
         F2["dates.txt"]:::file
@@ -76,17 +76,121 @@ flowchart TD
     Exporter --> F4
 ```
 
+> **University exam scheduler** — given a course catalog, exam windows, and a set of study programs, generates every valid conflict-free timetable using a backtracking CSP solver with an MCV heuristic.
+
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-84%20passed-2ecc71?style=flat-square)
+![Architecture](https://img.shields.io/badge/Architecture-Clean%20%2F%20Ports%20%26%20Adapters-c678dd?style=flat-square)
+![Algorithm](https://img.shields.io/badge/Algorithm-Backtracking%20%2B%20MCV-e5a22e?style=flat-square)
+
 ---
 
-## What It Does
+## Table of Contents
 
-Given a set of courses, exam windows, and selected study programs, `examSchedule` generates every valid conflict-free exam schedule — ensuring no student in a selected program sits two exams on the same day.
-
-The engine uses a **conflict graph** + **Most-Constrained-Variable (MCV) heuristic** to prune the backtracking search space, producing results lazily without loading all schedules into memory.
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Domain Model](#domain-model)
+- [Scheduling Algorithm](#scheduling-algorithm)
+- [Project Structure](#project-structure)
+- [Setup](#setup)
+- [Usage](#usage)
+- [Input File Formats](#input-file-formats)
+- [Output Format](#output-format)
+- [Testing](#testing)
+- [All Diagrams](#all-diagrams)
 
 ---
 
-## UML Class Diagram
+## Overview
+
+`examSchedule` solves the exam timetabling problem as a **Constraint Satisfaction Problem (CSP)**:
+
+- Reads courses, exam periods, and selected programs from plain-text files
+- Determines which courses conflict — two courses conflict when students in the same program, year, and semester are enrolled in both (unless both are elective)
+- Runs a backtracking search over valid exam dates, using the **Most-Constrained-Variable (MCV)** heuristic to assign the hardest-to-place courses first
+- Yields every valid complete schedule **lazily** — no list of all schedules is ever held in memory
+- Writes results to a structured text file, grouped by semester and moed
+
+**Key design properties:**
+
+| Property | Implementation |
+|---|---|
+| Architecture | Clean Architecture — Ports & Adapters |
+| Algorithm | Backtracking CSP + MCV heuristic |
+| Memory model | Lazy `Iterator[Schedule]` — O(n) stack depth |
+| Conflict graph | Built once O(n²), reused across all backtrack steps |
+| Extensibility | Swap any adapter without touching the engine |
+
+---
+
+## Architecture
+
+The system is divided into five strict layers. **Inner layers never import outer layers.**
+
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+flowchart LR
+    classDef cli     fill:#0f2744,stroke:#4a90d9,color:#7ec8f7
+    classDef engine  fill:#0f2e1a,stroke:#2ecc71,color:#7effa4
+    classDef iface   fill:#1a1a1a,stroke:#555,color:#aaa,stroke-dasharray:4 2
+    classDef adapter fill:#2a0f3a,stroke:#c678dd,color:#e0a8ff
+    classDef domain  fill:#1a1a2e,stroke:#e05c5c,color:#ff9999
+
+    subgraph CLI_LAYER["CLI"]
+        main["main.py"]:::cli
+    end
+
+    subgraph ENGINE_LAYER["Engine"]
+        AC["AppController"]:::engine
+        SG["ScheduleGenerator"]:::engine
+    end
+
+    subgraph IFACE_LAYER["Interfaces (Ports)"]
+        IDP["IDataProvider"]:::iface
+        IOE["IOutputExporter"]:::iface
+        ICS["IConflictStrategy"]:::iface
+        ISG["IScheduleGenerator"]:::iface
+    end
+
+    subgraph ADAPTER_LAYER["Adapters"]
+        FDP["FileDataProvider"]:::adapter
+        TFE["TextFileExporter"]:::adapter
+        ECS["ExactConflictStrategy"]:::adapter
+    end
+
+    subgraph DOMAIN_LAYER["Domain"]
+        C["Course"]:::domain
+        CO["CourseOffering"]:::domain
+        EP["ExamPeriod"]:::domain
+        S["Schedule"]:::domain
+    end
+
+    main --> AC
+    AC --> IDP & IOE & ISG
+    SG --> ICS
+    SG -. implements .-> ISG
+    FDP -. implements .-> IDP
+    TFE -. implements .-> IOE
+    ECS -. implements .-> ICS
+
+    FDP --> C & EP
+    ECS --> C
+    SG --> S
+    S --> EP
+    C --> CO
+```
+
+| Layer | Responsibility |
+|---|---|
+| **CLI** | Parse arguments, wire all dependencies, call `controller.run()` |
+| **Engine** | `AppController` orchestrates the pipeline; `ScheduleGenerator` runs the algorithm |
+| **Interfaces** | Abstract ports (ABCs) — the engine only ever imports these |
+| **Adapters** | Concrete implementations: file I/O, conflict detection, schedule export |
+| **Domain** | Pure data containers + domain rules — zero I/O |
+
+---
+
+## Domain Model
 
 ```mermaid
 classDiagram
@@ -232,29 +336,41 @@ classDiagram
 ## Scheduling Algorithm
 
 ```mermaid
+%%{init: {'theme': 'dark'}}%%
 flowchart LR
-    classDef start   fill:#1a4731,stroke:#2ecc71,color:#fff,rx:20
-    classDef step    fill:#1e3a5f,stroke:#4a90d9,color:#fff,rx:6
-    classDef check   fill:#3d2b00,stroke:#e5a22e,color:#fff,rx:6
-    classDef bad     fill:#5c1a1a,stroke:#e74c3c,color:#fff,rx:6
-    classDef good    fill:#1a3a3a,stroke:#1abc9c,color:#fff,rx:20
+    classDef start fill:#1a4731,stroke:#2ecc71,color:#fff,rx:20
+    classDef step  fill:#1e3a5f,stroke:#4a90d9,color:#fff,rx:6
+    classDef check fill:#3d2b00,stroke:#e5a22e,color:#fff,rx:6
+    classDef bad   fill:#5c1a1a,stroke:#e74c3c,color:#fff,rx:6
+    classDef good  fill:#1a3a3a,stroke:#1abc9c,color:#fff,rx:20
 
     S([Start]):::start
-    MCV["Select course\nwith most conflicts\n(MCV heuristic)"]:::step
-    TRY["Try next\navailable date"]:::step
-    CHK{Conflict\nwith assigned\nneighbors?}:::check
+    DATES["Resolve valid dates\nfrom ExamPeriod\n(exclude Sat + holidays)"]:::step
+    GRAPH["Build conflict graph\nO(n²) — once"]:::step
+    MCV["Sort courses by\nconflict count DESC\n(MCV heuristic)"]:::step
+    TRY["Try next available date\nfor current course"]:::step
+    CHK{Date blocked by\nassigned neighbor?}:::check
     ASSIGN["Assign date\nto course"]:::step
     DONE{All courses\nassigned?}:::check
-    BACK["Backtrack —\nundo last\nassignment"]:::bad
-    WIN([Yield Schedule ✓]):::good
+    BACK["Backtrack —\ndel assignment\ntry next date"]:::bad
+    WIN([Yield Schedule ✓\nassignments: id to date]):::good
+    EMPTY([Return — no more schedules]):::bad
 
-    S --> MCV --> TRY --> CHK
+    S --> DATES --> GRAPH --> MCV --> TRY --> CHK
     CHK -- No --> ASSIGN --> DONE
     CHK -- Yes --> TRY
     DONE -- Yes --> WIN
-    DONE -- No --> MCV
-    TRY -- No dates left --> BACK --> MCV
+    WIN --> TRY
+    DONE -- No --> TRY
+    TRY -- No dates left --> BACK --> TRY
+    BACK -- No courses left --> EMPTY
 ```
+
+**Conflict rule** — two courses conflict when there exists a shared offering where:
+- Same `program_id` · same `year` · same `semester`
+- **Not** both elective (two electives can share a date — students take only one)
+
+Only offerings from **selected programs** are evaluated — courses taken exclusively by unselected programs never conflict.
 
 ---
 
@@ -262,27 +378,27 @@ flowchart LR
 
 ```
 examSchedule/
-├── main.py                        # CLI entry point (argparse wiring)
+├── main.py                          # CLI entry point — argparse + dependency wiring
 ├── data/
-│   ├── courses.txt                # Course catalog with offerings
-│   ├── dates.txt                  # Exam periods, date ranges, exclusions
-│   └── programs.txt               # Selected program IDs (up to 5)
+│   ├── courses.txt                  # Course catalog with per-program offerings
+│   ├── dates.txt                    # Exam periods, date ranges, and exclusions
+│   └── programs.txt                 # Selected program IDs for this run
 ├── src/
-│   ├── domain/                    # Pure domain entities — no I/O
+│   ├── domain/                      # Pure data containers — zero I/O
 │   │   ├── course.py
 │   │   ├── course_offering.py
 │   │   ├── exam_period.py
 │   │   ├── schedule.py
 │   │   └── semester.py
-│   ├── interfaces/                # Abstract ports (ABC)
+│   ├── interfaces/                  # Abstract ports (ABCs)
 │   │   ├── i_data_provider.py
 │   │   ├── i_conflict_strategy.py
 │   │   ├── i_schedule_generator.py
 │   │   └── i_output_exporter.py
-│   ├── engine/                    # Core logic — depends only on interfaces
+│   ├── engine/                      # Core logic — depends only on interfaces
 │   │   ├── app_controller.py
 │   │   └── schedule_generator.py
-│   └── adapters/                  # Concrete implementations
+│   └── adapters/                    # Concrete implementations
 │       ├── exact_conflict_strategy.py
 │       ├── file_data_provider.py
 │       ├── text_file_exporter.py
@@ -290,9 +406,10 @@ examSchedule/
 │           ├── course_file_reader.py
 │           ├── exam_period_file_reader.py
 │           └── program_selector_reader.py
-└── tests/
-    ├── unit/                      # 74 tests — fast, no pipeline
-    └── e2e/                       # 10 tests — full pipeline, real + synthetic data
+├── tests/
+│   ├── unit/                        # 74 tests — isolated, no pipeline I/O
+│   └── e2e/                         # 10 tests — full pipeline, real + synthetic data
+└── diagrams.md                      # Full Mermaid diagram set
 ```
 
 ---
@@ -301,66 +418,113 @@ examSchedule/
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install pytest
 ```
 
 ---
 
-## How to run
+## Usage
 
 ```bash
-.venv/bin/python main.py \
+python main.py \
   --programs data/programs.txt \
   --courses  data/courses.txt \
   --periods  data/dates.txt \
-  --output   data/schedules.txt
+  --output   output/schedules.txt
 ```
 
 ---
 
 ## Input File Formats
 
-**programs.txt** — up to 5 comma-separated 5-digit program IDs:
+**`programs.txt`** — comma-separated 5-digit program IDs:
 ```
 83101, 83102, 83108
 ```
 
-**courses.txt** — records separated by `$$$$`:
+**`courses.txt`** — records delimited by `$$$$`. Each record: name, ID, instructor, one or more offering lines, evaluation type:
 ```
+$$$$
 Calculus 1
 83112
 Dr. Erez Scheiner
 83101, 1, FALL, Obligatory
+83102, 1, FALL, Obligatory
 Exam
 $$$$
 ```
 
-**dates.txt** — exam period records separated by `$$$$`:
+Evaluation types: `Exam` · `Project` · `Attendance` — only `Exam` courses are scheduled.
+
+**`dates.txt`** — exam period records delimited by `$$$$`. Excluded lines prefixed with `-`:
 ```
+$$$$
 FALL, Aleph
 29-01-2026, 11-03-2026
 - 14-02-2026
+- 02-03-2026, 04-03-2026  Purim
 $$$$
 ```
 
+Semesters: `FALL` · `SPRI` · `SUMM` — Moeds: `Aleph` · `Bet` · `Gimel` — Saturdays excluded automatically.
+
 ---
 
-## Running Tests
+## Output Format
+
+Results are written to the specified output file, grouped by semester then moed. Courses within each schedule are sorted chronologically.
+
+```
+=== SEMESTER: FALL ===
+--- Moed: Aleph ---
+
+Schedule #1:
+  - Physics 1 | Course ID: 83102 | Date: 29-01-2026 | Instructor: Prof. O. Some
+  - Calculus 1 | Course ID: 83112 | Date: 30-01-2026 | Instructor: Dr. Erez Scheiner
+
+Schedule #2:
+  - Physics 1 | Course ID: 83102 | Date: 29-01-2026 | Instructor: Prof. O. Some
+  - Calculus 1 | Course ID: 83112 | Date: 01-02-2026 | Instructor: Dr. Erez Scheiner
+```
+
+If a period produces no valid schedules, the block reads `No valid schedules found.`
+
+---
+
+## Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -v
+# Full suite
+python -m pytest tests/ -v
+
+# Unit tests only
+python -m pytest tests/unit/ -v
+
+# E2E tests only
+python -m pytest tests/e2e/ -v
 ```
 
 **84 test functions · 89 pytest runs · all passing**
 
-| Layer | Tests | Focus |
-|-------|-------|-------|
-| Unit | 74 | Per-class, no pipeline I/O |
-| E2E | 10 | Full pipeline, real + synthetic data |
+| Suite | Tests | Scope |
+|---|---|---|
+| Unit | 74 | Per-class, isolated — no file I/O, no pipeline |
+| E2E | 10 | Full pipeline — real data files + synthetic edge cases |
+
+| Unit Module | Tests | What it covers |
+|---|---|---|
+| `test_course.py` | 12 | Lifecycle, evaluation type, semester filtering |
+| `test_course_offering.py` | 10 | Relevance, elective flag, same-PYS match |
+| `test_exam_period.py` | 9 | Valid dates, Saturday exclusion, holiday ranges |
+| `test_conflict_strategy.py` | 7 · 1×6 runs | Parametrized conflict matrix |
+| `test_schedule_generator.py` | 12 | MCV ordering, backtracking, lazy iterator |
+| `test_file_data_provider.py` | 15 | Parsing, validation, error messages |
+| `test_text_file_exporter.py` | 7 | Output format, overwrite, semester display |
+| `test_schedule.py` | 2 | Equality, multi-assignment storage |
 
 ---
 
 ## All Diagrams
 
-Full diagram set (architecture, sequences, data flow, conflict logic, test strategy): [diagrams.md](./diagrams.md)
+Full diagram set — architecture layers, sequence diagrams, conflict logic, data flow, test architecture: [diagrams.md](./diagrams.md)
