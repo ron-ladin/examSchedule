@@ -29,7 +29,7 @@ Notes:
 """
 
 import logging
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 from src.domain.schedule import Schedule
 from src.interfaces.i_data_provider import IDataProvider
@@ -66,13 +66,15 @@ class AppController:
 
         courses_by_id = {course.id: course for course in all_courses}
 
-        schedules_by_period: Dict[str, Iterable[Schedule]] = {}
+        schedules_by_period: Dict[str, List[Schedule]] = {}
+        seen_period_keys: set = set()
 
         for period in exam_periods:
             period_key = period.get_key()
 
-            if period_key in schedules_by_period:
+            if period_key in seen_period_keys:
                 raise ValueError(f"Duplicate exam period found: {period_key}")
+            seen_period_keys.add(period_key)
 
             relevant_courses = [
                 course for course in all_courses
@@ -85,9 +87,11 @@ class AppController:
                 len(relevant_courses),
             )
 
-            schedules_by_period[period_key] = self._generator.generate_schedules(
-                relevant_courses,
-                period,
+            if not relevant_courses:
+                continue
+
+            schedules_by_period[period_key] = list(
+                self._generator.generate_schedules(relevant_courses, period)
             )
 
         self._exporter.export_schedules(schedules_by_period, courses_by_id)

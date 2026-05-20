@@ -33,7 +33,7 @@ Notes:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Iterable
+from typing import Dict, List
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule
@@ -44,7 +44,7 @@ class IOutputExporter(ABC):
     @abstractmethod
     def export_schedules(
         self,
-        schedules_by_period: Dict[str, Iterable[Schedule]],
+        schedules_by_period: Dict[str, List[Schedule]],
         courses_by_id: Dict[str, Course],
     ) -> None:
         pass
