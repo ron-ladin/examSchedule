@@ -81,8 +81,9 @@ Notes:
 """
 
 import logging
+from itertools import product as cartesian_product
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, List
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule
@@ -100,7 +101,7 @@ class TextFileExporter(IOutputExporter):
 
     def export_schedules(
         self,
-        schedules_by_period: Dict[str, Iterable[Schedule]],
+        schedules_by_period: Dict[str, List[Schedule]],
         courses_by_id: Dict[str, Course],
     ) -> None:
         logger.info("Writing schedules to %s", self.output_path)
@@ -109,34 +110,31 @@ class TextFileExporter(IOutputExporter):
 
         with self.output_path.open("w", encoding="utf-8") as file:
             if not schedules_by_period:
-                file.write("No exam periods found.\n")
+                file.write("No valid schedules found.\n")
                 return
 
-            for period_key, schedules in schedules_by_period.items():
-                semester, moed = self._split_period_key(period_key)
-                self._write_period_header(file, semester, moed)
+            period_keys = list(schedules_by_period.keys())
+            schedule_lists = [schedules_by_period[k] for k in period_keys]
 
-                count = 0
-                for schedule_number, schedule in enumerate(schedules, start=1):
-                    count += 1
-                    self._write_schedule(file, schedule_number, schedule, courses_by_id)
+            count = 0
+            for combo in cartesian_product(*schedule_lists):
+                count += 1
+                file.write(f"Schedule #{count}:\n")
+                for period_key, schedule in zip(period_keys, combo):
+                    semester, moed = self._split_period_key(period_key)
+                    file.write(f"  [{display_semester(semester)} - {moed}]\n")
+                    self._write_schedule(file, schedule, courses_by_id)
+                file.write("\n")
 
-                if count == 0:
-                    file.write("No valid schedules found.\n\n")
-
-    def _write_period_header(self, file, semester: str, moed: str) -> None:
-        file.write(f"=== SEMESTER: {display_semester(semester)} ===\n")
-        file.write(f"--- Moed: {moed} ---\n\n")
+            if count == 0:
+                file.write("No valid schedules found.\n")
 
     def _write_schedule(
         self,
         file,
-        schedule_number: int,
         schedule: Schedule,
         courses_by_id: Dict[str, Course],
     ) -> None:
-        file.write(f"Schedule #{schedule_number}:\n")
-
         sorted_assignments = sorted(schedule.assignments.items(), key=lambda item: item[1])
 
         for course_id, exam_date in sorted_assignments:
@@ -150,8 +148,6 @@ class TextFileExporter(IOutputExporter):
                 f"Date: {exam_date.strftime('%d-%m-%Y')} | "
                 f"Instructor: {course.instructor}\n"
             )
-
-        file.write("\n")
 
     def _split_period_key(self, period_key: str) -> tuple[str, str]:
         if " - " not in period_key:
