@@ -229,4 +229,10 @@ output/
 # Local diagram drafts (committed version lives in diagrams.md)
 docs/
 
+# Claude Code local files
+.claude/
+.claude-flow/
+.mcp.json
+CLAUDE.md
+
 
