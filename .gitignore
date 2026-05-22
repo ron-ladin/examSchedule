@@ -220,6 +220,15 @@ __marimo__/
 # Project notes
 BUGS_AND_FIXES.md
 
+# Claude Code & MCP config
+CLAUDE.md
+.mcp.json
+.claude/
+.claude-flow/
+
+# Frontend dependencies
+frontend/node_modules/
+
 # Locally generated exam schedule output
 output/
 
@@ -228,21 +237,5 @@ output/
 
 # Local diagram drafts (committed version lives in diagrams.md)
 docs/
-
-# Claude Code local files
-.claude/
-.claude-flow/
-.mcp.json
-CLAUDE.md
-
-# macOS
-.DS_Store
-
-# Kiro IDE
-.kiro/
-
-# Local design / blueprint docs
-Phase2_Engineering_Blueprint*.md
-*.pdf
 
 
