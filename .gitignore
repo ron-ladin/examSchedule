@@ -221,7 +221,7 @@ __marimo__/
 BUGS_AND_FIXES.md
 
 # Locally generated exam schedule output
-schedules.txt
+data/schedules.txt
 
 # VS Code Mermaid extension auto-generated files
 *.mmd
