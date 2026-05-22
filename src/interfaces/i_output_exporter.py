@@ -5,15 +5,17 @@ Contract for writing generated schedules to an output destination.
 
 Abstract methods to implement:
     - export_schedules(
-          schedules_by_period: Dict[str, Iterable[Schedule]],
+          schedules_by_period: Dict[str, Iterator[Schedule]],
           courses_by_id: Dict[str, Course]
       ) -> None
 
         Writes all generated schedules to an output destination.
 
-        The schedules are received as Iterable[Schedule] so the exporter can
+        The schedules are received as Iterator[Schedule] so the exporter can
         consume generated schedules one by one, without requiring all schedules
-        to be loaded into memory at once.
+        to be loaded into memory at once.  Implementations MUST NOT call
+        list() on the iterator — the generator's O(1) laziness must be
+        preserved through to the exporter boundary.
 
         Must group results by Semester → Moed → Schedule number.
         Output format:
@@ -30,10 +32,13 @@ Notes:
     - Use ABC and @abstractmethod from the abc module.
     - Implementations live in adapters/ — NOT here.
     - This interface defines only the contract, not the output formatting logic.
+    - The Iterator[Schedule] type (not List) is intentional and load-bearing:
+      it preserves the O(PAGE_SIZE) memory guarantee of PaginatedExporter and
+      forbids any implementation from silently materialising the full result set.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Dict, Iterator
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule
@@ -44,7 +49,7 @@ class IOutputExporter(ABC):
     @abstractmethod
     def export_schedules(
         self,
-        schedules_by_period: Dict[str, List[Schedule]],
+        schedules_by_period: Dict[str, Iterator[Schedule]],
         courses_by_id: Dict[str, Course],
     ) -> None:
         pass

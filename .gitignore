@@ -235,4 +235,14 @@ docs/
 .mcp.json
 CLAUDE.md
 
+# macOS
+.DS_Store
+
+# Kiro IDE
+.kiro/
+
+# Local design / blueprint docs
+Phase2_Engineering_Blueprint*.md
+*.pdf
+
 
