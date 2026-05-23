@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -9,7 +10,7 @@ class UploadResponseDTO(BaseModel):
     """Returned after a successful course or period file upload."""
 
     count: int
-    mode: str  # "replace" | "append"
+    mode: Literal["replace", "append"]
 
 
 class DataStatusDTO(BaseModel):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -13,6 +15,6 @@ class GenerateResponseDTO(BaseModel):
 class GenerationStatusDTO(BaseModel):
     """Current state of the background schedule generation job."""
 
-    status: str  # "idle" | "running" | "done" | "failed"
+    status: Literal["idle", "running", "completed", "failed"]
     total_schedules: int = 0
     error: str | None = None

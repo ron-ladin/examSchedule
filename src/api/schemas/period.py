@@ -43,8 +43,10 @@ class ExamPeriodDTO(BaseModel):
         """
         from src.domain.semester import display_semester
 
-        start = period.date_ranges[0][0] if period.date_ranges else date.today()
-        end = period.date_ranges[-1][1] if period.date_ranges else date.today()
+        if not period.date_ranges:
+            raise ValueError(f"ExamPeriod '{period.get_key()}' has no date ranges")
+        start = period.date_ranges[0][0]
+        end = period.date_ranges[-1][1]
 
         return cls(
             key=period.get_key(),
