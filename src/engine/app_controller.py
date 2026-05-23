@@ -32,7 +32,7 @@ Notes:
 """
 
 import logging
-from typing import Dict, Iterator, List
+from collections.abc import Iterator
 
 from src.domain.schedule import Schedule
 from src.interfaces.i_data_provider import IDataProvider
@@ -50,7 +50,7 @@ class AppController:
         data_provider: IDataProvider,
         exporter: IOutputExporter,
         generator: IScheduleGenerator,
-        selected_programs: List[str],
+        selected_programs: list[str],
     ) -> None:
         self._data_provider = data_provider
         self._exporter = exporter
@@ -69,7 +69,7 @@ class AppController:
 
         courses_by_id = {course.id: course for course in all_courses}
 
-        schedules_by_period: Dict[str, Iterator[Schedule]] = {}
+        schedules_by_period: dict[str, Iterator[Schedule]] = {}
         seen_period_keys: set = set()
 
         for period in exam_periods:
