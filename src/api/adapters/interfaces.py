@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any, Dict, List
+from collections.abc import Iterator
+from typing import Any
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule
@@ -29,8 +30,8 @@ class IOutputExporter(_V1IOutputExporter):
     @abstractmethod
     def export_schedules(
         self,
-        schedules_by_period: Dict[str, List[Schedule]],
-        courses_by_id: Dict[str, Course],
+        schedules_by_period: dict[str, Iterator[Schedule]],
+        courses_by_id: dict[str, Course],
     ) -> None: ...
 
     @abstractmethod
