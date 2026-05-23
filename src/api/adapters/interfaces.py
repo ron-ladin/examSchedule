@@ -1,16 +1,37 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from typing import Any
+from abc import abstractmethod
+from typing import Any, Dict, List
+
+from src.domain.course import Course
+from src.domain.schedule import Schedule
+from src.interfaces.i_output_exporter import IOutputExporter as _V1IOutputExporter
 
 
-class IOutputExporter(ABC):
-    """The contract (interface) that every exporter must follow.
+class IOutputExporter(_V1IOutputExporter):
+    """Extends the v1.0 IOutputExporter with pagination methods for the API layer.
 
-    Any class that wants to store and serve schedules must implement
-    all four methods below. This keeps the rest of the code independent
-    from how schedules are actually stored (memory, database, file, etc.).
+    Why we extend instead of replace:
+    AppController.run() calls exporter.export_schedules(...) on whatever exporter
+    it receives. By inheriting from the v1.0 IOutputExporter, any class that
+    implements this interface is automatically compatible with AppController —
+    no glue code needed.
+
+    Concrete classes must implement all 5 methods:
+      - export_schedules() — required by AppController (inherited from v1.0)
+      - add()              — store one item (called inside export_schedules)
+      - get_page()         — serve one page to the API
+      - total()            — return total stored count
+      - reset()            — clear everything before a new run
     """
+
+    # Re-declared here to pin the Iterator type explicitly at the API layer
+    @abstractmethod
+    def export_schedules(
+        self,
+        schedules_by_period: Dict[str, List[Schedule]],
+        courses_by_id: Dict[str, Course],
+    ) -> None: ...
 
     @abstractmethod
     def add(self, item: Any) -> None:

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import threading
-from typing import Any
+from itertools import product as cartesian_product
+from typing import Any, Dict, List
 
 from src.api.adapters.interfaces import IOutputExporter
+from src.domain.course import Course
+from src.domain.schedule import Schedule
 
 # How many items fit on one page by default
 PAGE_SIZE: int = 50
@@ -15,6 +18,12 @@ MAX_SCHEDULES: int = 10_000
 class PaginatedExporter(IOutputExporter):
     """Thread-safe in-memory store for generated schedules with pagination support.
 
+    How it connects to AppController:
+    AppController calls export_schedules() → we consume the cross-product of all
+    period iterators and call add() for each combined schedule.
+    The API then reads results via get_page() and total().
+
+    Thread safety:
     add() is called from asyncio.to_thread (generator thread).
     get_page() and total() are called from the async event loop.
     Both sides must hold self._lock.
@@ -26,8 +35,59 @@ class PaginatedExporter(IOutputExporter):
         # Lock so only one thread can read or write at a time
         self._lock = threading.Lock()
 
+    # ------------------------------------------------------------------ #
+    # v1.0 contract — required by AppController                           #
+    # ------------------------------------------------------------------ #
+
+    def export_schedules(
+        self,
+        schedules_by_period: Dict[str, List[Schedule]],
+        courses_by_id: Dict[str, Course],
+    ) -> None:
+        """Build the cross-product of all period schedules and store each combination.
+
+        Why cross-product: each period (e.g. FALL-Aleph, FALL-Bet) produces its
+        own set of valid schedules. A full exam timetable is one schedule per period
+        combined — so we need every combination across periods.
+
+        Note: each period iterator must be materialised into a list because
+        cartesian_product needs to iterate inner lists multiple times.
+        """
+        if not schedules_by_period:
+            return
+
+        period_keys = list(schedules_by_period.keys())
+
+        # Materialise each lazy iterator — unavoidable for cross-product
+        period_schedules: list[list[Schedule]] = [
+            list(schedules_by_period[k]) for k in period_keys
+        ]
+
+        # Each combo is one complete timetable: one Schedule object per period
+        for combo in cartesian_product(*period_schedules):
+            combined: dict[str, Any] = {
+                period_key: [
+                    {
+                        "course_id": course_id,
+                        "date": exam_date.strftime("%d-%m-%Y"),
+                        # Include name + instructor so the frontend doesn't need a separate lookup
+                        "name": courses_by_id[course_id].name if course_id in courses_by_id else course_id,
+                        "instructor": courses_by_id[course_id].instructor if course_id in courses_by_id else "",
+                    }
+                    for course_id, exam_date in sorted(
+                        schedule.assignments.items(), key=lambda x: x[1]  # sort by date
+                    )
+                ]
+                for period_key, schedule in zip(period_keys, combo)
+            }
+            self.add(combined)
+
+    # ------------------------------------------------------------------ #
+    # Pagination API — used by the REST endpoints                         #
+    # ------------------------------------------------------------------ #
+
     def add(self, item: Any) -> None:
-        """Save one schedule to the list. Called by the background generator thread."""
+        """Save one schedule to the list. Called internally by export_schedules()."""
         with self._lock:
             # If we already hit the cap, stop adding (do not crash)
             if len(self._items) >= MAX_SCHEDULES:
