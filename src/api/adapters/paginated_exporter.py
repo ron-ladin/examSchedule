@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
 from itertools import product as cartesian_product
-from typing import Any, Dict, List
+from typing import Any
 
 from src.api.adapters.interfaces import IOutputExporter
 from src.domain.course import Course
@@ -41,8 +42,8 @@ class PaginatedExporter(IOutputExporter):
 
     def export_schedules(
         self,
-        schedules_by_period: Dict[str, List[Schedule]],
-        courses_by_id: Dict[str, Course],
+        schedules_by_period: dict[str, Iterator[Schedule]],
+        courses_by_id: dict[str, Course],
     ) -> None:
         """Build the cross-product of all period schedules and store each combination.
 
@@ -58,7 +59,8 @@ class PaginatedExporter(IOutputExporter):
 
         period_keys = list(schedules_by_period.keys())
 
-        # Materialise each lazy iterator — unavoidable for cross-product
+        # Materialise each Iterator into a list — cartesian_product needs
+        # to iterate each inner sequence multiple times, which lazy iterators don't support
         period_schedules: list[list[Schedule]] = [
             list(schedules_by_period[k]) for k in period_keys
         ]
