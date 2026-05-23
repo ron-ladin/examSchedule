@@ -84,6 +84,16 @@ async def test_cors_unknown_origin_blocked(client: AsyncClient) -> None:
     assert acao not in ("http://evil.com", "*")
 
 
+def test_cors_env_override_affects_allowed_origins(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Overriding settings.cors_origins before create_app() must flow through to
+    # the CORS middleware — proving the middleware reads config, not a hardcoded value
+    monkeypatch.setattr("src.api.config.settings.cors_origins", ["http://overridden.test"])
+    app = create_app()
+    with TestClient(app) as tc:
+        response = tc.get("/health", headers={"Origin": "http://overridden.test"})
+        assert response.headers.get("access-control-allow-origin") == "http://overridden.test"
+
+
 # ---------------------------------------------------------------------------
 # Routing sanity
 # ---------------------------------------------------------------------------

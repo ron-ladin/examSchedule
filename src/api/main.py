@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -10,6 +12,8 @@ from src.api.config import settings
 from src.api.routers import health
 from src.api.session.store import SessionStore
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -18,7 +22,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Why lifespan instead of @app.on_event("startup"):
     @on_event is deprecated since FastAPI 0.93. Lifespan is the modern pattern
     and makes the startup/teardown lifecycle explicit and testable.
+
+    v1.0 single-worker constraint:
+    SessionStore lives in process memory. If you start uvicorn with multiple
+    workers (--workers N or WEB_CONCURRENCY=N), each worker gets its own private
+    SessionStore. Requests from the same user will be load-balanced across workers
+    and see completely different state. Always run with a single worker until v2
+    introduces a shared-state backend.
+    Run: uvicorn src.api.main:create_app --factory --port 8000 --reload
+    Do NOT add --workers > 1 until v2.
     """
+    worker_count = int(os.environ.get("WEB_CONCURRENCY", "1"))
+    if worker_count > 1:
+        logger.warning(
+            "v1.0 in-memory SessionStore is NOT safe with multiple workers "
+            "(WEB_CONCURRENCY=%s). Each worker holds its own SessionData — "
+            "requests will see inconsistent state. Set WEB_CONCURRENCY=1.",
+            worker_count,
+        )
+
     app.state.session_store = SessionStore()
     yield
     # Nothing to tear down in v1.0 — SessionStore holds only in-memory state
