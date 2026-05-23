@@ -222,6 +222,7 @@ BUGS_AND_FIXES.md
 
 # Locally generated exam schedule output
 output/
+data/schedules.txt
 
 # VS Code Mermaid extension auto-generated files
 *.mmd
@@ -241,8 +242,9 @@ CLAUDE.md
 # Kiro IDE
 .kiro/
 
-# Local design / blueprint docs
+# Local design / blueprint docs (Part 2 reference — not for commit)
 Phase2_Engineering_Blueprint*.md
+SDD-foundation.md
 *.pdf
 
 
