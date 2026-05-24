@@ -23,7 +23,7 @@ import pytest
 
 from src.adapters.file_data_provider import FileDataProvider
 
-# This is a helper function that creates three temporary text files 
+# This is a helper function that creates three temporary text files
     # (courses.txt, dates.txt, programs.txt) filled with correct mock data to use in the tests.
 def _write_valid_files(tmp_path):
     courses_path = tmp_path / "courses.txt"
@@ -87,7 +87,7 @@ def test_course_reader_rejects_malformed_course_record(tmp_path):
     with pytest.raises(ValueError):
         provider.get_courses()
 
-#  This checks date validation. The system expects DD-MM-YYYY format. 
+#  This checks date validation. The system expects DD-MM-YYYY format.
     # If the file uses YYY-MM-DD instead, it should catch the mistake and raise a ValueError.
 def test_exam_period_reader_rejects_wrong_date_format(tmp_path):
     courses_path, periods_path, programs_path = _write_valid_files(tmp_path)

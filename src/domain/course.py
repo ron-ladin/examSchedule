@@ -61,4 +61,3 @@ class Course:
         return self.has_exam() and bool(
             self.get_relevant_offerings(selected_programs, semester)
         )
-

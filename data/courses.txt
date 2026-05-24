@@ -13,7 +13,7 @@ Dr. Terry Bell
 83108,2,SPRI,Obligatory
 Project
 $$$$
-Calculus 1 
+Calculus 1
 83112
 Dr. Erez Scheiner
 83101,1,FALL,Obligatory
