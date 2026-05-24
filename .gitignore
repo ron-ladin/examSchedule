@@ -234,3 +234,8 @@ docs/
 node_modules/
 dist/
 .eslintcache
+
+# Claude Code session notes (local only)
+CLAUDE.md
+work_log_morning.md
+night_shift_log.txt
