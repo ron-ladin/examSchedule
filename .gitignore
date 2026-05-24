@@ -230,3 +230,7 @@ data/schedules.txt
 docs/
 
 
+# --- Node.js & Tailwind Specific ---
+node_modules/
+dist/
+.eslintcache
