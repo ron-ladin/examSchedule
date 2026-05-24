@@ -79,9 +79,7 @@ async def test_cors_preflight_allowed_origin(client: AsyncClient) -> None:
 async def test_cors_unknown_origin_blocked(client: AsyncClient) -> None:
     # A request from an unlisted origin must NOT receive the ACAO header
     response = await client.get("/health", headers={"Origin": "http://evil.com"})
-    acao = response.headers.get("access-control-allow-origin", "")
-    # FastAPI/Starlette either omits the header or sets it to "null" for blocked origins
-    assert acao not in ("http://evil.com", "*")
+    assert response.headers.get("access-control-allow-origin") is None
 
 
 def test_cors_env_override_affects_allowed_origins(monkeypatch: pytest.MonkeyPatch) -> None:
