@@ -100,5 +100,3 @@ def test_is_relevant_for_period_false_when_no_matching_offering():
 def test_get_relevant_offerings_with_no_offerings_returns_empty():
     course = _make_course()
     assert course.get_relevant_offerings(["83101"], "FALL") == []
-
-
