@@ -36,7 +36,7 @@ def _sync_generate(session: SessionData, programs: list[str]) -> None:
         periods=periods,
         selected_programs=programs,
     )
-    generator = ScheduleGenerator(conflict_strategy=ExactConflictStrategy())
+    generator = ScheduleGenerator(conflict_strategy=ExactConflictStrategy(selected_programs=programs))
     controller = AppController(
         data_provider=data_provider,
         exporter=session.exporter,

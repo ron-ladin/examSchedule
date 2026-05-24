@@ -202,3 +202,84 @@ def test_generate_error_message_contains_exception_text(client_with_data) -> Non
         tc.post("/api/schedules/generate", json={"programs": []})
     error = tc.get("/api/generate/status").json()["error"]
     assert "boom" in error
+
+
+# ---------------------------------------------------------------------------
+# DTO validation (SCRUM-127 review feedback)
+# ---------------------------------------------------------------------------
+
+def test_generate_rejects_more_than_five_programs(client_with_data) -> None:
+    tc, _ = client_with_data
+    with patch("src.api.routers.generate._sync_generate", return_value=None):
+        response = tc.post(
+            "/api/schedules/generate",
+            json={"programs": ["11111", "22222", "33333", "44444", "55555", "66666"]},
+        )
+    assert response.status_code == 422
+
+
+def test_generate_rejects_duplicate_programs(client_with_data) -> None:
+    tc, _ = client_with_data
+    with patch("src.api.routers.generate._sync_generate", return_value=None):
+        response = tc.post(
+            "/api/schedules/generate",
+            json={"programs": ["11111", "11111"]},
+        )
+    assert response.status_code == 422
+
+
+def test_generate_rejects_non_five_digit_program_id(client_with_data) -> None:
+    tc, _ = client_with_data
+    with patch("src.api.routers.generate._sync_generate", return_value=None):
+        response = tc.post(
+            "/api/schedules/generate",
+            json={"programs": ["ABC", "1234"]},
+        )
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Real end-to-end: no mocking of _sync_generate — catches ExactConflictStrategy
+# argument bugs and any wiring issues that mocked tests cannot detect.
+# ---------------------------------------------------------------------------
+
+def test_real_generation_end_to_end_produces_schedules(client) -> None:
+    from datetime import date
+
+    from src.domain.course import Course
+    from src.domain.course_offering import CourseOffering
+    from src.domain.exam_period import ExamPeriod
+
+    tc, app = client
+    program_id = "83101"
+
+    session = app.state.session_store.get_or_create()
+    session.courses = [
+        Course(
+            id="10001",
+            name="Calculus",
+            instructor="Prof. A",
+            evaluation_type="Exam",
+            offerings=[
+                CourseOffering(
+                    program_id=program_id,
+                    year=1,
+                    semester="SPRI",
+                    requirement="Obligatory",
+                )
+            ],
+        )
+    ]
+    session.periods = [
+        ExamPeriod(
+            semester="SPRI",
+            moed="Aleph",
+            date_ranges=[(date(2026, 1, 5), date(2026, 1, 9))],
+        )
+    ]
+
+    tc.post("/api/schedules/generate", json={"programs": [program_id]})
+
+    status = tc.get("/api/generate/status").json()
+    assert status["status"] == "completed"
+    assert status["total_schedules"] > 0
