@@ -1,0 +1,24 @@
+[MASTER]
+ignore=.venv,__pycache__,.pytest_cache
+
+[MESSAGES CONTROL]
+disable=
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+    too-few-public-methods,
+    duplicate-code,
+    broad-exception-raised
+
+[FORMAT]
+max-line-length=100
+
+[DESIGN]
+max-args=8
+max-locals=20
+max-branches=15
+max-statements=60
+max-attributes=10
+
+[REPORTS]
+score=yes

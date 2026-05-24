@@ -43,3 +43,7 @@ jobs:
       - name: Run tests
         run: |
           python -m pytest tests/ -q
+
+      - name: Run Pylint
+        run: |
+          python -m pylint src --fail-under=8.5
