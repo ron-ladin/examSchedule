@@ -79,7 +79,8 @@ async def test_cors_preflight_allowed_origin(client: AsyncClient) -> None:
 async def test_cors_unknown_origin_blocked(client: AsyncClient) -> None:
     # A request from an unlisted origin must NOT receive the ACAO header
     response = await client.get("/health", headers={"Origin": "http://evil.com"})
-    assert response.headers.get("access-control-allow-origin") is None
+    acao = response.headers.get("access-control-allow-origin", "")
+    assert acao == ""
 
 
 def test_cors_env_override_affects_allowed_origins(monkeypatch: pytest.MonkeyPatch) -> None:
