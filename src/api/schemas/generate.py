@@ -5,6 +5,12 @@ from typing import Literal
 from pydantic import BaseModel
 
 
+class GenerateRequestDTO(BaseModel):
+    """Payload for POST /api/generate."""
+
+    programs: list[str] = []
+
+
 class GenerateResponseDTO(BaseModel):
     """Returned immediately when a generation job is accepted (202)."""
 

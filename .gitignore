@@ -236,6 +236,10 @@ docs/
 .mcp.json
 CLAUDE.md
 
+# Node
+node_modules/
+frontend/node_modules/
+
 # macOS
 .DS_Store
 
