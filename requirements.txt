@@ -1,5 +1,2 @@
-pytest
-pytest-asyncio
-fastapi
-httpx
-pydantic-settings
+fastapi==0.136.3
+pydantic-settings==2.14.1
