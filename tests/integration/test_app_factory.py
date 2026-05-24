@@ -159,3 +159,14 @@ def test_get_session_dep_returns_session_data() -> None:
         assert response.status_code == 200
         assert len(captured) == 1
         assert captured[0] is app.state.session_store.get_or_create()
+
+
+# ---------------------------------------------------------------------------
+# Global pytest fixtures from tests/conftest.py
+# ---------------------------------------------------------------------------
+
+def test_test_client_fixture_returns_health_response(test_client: TestClient) -> None:
+    response = test_client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
