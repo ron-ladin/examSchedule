@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
 from src.api.adapters.paginated_exporter import PaginatedExporter
+from src.domain.course import Course
+from src.domain.exam_period import ExamPeriod
 
 # The four states a generation job can be in
 GenerationStatus = Literal["idle", "running", "completed", "failed"]
@@ -14,13 +16,17 @@ class SessionData:
     """All mutable state for one user session.
 
     v1.0 has no auth — the whole server shares one SessionData.
-    Fields are intentionally coarse (list[Any]) because the typed DTOs
-    are only built at generation time, not stored here.
+
+    Contract for data-upload endpoints (SCRUM-67/68):
+    Store parsed domain objects here — NOT raw dicts.
+    The generate endpoint (SCRUM-75) passes these directly to AppController
+    via InMemoryDataProvider, which expects typed Course/ExamPeriod objects.
     """
 
-    # Raw uploaded data — populated by the data-upload endpoints (SCRUM-67/68)
-    courses: list[Any] = field(default_factory=list)
-    periods: list[Any] = field(default_factory=list)
+    # Populated by POST /api/data/courses/upload (SCRUM-67)
+    courses: list[Course] = field(default_factory=list)
+    # Populated by POST /api/data/periods/upload (SCRUM-68)
+    periods: list[ExamPeriod] = field(default_factory=list)
 
     # Results store — filled by the background generator (SCRUM-75)
     exporter: PaginatedExporter = field(default_factory=PaginatedExporter)
