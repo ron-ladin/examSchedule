@@ -42,7 +42,7 @@ jobs:
 
       - name: Run tests
         run: |
-          python -m pytest tests/ -q
+          python -m pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=85
 
       - name: Run Pylint
         run: |
