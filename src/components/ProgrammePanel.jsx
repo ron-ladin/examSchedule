@@ -11,17 +11,7 @@
 
 import { useState, useEffect } from 'react'
 import { api, ApiError } from '../api/client'
-
-const PROG_COLORS = [
-  '#3b82f6', '#8b5cf6', '#10b981', '#f59e0b',
-  '#ef4444', '#06b6d4', '#ec4899', '#84cc16',
-]
-
-function colorFor(id) {
-  let h = 0
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
-  return PROG_COLORS[h % PROG_COLORS.length]
-}
+import { colorFor } from '../utils/progColor'
 
 export default function ProgrammePanel({ selected = [], onChange, toast }) {
   const [programmes, setProgrammes] = useState([])
