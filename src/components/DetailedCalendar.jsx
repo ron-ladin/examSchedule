@@ -21,6 +21,7 @@ import { colorFor } from '../utils/progColor'
 import NavBar from './NavBar'
 import ExamSlot from './ExamSlot'
 import SemesterGroupLayout from './SemesterGroupLayout'
+import { MotionCard, PageShell } from './Motion'
 
 const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = [
@@ -91,7 +92,7 @@ function CalendarGrid({ year, month, exams, selectedDate, onSelect }) {
           const isToday     = iso === new Date().toISOString().slice(0, 10)
 
           return (
-            <div
+            <MotionCard
               key={iso}
               onClick={() => onSelect(iso)}
               style={{
@@ -114,7 +115,7 @@ function CalendarGrid({ year, month, exams, selectedDate, onSelect }) {
                   : dayExams.length > 0
                   ? 'rgba(59,130,246,0.04)'
                   : 'var(--surface-container-lowest)',
-                transition: 'all 0.15s',
+                transition: 'border-color 0.15s, background 0.15s',
                 boxShadow: isSelected ? '0 0 0 3px rgba(59,130,246,0.15)' : 'none',
               }}
             >
@@ -146,7 +147,7 @@ function CalendarGrid({ year, month, exams, selectedDate, onSelect }) {
                   +{dayExams.length - 2}
                 </span>
               )}
-            </div>
+            </MotionCard>
           )
         })}
       </div>
@@ -295,7 +296,7 @@ export default function DetailedCalendar() {
   )
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--surface)' }}>
+    <PageShell style={{ minHeight: '100vh', background: 'var(--surface)' }}>
 
       {/* SCRUM-92 — Shared NavBar */}
       <NavBar currentPath="/calendar" rightContent={navRight} />
@@ -404,7 +405,7 @@ export default function DetailedCalendar() {
           </>
         )}
       </div>
-    </div>
+    </PageShell>
   )
 }
 

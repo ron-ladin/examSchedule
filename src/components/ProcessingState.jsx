@@ -15,7 +15,9 @@
 
 import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { motion } from 'framer-motion'
 import { useScheduler } from '../hooks/useScheduler'
+import { PageShell } from './Motion'
 
 function StepRow({ step, index, isCurrent }) {
   const statusIcon = {
@@ -147,7 +149,7 @@ export default function ProcessingState() {
   const currentStepObj = steps.find(s => s.status === 'running')
 
   return (
-    <div
+    <PageShell
       style={{
         minHeight: '100vh',
         background: 'linear-gradient(145deg, #050a1a 0%, #0a0f2e 50%, #140a2e 100%)',
@@ -161,8 +163,16 @@ export default function ProcessingState() {
       }}
     >
       {/* Ambient orbs */}
-      <div style={{ position: 'absolute', top: '5%', left: '5%', width: '600px', height: '600px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(59,130,246,0.1) 0%, transparent 70%)', pointerEvents: 'none' }} />
-      <div style={{ position: 'absolute', bottom: '5%', right: '5%', width: '500px', height: '500px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(139,92,246,0.1) 0%, transparent 70%)', pointerEvents: 'none' }} />
+      <motion.div
+        style={{ position: 'absolute', top: '5%', left: '5%', width: '600px', height: '600px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(59,130,246,0.1) 0%, transparent 70%)', pointerEvents: 'none' }}
+        animate={{ x: [0, 18, -12, 0], y: [0, -28, 16, 0] }}
+        transition={{ duration: 10, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <motion.div
+        style={{ position: 'absolute', bottom: '5%', right: '5%', width: '500px', height: '500px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(139,92,246,0.1) 0%, transparent 70%)', pointerEvents: 'none' }}
+        animate={{ x: [0, -20, 10, 0], y: [0, 22, -18, 0] }}
+        transition={{ duration: 12, repeat: Infinity, ease: 'easeInOut' }}
+      />
 
       {/* Header */}
       <div style={{ position: 'absolute', top: '1.5rem', left: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -343,6 +353,6 @@ export default function ProcessingState() {
           </button>
         </div>
       </div>
-    </div>
+    </PageShell>
   )
 }

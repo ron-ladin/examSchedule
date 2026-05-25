@@ -6,6 +6,7 @@
  *   rightContent  ReactNode      — slot rendered on the right side; defaults to Sign Out link
  */
 import { Link } from 'react-router-dom'
+import ThemeToggle from './ThemeToggle'
 
 const NAV_ITEMS = [
   { label: 'Dashboard',       path: '/dashboard', icon: 'dashboard'        },
@@ -77,7 +78,8 @@ export default function NavBar({ currentPath, rightContent }) {
       </nav>
 
       {/* Right slot */}
-      <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        <ThemeToggle />
         {rightContent ?? (
           <Link
             to="/"

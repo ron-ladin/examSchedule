@@ -1,13 +1,28 @@
 {
   "name": "examschedule",
   "version": "1.0.0",
-  "description": "```mermaid %%{init: {'theme': 'dark', 'themeVariables': {'fontSize': '15px'}}}%% flowchart TD     classDef cli     fill:#0f2744,stroke:#4a90d9,color:#7ec8f7,rx:8,font-weight:bold     classDef engine  fill:#0f2e1a,stroke:#2ecc71,color:#7effa4,rx:6,font-weight:bold     classDef adapter fill:#2a0f3a,stroke:#c678dd,color:#e0a8ff,rx:6     classDef reader  fill:#2e1f00,stroke:#e5a22e,color:#ffd27e,rx:6     classDef domain  fill:#1a1a2e,stroke:#e05c5c,color:#ff9999,rx:6     classDef iface   fill:#111111,stroke:#555555,color:#aaaaaa,rx:4,stroke-dasharray:5 3     classDef file    fill:#0d1117,stroke:#30363d,color:#8b949e,rx:4",
-  "main": "index.js",
-  "directories": {
-    "test": "tests"
-  },
+  "type": "module",
+  "description": "Syncademic — AI-powered exam scheduling platform",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "canvas-confetti": "^1.9.4",
+    "framer-motion": "^12.40.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.27.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.5.0",
+    "msw": "^2.14.6",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^4.3.0",
+    "vite": "^5.4.11"
   },
   "repository": {
     "type": "git",
@@ -16,14 +31,13 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "bugs": {
     "url": "https://github.com/ron-ladin/examSchedule/issues"
   },
   "homepage": "https://github.com/ron-ladin/examSchedule#readme",
-  "devDependencies": {
-    "autoprefixer": "^10.5.0",
-    "postcss": "^8.5.15",
-    "tailwindcss": "^4.3.0"
+  "msw": {
+    "workerDirectory": [
+      "public"
+    ]
   }
 }

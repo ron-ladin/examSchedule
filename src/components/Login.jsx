@@ -6,6 +6,7 @@
 
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { PageShell } from './Motion'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -42,7 +43,7 @@ export default function Login() {
   }
 
   return (
-    <div
+    <PageShell
       style={{
         minHeight: '100vh',
         background: 'linear-gradient(145deg, #050a1a 0%, #0a0f2e 40%, #140a2e 100%)',
@@ -261,6 +262,6 @@ export default function Login() {
       >
         © 2024 Syncademic. Secure Academic Environment.
       </p>
-    </div>
+    </PageShell>
   )
 }

@@ -10,6 +10,7 @@
  */
 import ExamSlot from './ExamSlot'
 import { SEMESTER_LABELS } from '../models/types'
+import { StaggerList, StaggerItem } from './Motion'
 
 function inferSemester(dateStr) {
   const m = new Date(dateStr + 'T00:00:00').getMonth()
@@ -105,7 +106,7 @@ export default function SemesterGroupLayout({ exams = [], onSelectExam }) {
             </div>
 
             {/* Exam grid */}
-            <div
+            <StaggerList
               style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
@@ -113,7 +114,7 @@ export default function SemesterGroupLayout({ exams = [], onSelectExam }) {
               }}
             >
               {semExams.map(exam => (
-                <div key={exam.courseId} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                <StaggerItem key={exam.courseId} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
                   <span
                     style={{
                       fontFamily: 'JetBrains Mono, monospace',
@@ -130,9 +131,9 @@ export default function SemesterGroupLayout({ exams = [], onSelectExam }) {
                     size="full"
                     onClick={onSelectExam ? () => onSelectExam(exam) : undefined}
                   />
-                </div>
+                </StaggerItem>
               ))}
-            </div>
+            </StaggerList>
           </section>
         )
       })}

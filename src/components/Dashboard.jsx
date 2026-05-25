@@ -23,6 +23,8 @@ import { DATA_FILES } from '../models/types'
 import ProgrammePanel from './ProgrammePanel'
 import CourseAccordion from './CourseAccordion'
 import ExamPeriodCalendar from './ExamPeriodCalendar'
+import ThemeToggle from './ThemeToggle'
+import { PageShell } from './Motion'
 
 // ── Sidebar navigation items ───────────────────────────────────────────────
 const NAV_ITEMS = [
@@ -284,6 +286,8 @@ function TopBar() {
             </p>
           </div>
         </div>
+
+        <ThemeToggle />
 
         <Link
           to="/"
@@ -806,7 +810,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--surface)' }}>
+    <PageShell style={{ display: 'flex', minHeight: '100vh', background: 'var(--surface)' }}>
       <Sidebar settingsOpen={settingsOpen} onSettingsToggle={() => setSettingsOpen(true)} />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -1084,6 +1088,6 @@ export default function Dashboard() {
       />
 
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
-    </div>
+    </PageShell>
   )
 }

@@ -19,6 +19,7 @@ import { useScheduler } from '../hooks/useScheduler'
 import { api, ApiError } from '../api/client'
 import { SEMESTER_LABELS, MOED_LABELS, SEMESTER, MOED } from '../models/types'
 import NavBar from './NavBar'
+import { MotionCard, StaggerList, StaggerItem, PageShell } from './Motion'
 
 const OPTION_META = [
   {
@@ -56,7 +57,7 @@ function ScheduleCard({ meta, schedule, selected, onSelect, onExplore }) {
   const isSelected = selected === meta.key
 
   return (
-    <div
+    <MotionCard
       onClick={() => onSelect(meta.key)}
       style={{
         borderRadius: '1.5rem',
@@ -67,7 +68,7 @@ function ScheduleCard({ meta, schedule, selected, onSelect, onExplore }) {
           ? 'linear-gradient(135deg, rgba(59,130,246,0.06), rgba(139,92,246,0.06))'
           : 'var(--surface-container-lowest)',
         cursor: 'pointer',
-        transition: 'all 0.2s ease',
+        transition: 'border-color 0.2s ease, background 0.2s ease',
         boxShadow: isSelected ? '0 0 0 4px rgba(59,130,246,0.1), var(--glass-shadow)' : 'var(--glass-shadow)',
         position: 'relative',
         overflow: 'hidden',
@@ -127,7 +128,7 @@ function ScheduleCard({ meta, schedule, selected, onSelect, onExplore }) {
         Explore Details
         <span className="material-icons-round" style={{ fontSize: '0.9rem' }}>arrow_forward</span>
       </button>
-    </div>
+    </MotionCard>
   )
 }
 
@@ -386,7 +387,7 @@ export default function ResultsView() {
   )
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--surface)' }}>
+    <PageShell style={{ minHeight: '100vh', background: 'var(--surface)' }}>
 
       {/* SCRUM-92 — Shared NavBar */}
       <NavBar currentPath="/results" rightContent={navRight} />
@@ -422,18 +423,19 @@ export default function ResultsView() {
         </div>
 
         {/* Three option cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
+        <StaggerList style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
           {OPTION_META.map((meta, i) => (
-            <ScheduleCard
-              key={meta.key}
-              meta={meta}
-              schedule={schedules[i]}
-              selected={selectedOption}
-              onSelect={setSelectedOption}
-              onExplore={handleExplore}
-            />
+            <StaggerItem key={meta.key}>
+              <ScheduleCard
+                meta={meta}
+                schedule={schedules[i]}
+                selected={selectedOption}
+                onSelect={setSelectedOption}
+                onExplore={handleExplore}
+              />
+            </StaggerItem>
           ))}
-        </div>
+        </StaggerList>
 
         {/* Summary panel */}
         <div className="card" style={{ padding: '1.75rem', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '2rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -466,6 +468,6 @@ export default function ResultsView() {
         {/* SCRUM-92 — Paginated schedule history */}
         <ScheduleHistory />
       </main>
-    </div>
+    </PageShell>
   )
 }

@@ -1,4 +1,6 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { AnimatePresence } from 'framer-motion'
+import { useTheme } from './hooks/useTheme'
 import LandingPage from './components/LandingPage'
 import Login from './components/Login'
 import Register from './components/Register'
@@ -7,10 +9,11 @@ import ProcessingState from './components/ProcessingState'
 import ResultsView from './components/ResultsView'
 import DetailedCalendar from './components/DetailedCalendar'
 
-export default function App() {
+function AnimatedRoutes() {
+  const location = useLocation()
   return (
-    <BrowserRouter>
-      <Routes>
+    <AnimatePresence mode="wait">
+      <Routes location={location} key={location.pathname}>
         <Route path="/"           element={<LandingPage />} />
         <Route path="/login"      element={<Login />} />
         <Route path="/register"   element={<Register />} />
@@ -20,6 +23,15 @@ export default function App() {
         <Route path="/calendar"   element={<DetailedCalendar />} />
         <Route path="*"           element={<Navigate to="/" replace />} />
       </Routes>
+    </AnimatePresence>
+  )
+}
+
+export default function App() {
+  useTheme()
+  return (
+    <BrowserRouter>
+      <AnimatedRoutes />
     </BrowserRouter>
   )
 }

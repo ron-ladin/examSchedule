@@ -6,6 +6,9 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import ThemeToggle from './ThemeToggle'
+import { PageShell, MotionButton } from './Motion'
 
 // ── Hero background — dark gradient with glass overlay ─────────────────────
 const heroStyle = {
@@ -143,6 +146,7 @@ function Nav() {
 
         {/* CTAs */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <ThemeToggle size={1.1} color="rgba(255,255,255,0.8)" />
           <Link to="/login" className="btn-ghost" style={{ padding: '0.5rem 1.25rem', fontSize: '0.85rem' }}>
             Sign In
           </Link>
@@ -159,8 +163,16 @@ function HeroSection() {
   return (
     <section style={{ ...heroStyle, paddingTop: '68px' }}>
       {/* Ambient glow orbs */}
-      <div style={{ ...glowBlue, top: '10%', left: '5%' }} />
-      <div style={{ ...glowBlue, top: '20%', right: '5%', background: 'radial-gradient(circle, rgba(139,92,246,0.18) 0%, transparent 70%)' }} />
+      <motion.div
+        style={{ ...glowBlue, top: '10%', left: '5%' }}
+        animate={{ x: [0, 18, -12, 0], y: [0, -28, 16, 0] }}
+        transition={{ duration: 10, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <motion.div
+        style={{ ...glowBlue, top: '20%', right: '5%', background: 'radial-gradient(circle, rgba(139,92,246,0.18) 0%, transparent 70%)' }}
+        animate={{ x: [0, -20, 10, 0], y: [0, 22, -18, 0] }}
+        transition={{ duration: 12, repeat: Infinity, ease: 'easeInOut' }}
+      />
 
       <div
         style={{
@@ -228,13 +240,17 @@ function HeroSection() {
 
         {/* CTAs */}
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-          <Link to="/register" className="btn-primary">
-            Get Started Now
-            <span className="material-icons-round" style={{ fontSize: '1.1rem' }}>arrow_forward</span>
-          </Link>
-          <a href="#features" className="btn-ghost">
-            See How It Works
-          </a>
+          <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} transition={{ type: 'spring', stiffness: 400, damping: 20 }}>
+            <Link to="/register" className="btn-primary">
+              Get Started Now
+              <span className="material-icons-round" style={{ fontSize: '1.1rem' }}>arrow_forward</span>
+            </Link>
+          </motion.div>
+          <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} transition={{ type: 'spring', stiffness: 400, damping: 20 }}>
+            <a href="#features" className="btn-ghost">
+              See How It Works
+            </a>
+          </motion.div>
         </div>
 
         {/* Hero visual — glassmorphic calendar mesh */}
@@ -773,7 +789,7 @@ function Footer() {
 // ── Page ──────────────────────────────────────────────────────────────────
 export default function LandingPage() {
   return (
-    <div style={{ minHeight: '100vh' }}>
+    <PageShell style={{ minHeight: '100vh' }}>
       <Nav />
       <HeroSection />
       <FeaturesSection />
@@ -781,6 +797,6 @@ export default function LandingPage() {
       <CtaSection />
       <FaqSection />
       <Footer />
-    </div>
+    </PageShell>
   )
 }

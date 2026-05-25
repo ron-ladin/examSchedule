@@ -7,9 +7,11 @@
  * On success, navigates to /dashboard.
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import confetti from 'canvas-confetti'
 import { USER_ROLES } from '../models/types'
+import { PageShell } from './Motion'
 
 const STRENGTH = { weak: '#ba1a1a', moderate: '#f59e0b', strong: '#10b981' }
 
@@ -34,6 +36,11 @@ export default function Register() {
     role:        '',
     password:    '',
   })
+
+  useEffect(() => {
+    if (step !== 'success') return
+    confetti({ particleCount: 120, spread: 70, origin: { y: 0.6 }, colors: ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b'] })
+  }, [step])
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
   const strength = getStrength(form.password)
@@ -76,7 +83,7 @@ export default function Register() {
   }
 
   return (
-    <div
+    <PageShell
       style={{
         minHeight: '100vh',
         background: 'var(--surface-container-low)',
@@ -319,6 +326,6 @@ export default function Register() {
           © 2024 Syncademic.
         </p>
       </div>
-    </div>
+    </PageShell>
   )
 }
