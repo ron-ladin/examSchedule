@@ -226,9 +226,6 @@ data/schedules.txt
 # VS Code Mermaid extension auto-generated files
 *.mmd
 
-# Local diagram drafts (committed version lives in diagrams.md)
-docs/
-
 
 # --- Node.js & Tailwind Specific ---
 node_modules/
@@ -239,3 +236,5 @@ dist/
 CLAUDE.md
 work_log_morning.md
 night_shift_log.txt
+
+.devcontainer/
