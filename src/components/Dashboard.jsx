@@ -20,6 +20,9 @@ import { useToast } from '../hooks/useToast'
 import { ToastContainer } from './Toast'
 import { api, ApiError } from '../api/client'
 import { DATA_FILES } from '../models/types'
+import ProgrammePanel from './ProgrammePanel'
+import CourseAccordion from './CourseAccordion'
+import ExamPeriodCalendar from './ExamPeriodCalendar'
 
 // ── Sidebar navigation items ───────────────────────────────────────────────
 const NAV_ITEMS = [
@@ -759,11 +762,13 @@ const UPLOAD_FN = {
 // ── Main component ─────────────────────────────────────────────────────────
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { files, setFile, settings, updateSetting, isReadyToGenerate, startProcessing } = useScheduler()
+  const { files, setFile, settings, updateSetting, isReadyToGenerate, startProcessing,
+          selectedPrograms, setSelectedPrograms } = useScheduler()
   const { toasts, toast, dismiss } = useToast()
 
   const [manualEntryOpen, setManualEntryOpen] = useState(false)
   const [settingsOpen,     setSettingsOpen]    = useState(false)
+  const [configTab,        setConfigTab]       = useState('programmes')  // 'programmes' | 'periods'
   const [dragOver,         setDragOver]        = useState({})
   const [uploading,        setUploading]       = useState({})
 
@@ -951,31 +956,84 @@ export default function Dashboard() {
               info
             </span>
             <div>
-              <p
-                style={{
-                  fontFamily: 'Inter, sans-serif',
-                  fontSize: '0.8rem',
-                  color: 'var(--on-surface)',
-                  marginBottom: '0.25rem',
-                  fontWeight: 500,
-                }}
-              >
+              <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.8rem', color: 'var(--on-surface)', marginBottom: '0.25rem', fontWeight: 500 }}>
                 Expected file format
               </p>
-              <p
-                style={{
-                  fontFamily: 'JetBrains Mono, monospace',
-                  fontSize: '0.75rem',
-                  color: 'var(--on-surface-variant)',
-                  lineHeight: 1.6,
-                }}
-              >
+              <p style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.75rem', color: 'var(--on-surface-variant)', lineHeight: 1.6 }}>
                 <strong>courses.txt</strong> — delimited by <code>$$$$</code> · fields: name, id, instructor, offerings, eval_type<br />
                 <strong>dates.txt</strong> — semester / moed / date ranges / excluded dates<br />
                 <strong>programs.txt</strong> — one program ID per line (e.g. 83101)
               </p>
             </div>
           </div>
+
+          {/* ── Configure Session (appears once all 3 files are uploaded) ── */}
+          {isReadyToGenerate && (
+            <div style={{ marginTop: '2.5rem' }}>
+
+              {/* Section header + tab bar */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div>
+                  <h2 style={{ fontFamily: 'Sora, sans-serif', fontSize: '1.2rem', fontWeight: 700, color: 'var(--on-surface)', letterSpacing: '-0.02em', marginBottom: '0.2rem' }}>
+                    Configure Session
+                  </h2>
+                  <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.82rem', color: 'var(--on-surface-variant)' }}>
+                    Select programmes, browse courses, and tune exam period windows.
+                  </p>
+                </div>
+
+                {/* Tab toggle */}
+                <div style={{ display: 'flex', gap: '0.25rem', padding: '0.25rem', background: 'var(--surface-container)', borderRadius: '9999px' }}>
+                  {[
+                    { key: 'programmes', label: 'Programmes & Courses', icon: 'school'      },
+                    { key: 'periods',    label: 'Exam Periods',          icon: 'date_range'  },
+                  ].map(tab => (
+                    <button
+                      key={tab.key}
+                      onClick={() => setConfigTab(tab.key)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.4rem 1rem',
+                        borderRadius: '9999px',
+                        border: 'none',
+                        background: configTab === tab.key ? 'white' : 'transparent',
+                        boxShadow: configTab === tab.key ? 'var(--glass-shadow)' : 'none',
+                        fontFamily: 'Sora, sans-serif',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        color: configTab === tab.key ? 'var(--primary)' : 'var(--on-surface-variant)',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      <span className="material-icons-round" style={{ fontSize: '0.95rem' }}>{tab.icon}</span>
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Tab content */}
+              {configTab === 'programmes' ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '1.25rem', alignItems: 'start' }}>
+                  <ProgrammePanel
+                    selected={selectedPrograms}
+                    onChange={setSelectedPrograms}
+                    toast={toast}
+                  />
+                  <CourseAccordion
+                    selectedPrograms={selectedPrograms}
+                    programmes={[]}
+                    toast={toast}
+                  />
+                </div>
+              ) : (
+                <ExamPeriodCalendar toast={toast} />
+              )}
+            </div>
+          )}
         </main>
 
         {/* ── Footer ───────────────────────────────────────────────────── */}

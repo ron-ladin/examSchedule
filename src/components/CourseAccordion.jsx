@@ -7,7 +7,7 @@
  *   toast             (msg, type) => void
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { api, ApiError } from '../api/client'
 import { SEMESTER_LABELS, EVAL_TYPE } from '../models/types'
 import { colorFor } from '../utils/progColor'
@@ -221,9 +221,24 @@ function ProgrammeItem({ programme, isSelected, isOpen, onToggle, courses, loadi
 }
 
 export default function CourseAccordion({ selectedPrograms = [], programmes = [], toast }) {
-  const [openId,       setOpenId]      = useState(null)
-  const [courseCache,  setCourseCache] = useState({})   // programmeId → Course[]
-  const [loadingId,    setLoadingId]   = useState(null)
+  const [openId,            setOpenId]           = useState(null)
+  const [courseCache,       setCourseCache]      = useState({})   // programmeId → Course[]
+  const [loadingId,         setLoadingId]        = useState(null)
+  // Self-fetch when no programmes list is provided by the parent
+  const [fetchedProgrammes, setFetchedProgrammes] = useState([])
+
+  useEffect(() => {
+    if (programmes.length > 0) return
+    api.getProgrammes()
+      .then(data => setFetchedProgrammes(data ?? []))
+      .catch(() => {
+        setFetchedProgrammes(
+          Object.keys(MOCK_COURSES).map(id => ({ id, name: `Programme ${id}`, courseCount: null }))
+        )
+      })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const displayProgrammes = programmes.length > 0 ? programmes : fetchedProgrammes
 
   const handleToggle = useCallback(async (id) => {
     if (openId === id) { setOpenId(null); return }
@@ -246,7 +261,7 @@ export default function CourseAccordion({ selectedPrograms = [], programmes = []
     }
   }, [openId, courseCache, toast])
 
-  if (programmes.length === 0) {
+  if (displayProgrammes.length === 0) {
     return (
       <div
         className="card"
@@ -282,7 +297,7 @@ export default function CourseAccordion({ selectedPrograms = [], programmes = []
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        {programmes.map(prog => (
+        {displayProgrammes.map(prog => (
           <ProgrammeItem
             key={prog.id}
             programme={prog}
