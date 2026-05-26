@@ -6,7 +6,7 @@ function LandingNav() {
   const navigate = useNavigate()
   return (
     <header
-      className="sticky top-0 z-50 w-full flex justify-between items-center px-6 md:px-16 py-5"
+      className="fixed top-0 left-0 right-0 z-50 flex justify-between items-center px-6 md:px-16 py-5"
       style={{
         background: 'rgba(11,19,38,0.55)',
         backdropFilter: 'blur(40px)',
@@ -177,7 +177,7 @@ export default function LandingPage() {
   return (
     <div className="relative min-h-screen">
       <AmbientOrbs variant="default" />
-      <div className="relative z-10">
+      <div className="relative z-10 pt-20">
         <LandingNav />
 
         <section className="relative px-6 md:px-16 pt-16 md:pt-24 pb-20 max-w-[1280px] mx-auto screen-anim">
