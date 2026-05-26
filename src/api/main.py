@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.config import settings
 from src.api.exceptions.handlers import register_handlers
-from src.api.routers import generate, health
+from src.api.routers import data, generate, health
 from src.api.session.store import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -69,10 +69,12 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Total-Count"],
     )
 
     app.include_router(health.router, tags=["health"])
     app.include_router(generate.router)
+    app.include_router(data.router, prefix="/api/data", tags=["data"])
 
     register_handlers(app)
 
