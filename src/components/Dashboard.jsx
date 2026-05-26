@@ -289,7 +289,7 @@ export default function Dashboard() {
 
         {/* CTA strip */}
         <section
-          className="rounded-[28px] p-8 md:p-10 flex flex-col md:flex-row items-center justify-between gap-8 relative overflow-hidden"
+          className="relative rounded-[28px] p-8 md:p-10 flex flex-col md:flex-row items-center justify-between gap-8 overflow-hidden"
           style={{
             background: 'linear-gradient(135deg, rgba(59,130,246,0.10), rgba(139,92,246,0.10))',
             border: '1px solid rgba(173,198,255,0.18)',

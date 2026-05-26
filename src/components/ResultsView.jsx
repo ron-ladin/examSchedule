@@ -186,7 +186,7 @@ export default function ResultsView() {
 
         {/* Analytics */}
         <section className="grid grid-cols-12 gap-6">
-          <div className="col-span-12 md:col-span-7 glass rounded-3xl p-7">
+          <div className="col-span-12 lg:col-span-7 glass rounded-3xl p-7">
             <div className="flex items-center justify-between mb-6">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.22em] text-on-surface-variant/60 font-semibold mb-2">Distribution by week</p>
@@ -210,36 +210,38 @@ export default function ResultsView() {
             </div>
           </div>
 
-          <div className="col-span-12 md:col-span-3 glass rounded-3xl p-7 flex flex-col items-center text-center justify-center">
-            <div className="relative w-32 h-32 mb-5">
-              <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
-                <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="2" />
-                <circle cx="18" cy="18" r="15.9" fill="none" stroke="url(#health-grad)" strokeWidth="2"
-                  strokeDasharray="99.8 100" strokeLinecap="round"
-                  style={{ filter: 'drop-shadow(0 0 6px rgba(173,198,255,0.5))' }} />
-                <defs>
-                  <linearGradient id="health-grad" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stopColor="#3b82f6" />
-                    <stop offset="100%" stopColor="#8b5cf6" />
-                  </linearGradient>
-                </defs>
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <Icon name="auto_awesome" fill className="text-primary text-[20px] mb-1" />
-                <div className="text-[20px] font-bold">99.8%</div>
+          <div className="col-span-12 lg:col-span-5 flex flex-col gap-6">
+            <div className="glass rounded-3xl p-7 flex-1 flex flex-col items-center text-center justify-center">
+              <div className="relative w-32 h-32 mb-5">
+                <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="2" />
+                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="url(#health-grad)" strokeWidth="2"
+                    strokeDasharray="99.8 100" strokeLinecap="round"
+                    style={{ filter: 'drop-shadow(0 0 6px rgba(173,198,255,0.5))' }} />
+                  <defs>
+                    <linearGradient id="health-grad" x1="0" y1="0" x2="1" y2="1">
+                      <stop offset="0%" stopColor="#3b82f6" />
+                      <stop offset="100%" stopColor="#8b5cf6" />
+                    </linearGradient>
+                  </defs>
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <Icon name="auto_awesome" fill className="text-primary text-[20px] mb-1" />
+                  <div className="text-[20px] font-bold">99.8%</div>
+                </div>
               </div>
+              <p className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold">Solver health</p>
             </div>
-            <p className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold">Solver health</p>
-          </div>
 
-          <div className="col-span-12 md:col-span-2 glass rounded-3xl p-6 flex flex-col justify-between">
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.22em] text-on-surface-variant/60 font-semibold mb-3">Upcoming deadline</p>
-              <p className="text-[14px] text-on-surface leading-relaxed">Submit Moed A schedule to the registrar.</p>
-            </div>
-            <div className="flex items-center gap-2 mt-5 text-tertiary">
-              <Icon name="alarm" className="text-[16px]" />
-              <span className="text-[12px] uppercase tracking-widest font-bold">2 days left</span>
+            <div className="glass rounded-3xl p-6 flex flex-col justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.22em] text-on-surface-variant/60 font-semibold mb-3">Upcoming deadline</p>
+                <p className="text-[14px] text-on-surface leading-relaxed">Submit Moed A schedule to the registrar.</p>
+              </div>
+              <div className="flex items-center gap-2 mt-5 text-tertiary">
+                <Icon name="alarm" className="text-[16px]" />
+                <span className="text-[12px] uppercase tracking-widest font-bold">2 days left</span>
+              </div>
             </div>
           </div>
         </section>
