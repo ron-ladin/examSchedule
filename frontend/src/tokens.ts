@@ -1,6 +1,10 @@
+// One background class per programme slot — matches prog.1–5 in tailwind.config.js
+export const PROGRAMME_COLOURS = [
+  'bg-prog-1',
+  'bg-prog-2',
+  'bg-prog-3',
+  'bg-prog-4',
+  'bg-prog-5',
+] as const
 
-export const PROGRAMME_COLOURS = ['bg-brand-primary',
-  'bg-brand-success',
-  'bg-brand-validDate',
-  'bg-brand-elective',
-  'bg-brand-excluded'] as const
+export type ProgrammeColour = typeof PROGRAMME_COLOURS[number]
