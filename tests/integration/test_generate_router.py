@@ -108,28 +108,28 @@ def test_generate_second_call_blocked_while_running(client_with_data) -> None:
 
 def test_generate_returns_202_when_data_present(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.background.generation._sync_generate", return_value=None):
         response = tc.post("/api/schedules/generate", json={"programs": []})
     assert response.status_code == 202
 
 
 def test_generate_202_body_has_message(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.background.generation._sync_generate", return_value=None):
         body = tc.post("/api/schedules/generate", json={"programs": []}).json()
     assert "message" in body
 
 
 def test_generate_202_body_has_session_id(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.background.generation._sync_generate", return_value=None):
         body = tc.post("/api/schedules/generate", json={"programs": []}).json()
     assert "session_id" in body
 
 
 def test_generate_status_is_completed_after_successful_run(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.background.generation._sync_generate", return_value=None):
         tc.post("/api/schedules/generate", json={"programs": []})
     status = tc.get("/api/generate/status").json()
     assert status["status"] == "completed"
@@ -173,7 +173,7 @@ def test_generate_can_restart_after_timeout(client_with_data) -> None:
     with patch("src.api.routers.generate._run_generation", side_effect=_timeout_run):
         tc.post("/api/schedules/generate", json={})
     # Status is "failed", not "running" — a second call must be accepted
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.background.generation._sync_generate", return_value=None):
         retry = tc.post("/api/schedules/generate", json={})
     assert retry.status_code == 202
 
@@ -185,7 +185,7 @@ def test_generate_can_restart_after_timeout(client_with_data) -> None:
 def test_generate_status_is_failed_on_exception(client_with_data) -> None:
     tc, _ = client_with_data
     with patch(
-        "src.api.routers.generate._sync_generate",
+        "src.api.background.generation._sync_generate",
         side_effect=RuntimeError("boom"),
     ):
         tc.post("/api/schedules/generate", json={"programs": []})
@@ -196,7 +196,7 @@ def test_generate_status_is_failed_on_exception(client_with_data) -> None:
 def test_generate_error_message_contains_exception_text(client_with_data) -> None:
     tc, _ = client_with_data
     with patch(
-        "src.api.routers.generate._sync_generate",
+        "src.api.background.generation._sync_generate",
         side_effect=RuntimeError("boom"),
     ):
         tc.post("/api/schedules/generate", json={"programs": []})
@@ -210,7 +210,7 @@ def test_generate_error_message_contains_exception_text(client_with_data) -> Non
 
 def test_generate_rejects_more_than_five_programs(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.background.generation._sync_generate", return_value=None):
         response = tc.post(
             "/api/schedules/generate",
             json={"programs": ["11111", "22222", "33333", "44444", "55555", "66666"]},
@@ -220,7 +220,7 @@ def test_generate_rejects_more_than_five_programs(client_with_data) -> None:
 
 def test_generate_rejects_duplicate_programs(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.background.generation._sync_generate", return_value=None):
         response = tc.post(
             "/api/schedules/generate",
             json={"programs": ["11111", "11111"]},
@@ -230,7 +230,7 @@ def test_generate_rejects_duplicate_programs(client_with_data) -> None:
 
 def test_generate_rejects_non_five_digit_program_id(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.background.generation._sync_generate", return_value=None):
         response = tc.post(
             "/api/schedules/generate",
             json={"programs": ["ABC", "1234"]},
