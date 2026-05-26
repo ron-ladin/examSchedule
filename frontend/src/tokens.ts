@@ -1,3 +1,6 @@
-// Design tokens — SCRUM-133 (Lotem)
-// Fill in PROGRAMME_COLOURS and any other token exports here
-export const PROGRAMME_COLOURS = [] as const
+
+export const PROGRAMME_COLOURS = ['bg-brand-primary',
+  'bg-brand-success',
+  'bg-brand-validDate',
+  'bg-brand-elective',
+  'bg-brand-excluded'] as const
