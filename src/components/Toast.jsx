@@ -39,7 +39,7 @@ function ToastItem({ toast, onDismiss }) {
         animation: 'toastIn 0.25s ease',
       }}
     >
-      <span className="material-icons-round" style={{ fontSize: '1.1rem', color: c.icon, flexShrink: 0, marginTop: '1px' }}>
+      <span className="material-symbols-outlined" style={{ fontSize: '1.1rem', color: c.icon, flexShrink: 0, marginTop: '1px' }}>
         {ICONS[toast.type] ?? 'info'}
       </span>
       <p style={{ flex: 1, fontFamily: 'Inter, sans-serif', fontSize: '0.84rem', color: 'white', lineHeight: 1.5 }}>
@@ -49,7 +49,7 @@ function ToastItem({ toast, onDismiss }) {
         onClick={() => onDismiss(toast.id)}
         style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'rgba(255,255,255,0.4)', lineHeight: 1 }}
       >
-        <span className="material-icons-round" style={{ fontSize: '1rem' }}>close</span>
+        <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>close</span>
       </button>
     </div>
   )

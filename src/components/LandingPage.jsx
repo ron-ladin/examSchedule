@@ -1,802 +1,318 @@
-/**
- * LandingPage.jsx
- * Source: Stitch screen "Syncademic - Premium Landing Page"
- * Design freeze: Sora font · Liquid Glass · Electric Blue→Deep Purple gradient
- */
+import { useState, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Icon, AmbientOrbs, BrandMark, Chip, GradButton, GhostButton } from './Shared'
 
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import ThemeToggle from './ThemeToggle'
-import { PageShell, MotionButton } from './Motion'
-
-// ── Hero background — dark gradient with glass overlay ─────────────────────
-const heroStyle = {
-  background: 'linear-gradient(145deg, #050a1a 0%, #0a0f2e 40%, #140a2e 100%)',
-  minHeight: '100vh',
-  position: 'relative',
-  overflow: 'hidden',
-}
-
-const glowBlue = {
-  position: 'absolute',
-  width: '600px',
-  height: '600px',
-  borderRadius: '50%',
-  background: 'radial-gradient(circle, rgba(59,130,246,0.18) 0%, transparent 70%)',
-  pointerEvents: 'none',
-}
-
-// ── Feature card data ──────────────────────────────────────────────────────
-const FEATURES = [
-  {
-    icon: 'dynamic_form',
-    title: 'Core Algorithmic Resolution',
-    desc: 'Backtracking CSP engines with Most-Constrained-Variable heuristics eliminate every student group overlap before a schedule is ever published.',
-    chip: 'O(n²) conflict graph',
-  },
-  {
-    icon: 'stream',
-    title: 'Lazy Streaming Architecture',
-    desc: 'Schedules are yielded as a lazy iterator — results preview in real-time as the solver progresses, without waiting for full completion.',
-    chip: 'Live preview',
-  },
-  {
-    icon: 'calendar_month',
-    title: 'Universal Controls',
-    desc: 'Configure rest days, holiday exclusions, and program filters through the glassmorphic control pane. Changes propagate instantly.',
-    chip: 'Glassmorphic UI',
-  },
-]
-
-// ── Process step data ──────────────────────────────────────────────────────
-const STEPS = [
-  { num: '01', title: 'Ingest Data Sets',       desc: 'Upload courses.txt, dates.txt, and programs.txt — or enter data manually through the coordinator dashboard.' },
-  { num: '02', title: 'Configure Exclusions',   desc: 'Set rest days, holiday windows, and minimum study gaps. The engine respects every institutional constraint.' },
-  { num: '03', title: 'Stream Master Schedule', desc: 'The CSP backtracking engine yields conflict-free solutions in real time, ranked by optimality.' },
-  { num: '04', title: 'Export & Publish',        desc: 'Download the final schedule as a structured report and submit directly to the registrar.' },
-]
-
-// ── FAQ data ───────────────────────────────────────────────────────────────
-const FAQS = [
-  {
-    q: 'Can Syncademic integrate with our existing LMS?',
-    a: 'Yes. The platform exposes a REST API compatible with standard LMS exports. Upload your data files directly, or connect via our API adapters for automated ingestion.',
-  },
-  {
-    q: 'What happens if a room or instructor changes last-minute?',
-    a: 'Re-run the solver on the updated data set. The CSP engine re-optimizes in seconds, producing a revised conflict-free schedule that respects all existing constraints.',
-  },
-  {
-    q: 'How fast does the engine process large programs?',
-    a: 'For typical university programs (50–200 courses, 3–5 programs), the solver resolves in under 10 seconds. The lazy streaming architecture means you see partial results immediately.',
-  },
-]
-
-// ── Sub-components ─────────────────────────────────────────────────────────
-
-function Nav() {
+function LandingNav() {
+  const navigate = useNavigate()
   return (
-    <nav
-      className="glass fixed top-0 left-0 right-0 z-50"
-      style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', borderRadius: 0 }}
-    >
-      <div
-        style={{
-          maxWidth: '1280px',
-          margin: '0 auto',
-          padding: '0 2rem',
-          height: '68px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
-        {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <div
-            style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: '8px',
-              background: 'var(--gradient-primary)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <span className="material-icons-round" style={{ color: 'white', fontSize: '1.1rem' }}>
-              auto_fix_high
-            </span>
-          </div>
-          <span
-            style={{
-              fontFamily: 'Sora, sans-serif',
-              fontWeight: 700,
-              fontSize: '1.1rem',
-              color: 'white',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Syncademic
-          </span>
-        </div>
-
-        {/* Nav links */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
-          {['Platform', 'Resources', 'Pricing'].map(item => (
-            <a
-              key={item}
-              href="#"
-              style={{
-                fontFamily: 'Inter, sans-serif',
-                fontSize: '0.875rem',
-                fontWeight: 500,
-                color: 'rgba(255,255,255,0.7)',
-                textDecoration: 'none',
-                transition: 'color 0.15s',
-              }}
-              onMouseEnter={e => (e.target.style.color = 'white')}
-              onMouseLeave={e => (e.target.style.color = 'rgba(255,255,255,0.7)')}
-            >
-              {item}
-            </a>
-          ))}
-        </div>
-
-        {/* CTAs */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <ThemeToggle size={1.1} color="rgba(255,255,255,0.8)" />
-          <Link to="/login" className="btn-ghost" style={{ padding: '0.5rem 1.25rem', fontSize: '0.85rem' }}>
-            Sign In
-          </Link>
-          <Link to="/register" className="btn-primary" style={{ padding: '0.5rem 1.25rem', fontSize: '0.85rem' }}>
-            Join Waitlist
-          </Link>
-        </div>
-      </div>
-    </nav>
-  )
-}
-
-function HeroSection() {
-  return (
-    <section style={{ ...heroStyle, paddingTop: '68px' }}>
-      {/* Ambient glow orbs */}
-      <motion.div
-        style={{ ...glowBlue, top: '10%', left: '5%' }}
-        animate={{ x: [0, 18, -12, 0], y: [0, -28, 16, 0] }}
-        transition={{ duration: 10, repeat: Infinity, ease: 'easeInOut' }}
-      />
-      <motion.div
-        style={{ ...glowBlue, top: '20%', right: '5%', background: 'radial-gradient(circle, rgba(139,92,246,0.18) 0%, transparent 70%)' }}
-        animate={{ x: [0, -20, 10, 0], y: [0, 22, -18, 0] }}
-        transition={{ duration: 12, repeat: Infinity, ease: 'easeInOut' }}
-      />
-
-      <div
-        style={{
-          maxWidth: '1280px',
-          margin: '0 auto',
-          padding: '7rem 2rem 5rem',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          textAlign: 'center',
-          position: 'relative',
-          zIndex: 1,
-        }}
-      >
-        {/* Eyebrow chip */}
-        <div
-          className="chip chip-blue"
-          style={{ marginBottom: '1.5rem', background: 'rgba(59,130,246,0.15)', color: '#93c5fd' }}
-        >
-          <span className="material-icons-round" style={{ fontSize: '0.85rem' }}>auto_awesome</span>
-          CSP · Backtracking · MCV Heuristics
-        </div>
-
-        {/* Headline */}
-        <h1
-          style={{
-            fontFamily: 'Sora, sans-serif',
-            fontSize: 'clamp(2.5rem, 5vw, 4rem)',
-            fontWeight: 800,
-            color: 'white',
-            lineHeight: 1.1,
-            letterSpacing: '-0.03em',
-            maxWidth: '820px',
-            marginBottom: '1.5rem',
-          }}
-        >
-          Conflict-Free Academic Schedules.{' '}
-          <span
-            style={{
-              background: 'var(--gradient-primary)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text',
-            }}
-          >
-            Optimized Instantly.
-          </span>
-        </h1>
-
-        {/* Sub-heading */}
-        <p
-          style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: '1.15rem',
-            fontWeight: 400,
-            color: 'rgba(255,255,255,0.6)',
-            maxWidth: '600px',
-            lineHeight: 1.7,
-            marginBottom: '2.5rem',
-          }}
-        >
-          Sophisticated constraint-satisfaction algorithms eliminate every student group overlap —
-          before a schedule is ever published.
-        </p>
-
-        {/* CTAs */}
-        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-          <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} transition={{ type: 'spring', stiffness: 400, damping: 20 }}>
-            <Link to="/register" className="btn-primary">
-              Get Started Now
-              <span className="material-icons-round" style={{ fontSize: '1.1rem' }}>arrow_forward</span>
-            </Link>
-          </motion.div>
-          <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} transition={{ type: 'spring', stiffness: 400, damping: 20 }}>
-            <a href="#features" className="btn-ghost">
-              See How It Works
-            </a>
-          </motion.div>
-        </div>
-
-        {/* Hero visual — glassmorphic calendar mesh */}
-        <div
-          className="glass"
-          style={{
-            marginTop: '4rem',
-            width: '100%',
-            maxWidth: '900px',
-            borderRadius: '1.5rem',
-            padding: '2rem',
-            display: 'grid',
-            gridTemplateColumns: 'repeat(7, 1fr)',
-            gap: '0.5rem',
-            position: 'relative',
-          }}
-        >
-          {/* Grid header */}
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
-            <div
-              key={d}
-              style={{
-                fontFamily: 'JetBrains Mono, monospace',
-                fontSize: '0.65rem',
-                color: 'rgba(255,255,255,0.4)',
-                textAlign: 'center',
-                padding: '0.25rem',
-                letterSpacing: '0.05em',
-              }}
-            >
-              {d}
-            </div>
-          ))}
-          {/* Mock calendar cells */}
-          {Array.from({ length: 35 }).map((_, i) => {
-            const hasExam  = [2, 5, 8, 11, 14, 17, 20, 23, 26].includes(i)
-            const conflict = [8, 23].includes(i)
-            return (
-              <div
-                key={i}
-                style={{
-                  borderRadius: '0.5rem',
-                  padding: '0.5rem 0.25rem',
-                  minHeight: '48px',
-                  background: conflict
-                    ? 'rgba(186,26,26,0.2)'
-                    : hasExam
-                    ? 'linear-gradient(135deg, rgba(59,130,246,0.25), rgba(139,92,246,0.25))'
-                    : 'rgba(255,255,255,0.03)',
-                  border: conflict
-                    ? '1px solid rgba(186,26,26,0.3)'
-                    : hasExam
-                    ? '1px solid rgba(59,130,246,0.2)'
-                    : '1px solid rgba(255,255,255,0.04)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '0.2rem',
-                }}
-              >
-                <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.5)' }}>
-                  {i + 1}
-                </span>
-                {hasExam && (
-                  <span
-                    style={{
-                      fontFamily: 'JetBrains Mono, monospace',
-                      fontSize: '0.55rem',
-                      color: conflict ? '#fca5a5' : '#93c5fd',
-                      letterSpacing: '0.03em',
-                    }}
-                  >
-                    {conflict ? '⚠ CS-401' : 'EXAM'}
-                  </span>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Social proof */}
-      <div
-        style={{
-          borderTop: '1px solid rgba(255,255,255,0.06)',
-          padding: '2rem',
-          textAlign: 'center',
-        }}
-      >
-        <p
-          style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: '0.8rem',
-            color: 'rgba(255,255,255,0.35)',
-            letterSpacing: '0.1em',
-            textTransform: 'uppercase',
-            marginBottom: '1.5rem',
-          }}
-        >
-          Trusted by leading academic institutions
-        </p>
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'center',
-            gap: '3rem',
-            flexWrap: 'wrap',
-          }}
-        >
-          {['Stanford', 'ETH Zürich', 'Oxford', 'MIT', 'Bar-Ilan'].map(name => (
-            <span
-              key={name}
-              style={{
-                fontFamily: 'Sora, sans-serif',
-                fontSize: '0.9rem',
-                fontWeight: 600,
-                color: 'rgba(255,255,255,0.3)',
-                letterSpacing: '-0.01em',
-              }}
-            >
-              {name}
-            </span>
-          ))}
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function FeaturesSection() {
-  return (
-    <section
-      id="features"
-      style={{ background: 'var(--surface)', padding: '6rem 2rem' }}
-    >
-      <div style={{ maxWidth: '1280px', margin: '0 auto' }}>
-        <div style={{ textAlign: 'center', marginBottom: '3.5rem' }}>
-          <div className="chip chip-purple" style={{ marginBottom: '1rem', display: 'inline-flex' }}>
-            Core Capabilities
-          </div>
-          <h2
-            style={{
-              fontFamily: 'Sora, sans-serif',
-              fontSize: 'clamp(1.75rem, 3vw, 2.5rem)',
-              fontWeight: 700,
-              color: 'var(--on-surface)',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Built for{' '}
-            <span
-              style={{
-                background: 'var(--gradient-primary)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text',
-              }}
-            >
-              academic complexity
-            </span>
-          </h2>
-        </div>
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-            gap: '1.5rem',
-          }}
-        >
-          {FEATURES.map(f => (
-            <div key={f.title} className="card" style={{ padding: '2rem', transition: 'transform 0.2s, box-shadow 0.2s' }}
-              onMouseEnter={e => {
-                e.currentTarget.style.transform = 'translateY(-4px)'
-                e.currentTarget.style.boxShadow = '0 20px 40px rgba(59,130,246,0.12)'
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.transform = 'translateY(0)'
-                e.currentTarget.style.boxShadow = 'var(--glass-shadow)'
-              }}
-            >
-              <div
-                style={{
-                  width: '48px',
-                  height: '48px',
-                  borderRadius: '12px',
-                  background: 'var(--gradient-glow)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginBottom: '1.25rem',
-                  border: '1px solid var(--outline-variant)',
-                }}
-              >
-                <span className="material-icons-round gradient-text" style={{ fontSize: '1.4rem' }}>
-                  {f.icon}
-                </span>
-              </div>
-              <h3
-                style={{
-                  fontFamily: 'Sora, sans-serif',
-                  fontSize: '1.05rem',
-                  fontWeight: 700,
-                  color: 'var(--on-surface)',
-                  marginBottom: '0.75rem',
-                  letterSpacing: '-0.01em',
-                }}
-              >
-                {f.title}
-              </h3>
-              <p
-                style={{
-                  fontFamily: 'Inter, sans-serif',
-                  fontSize: '0.9rem',
-                  color: 'var(--on-surface-variant)',
-                  lineHeight: 1.65,
-                  marginBottom: '1rem',
-                }}
-              >
-                {f.desc}
-              </p>
-              <span className="chip chip-blue">{f.chip}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function ProcessSection() {
-  return (
-    <section
+    <header
+      className="sticky top-0 z-50 w-full flex justify-between items-center px-6 md:px-16 py-5"
       style={{
-        background: 'var(--surface-container-low)',
-        padding: '6rem 2rem',
-        borderTop: '1px solid var(--outline-variant)',
-        borderBottom: '1px solid var(--outline-variant)',
+        background: 'rgba(11,19,38,0.55)',
+        backdropFilter: 'blur(40px)',
+        WebkitBackdropFilter: 'blur(40px)',
+        borderBottom: '1px solid rgba(255,255,255,0.05)',
       }}
     >
-      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
-        <div style={{ textAlign: 'center', marginBottom: '3.5rem' }}>
-          <h2
-            style={{
-              fontFamily: 'Sora, sans-serif',
-              fontSize: 'clamp(1.75rem, 3vw, 2.5rem)',
-              fontWeight: 700,
-              color: 'var(--on-surface)',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            From data to schedule in{' '}
-            <span
-              style={{
-                background: 'var(--gradient-primary)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text',
-              }}
-            >
-              four steps
+      <button onClick={() => navigate('/')} className="text-left">
+        <BrandMark size={38} />
+      </button>
+      <nav className="hidden md:flex gap-10 text-[12px] uppercase tracking-[0.16em] font-semibold">
+        <a className="text-primary border-b-2 border-primary pb-1" href="#features">Platform</a>
+        <a className="text-on-surface-variant hover:text-primary transition-colors" href="#how">How it works</a>
+        <a className="text-on-surface-variant hover:text-primary transition-colors" href="#faq">Resources</a>
+        <a className="text-on-surface-variant hover:text-primary transition-colors" href="#cta">Pricing</a>
+      </nav>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => navigate('/login')}
+          className="text-on-surface hover:text-primary transition-colors text-[12px] uppercase tracking-[0.08em] font-semibold px-4 py-2"
+        >
+          Sign In
+        </button>
+        <button
+          onClick={() => navigate('/register')}
+          className="btn-ghost glass px-5 py-2.5 rounded-full text-[12px] uppercase tracking-[0.08em] font-semibold text-on-surface"
+        >
+          Join Waitlist
+        </button>
+      </div>
+    </header>
+  )
+}
+
+function HeroMockup() {
+  const cells = useMemo(() => ({
+    '0-1': { code: 'CS-401',   tone: 'primary'   },
+    '1-0': { code: 'MATH-101', tone: 'secondary' },
+    '2-2': { code: 'PHYS-202', tone: 'tertiary'  },
+    '2-3': { code: 'ECON-101', tone: 'error', conflict: true },
+    '3-1': { code: 'LIT-330',  tone: 'secondary' },
+    '4-0': { code: 'CS-205',   tone: 'primary'   },
+    '4-2': { code: 'CHEM-201', tone: 'primary'   },
+  }), [])
+
+  const toneStyle = (tone) => ({
+    primary:   { bg: 'rgba(173,198,255,0.14)', bd: '#adc6ff', fg: '#adc6ff' },
+    secondary: { bg: 'rgba(208,188,255,0.14)', bd: '#d0bcff', fg: '#d0bcff' },
+    tertiary:  { bg: 'rgba(255,183,134,0.14)', bd: '#ffb786', fg: '#ffb786' },
+    error:     { bg: 'rgba(147,0,10,0.30)',    bd: '#ff8a82', fg: '#ffb4ab' },
+  })[tone]
+
+  const days = ['MON', 'TUE', 'WED', 'THU', 'FRI']
+
+  return (
+    <div className="relative">
+      <div className="absolute -inset-12 rounded-[60px] opacity-60 pointer-events-none" style={{
+        background: 'radial-gradient(60% 60% at 50% 20%, rgba(59,130,246,0.30), transparent 70%), radial-gradient(60% 60% at 50% 80%, rgba(139,92,246,0.25), transparent 70%)',
+        filter: 'blur(40px)',
+      }} />
+      <div className="glass rounded-[28px] p-5 md:p-7 relative overflow-hidden">
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2">
+            <div className="flex gap-1.5">
+              <div className="w-2.5 h-2.5 rounded-full" style={{ background: '#ff8a82' }} />
+              <div className="w-2.5 h-2.5 rounded-full" style={{ background: '#ffb786' }} />
+              <div className="w-2.5 h-2.5 rounded-full" style={{ background: '#adc6ff' }} />
+            </div>
+            <span className="ml-3 text-[10px] uppercase tracking-[0.2em] text-on-surface-variant/60 font-semibold">
+              app.syncademic.io / schedules / winter-2026
             </span>
-          </h2>
+          </div>
+          <Chip tone="primary">Live</Chip>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {STEPS.map((step, i) => (
-            <div
-              key={step.num}
-              style={{
-                display: 'flex',
-                gap: '1.5rem',
-                paddingBottom: i < STEPS.length - 1 ? '0' : '0',
-              }}
-            >
-              {/* Step number + connector */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
-                <div
-                  style={{
-                    width: '40px',
-                    height: '40px',
-                    borderRadius: '50%',
-                    background: 'var(--gradient-primary)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontFamily: 'JetBrains Mono, monospace',
-                    fontSize: '0.8rem',
-                    fontWeight: 600,
-                    color: 'white',
-                    flexShrink: 0,
-                    boxShadow: '0 0 16px rgba(59,130,246,0.3)',
-                  }}
-                >
-                  {step.num}
-                </div>
-                {i < STEPS.length - 1 && (
-                  <div className="step-connector" style={{ height: '60px' }} />
-                )}
+        <div className="grid grid-cols-12 gap-4">
+          <div className="col-span-3 hidden md:flex flex-col gap-2">
+            <div className="glass-inner rounded-xl p-3">
+              <p className="text-[9px] uppercase tracking-widest text-on-surface-variant/60 mb-2">Engine</p>
+              <p className="text-[12px] font-semibold text-primary mb-2">Optimal v4.2</p>
+              <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
+                <div className="h-full" style={{ width: '84%', background: 'linear-gradient(90deg,#3b82f6,#8b5cf6)' }} />
               </div>
+              <p className="text-[10px] text-on-surface-variant/60 mt-2">0 conflicts · 142 exams</p>
+            </div>
+          </div>
 
-              {/* Content */}
-              <div style={{ paddingBottom: '2rem', paddingTop: '0.4rem' }}>
-                <h3
-                  style={{
-                    fontFamily: 'Sora, sans-serif',
-                    fontSize: '1.05rem',
-                    fontWeight: 700,
-                    color: 'var(--on-surface)',
-                    marginBottom: '0.4rem',
-                    letterSpacing: '-0.01em',
-                  }}
-                >
-                  {step.title}
-                </h3>
-                <p
-                  style={{
-                    fontFamily: 'Inter, sans-serif',
-                    fontSize: '0.9rem',
-                    color: 'var(--on-surface-variant)',
-                    lineHeight: 1.65,
-                  }}
-                >
-                  {step.desc}
+          <div className="col-span-12 md:col-span-9">
+            <div className="grid grid-cols-5 gap-2 mb-2">
+              {days.map(d => (
+                <div key={d} className="text-[10px] uppercase tracking-[0.18em] font-bold text-on-surface-variant/60 text-center py-1">{d}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-5 gap-2">
+              {Array.from({ length: 25 }).map((_, idx) => {
+                const r = Math.floor(idx / 5), c = idx % 5
+                const ev = cells[`${r}-${c}`]
+                const isToday = r === 1 && c === 2
+                return (
+                  <div key={idx} className="glass-inner rounded-lg h-[58px] p-2 relative"
+                    style={isToday ? { boxShadow: 'inset 0 0 0 1px rgba(173,198,255,0.5), 0 0 18px rgba(173,198,255,0.2)' } : {}}>
+                    <span className={`text-[9px] font-semibold ${isToday ? 'text-primary' : 'text-on-surface-variant/70'}`}>
+                      {(idx + 4).toString().padStart(2, '0')}
+                    </span>
+                    {ev && (() => {
+                      const s = toneStyle(ev.tone)
+                      return (
+                        <div className="absolute left-1.5 right-1.5 bottom-1.5 px-1.5 py-1 rounded text-[8.5px] font-bold tracking-wide truncate"
+                          style={{ background: s.bg, color: s.fg, borderLeft: `2px solid ${s.bd}` }}>
+                          {ev.conflict && '⚠ '}{ev.code}
+                        </div>
+                      )
+                    })()}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-3 gap-3">
+          {[
+            { k: 'Conflicts',     v: '0',     tone: 'primary'   },
+            { k: 'Avg gap',       v: '3.2d',  tone: 'secondary' },
+            { k: 'Solver health', v: '99.8%', tone: 'tertiary'  },
+          ].map(m => (
+            <div key={m.k} className="glass-inner rounded-xl p-3 flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-widest text-on-surface-variant/60">{m.k}</span>
+              <span className={`text-[16px] font-bold ${m.tone === 'primary' ? 'text-primary' : m.tone === 'secondary' ? 'text-secondary' : 'text-tertiary'}`}>{m.v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FAQRow({ q, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <button onClick={() => setOpen(!open)} className="glass rounded-2xl p-5 w-full text-left transition-all glass-hover">
+      <div className="flex justify-between items-center gap-4">
+        <span className="font-semibold text-[14px] text-on-surface">{q}</span>
+        <Icon name="expand_more" className={`text-primary transition-transform duration-300 ${open ? 'rotate-180' : ''}`} />
+      </div>
+      <div className="grid transition-all duration-300 ease-out overflow-hidden"
+        style={{ gridTemplateRows: open ? '1fr' : '0fr', marginTop: open ? 12 : 0 }}>
+        <div className="overflow-hidden">
+          <p className="text-[13px] text-on-surface-variant/75 leading-relaxed">
+            Yes — Syncademic exposes a REST API and pre-built connectors for Canvas, Moodle, and Blackboard. Once configured, schedules sync bidirectionally within seconds of any solver change.
+          </p>
+        </div>
+      </div>
+    </button>
+  )
+}
+
+export default function LandingPage() {
+  const navigate = useNavigate()
+
+  const stats = [
+    { v: '0',     k: 'Conflicts after run', tone: 'primary'   },
+    { v: '12s',   k: 'Median solve time',   tone: 'secondary' },
+    { v: '50k+',  k: 'Students supported',  tone: 'tertiary'  },
+    { v: '99.8%', k: 'Solver health',       tone: 'primary'   },
+  ]
+
+  return (
+    <div className="relative min-h-screen">
+      <AmbientOrbs variant="default" />
+      <div className="relative z-10">
+        <LandingNav />
+
+        <section className="relative px-6 md:px-16 pt-16 md:pt-24 pb-20 max-w-[1280px] mx-auto screen-anim">
+          <div className="flex justify-center mb-6">
+            <Chip tone="primary"><Icon name="bolt" className="text-[12px]" /> v4.2 — Lazy Streaming Engine</Chip>
+          </div>
+          <h1 className="text-balance text-center font-extrabold tracking-tight leading-[1.05] text-[44px] md:text-[76px] mb-7 max-w-4xl mx-auto">
+            Conflict-free academic<br />schedules. <span className="grad-text">Optimized instantly.</span>
+          </h1>
+          <p className="text-pretty text-center text-[17px] md:text-[19px] text-on-surface-variant/75 max-w-2xl mx-auto mb-10 leading-relaxed">
+            Syncademic resolves the most complex exam, classroom, and faculty conflicts with constraint-satisfaction algorithms tuned for institutional scale.
+          </p>
+          <div className="flex flex-col md:flex-row gap-4 justify-center items-center mb-20">
+            <GradButton size="lg" iconAfter="arrow_forward" onClick={() => navigate('/register')}>Start free trial</GradButton>
+            <GhostButton size="lg" icon="play_arrow" onClick={() => navigate('/dashboard')}>See the engine</GhostButton>
+          </div>
+
+          <HeroMockup />
+
+          <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-4">
+            {stats.map(s => (
+              <div key={s.k} className="glass rounded-2xl p-5 text-center glass-hover">
+                <div className={`text-[32px] font-bold mb-1 ${s.tone === 'primary' ? 'text-primary' : s.tone === 'secondary' ? 'text-secondary' : 'text-tertiary'}`}>{s.v}</div>
+                <div className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold">{s.k}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="px-6 md:px-16 pb-20">
+          <div className="max-w-[1280px] mx-auto border-t border-b border-white/5 py-10">
+            <p className="text-center text-[10px] uppercase tracking-[0.3em] text-on-surface-variant/40 font-semibold mb-8">
+              Trusted by registrars at research institutions worldwide
+            </p>
+            <div className="flex flex-wrap justify-center items-center gap-x-14 gap-y-6 opacity-50">
+              {['NORTHFIELD U', 'BLACKWOOD COLLEGE', 'STERLING INSTITUTE', 'ATLAS POLYTECHNIC', 'MERIDIAN ACADEMY', 'VIRTECH UNIVERSITY'].map(s => (
+                <div key={s} className="font-bold text-[14px] tracking-[0.18em] text-on-surface-variant">{s}</div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="features" className="px-6 md:px-16 pb-24 max-w-[1280px] mx-auto">
+          <div className="mb-12 text-center">
+            <Chip tone="secondary" className="mb-4">The platform</Chip>
+            <h2 className="text-balance text-[36px] md:text-[48px] font-bold leading-tight max-w-2xl mx-auto">
+              A <span className="grad-text-cool">command center</span> for institutional time.
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+            <div className="md:col-span-8 glass glass-hover rounded-3xl p-10 relative overflow-hidden min-h-[300px] flex flex-col justify-between">
+              <div className="absolute -top-32 -right-32 w-80 h-80 rounded-full" style={{ background: 'rgba(59,130,246,0.18)', filter: 'blur(80px)' }} />
+              <div className="relative">
+                <Icon name="dynamic_form" className="text-primary text-[40px] mb-6" />
+                <h3 className="text-[26px] font-semibold mb-3">Algorithmic resolution at scale</h3>
+                <p className="text-on-surface-variant/75 max-w-md leading-relaxed">
+                  Proprietary backtracking combined with Most Constrained Variable heuristics. Zero overlaps even for cohorts above 50,000 students across 12 faculties.
                 </p>
               </div>
+              <div className="flex gap-2 mt-6 relative flex-wrap">
+                <Chip tone="primary">Backtracking</Chip>
+                <Chip tone="secondary">MCV heuristics</Chip>
+                <Chip tone="tertiary">Arc consistency</Chip>
+              </div>
             </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  )
-}
 
-function CtaSection() {
-  return (
-    <section style={{ background: 'var(--surface)', padding: '6rem 2rem', textAlign: 'center' }}>
-      <div style={{ maxWidth: '700px', margin: '0 auto' }}>
-        <div
-          style={{
-            background: 'linear-gradient(145deg, #050a1a, #0a0f2e)',
-            borderRadius: '2rem',
-            padding: '4rem 3rem',
-            position: 'relative',
-            overflow: 'hidden',
-          }}
-        >
-          <div style={{ ...glowBlue, top: '-30%', left: '-20%', width: '400px', height: '400px' }} />
-          <div
-            style={{
-              ...glowBlue,
-              top: '-30%',
-              right: '-20%',
-              width: '400px',
-              height: '400px',
-              background: 'radial-gradient(circle, rgba(139,92,246,0.2) 0%, transparent 70%)',
-            }}
-          />
-          <div style={{ position: 'relative', zIndex: 1 }}>
-            <h2
-              style={{
-                fontFamily: 'Sora, sans-serif',
-                fontSize: 'clamp(1.5rem, 3vw, 2.2rem)',
-                fontWeight: 800,
-                color: 'white',
-                marginBottom: '1rem',
-                letterSpacing: '-0.02em',
-              }}
-            >
-              Ready to eliminate scheduling conflicts forever?
-            </h2>
-            <p
-              style={{
-                fontFamily: 'Inter, sans-serif',
-                fontSize: '1rem',
-                color: 'rgba(255,255,255,0.6)',
-                marginBottom: '2rem',
-                lineHeight: 1.65,
-              }}
-            >
-              Join coordinators at leading universities who run conflict-free exam periods with Syncademic.
-            </p>
-            <Link to="/register" className="btn-primary">
-              Optimize Your Institution
-              <span className="material-icons-round" style={{ fontSize: '1.1rem' }}>arrow_forward</span>
-            </Link>
+            <div className="md:col-span-4 glass glass-hover rounded-3xl p-10 relative overflow-hidden flex flex-col justify-center text-center min-h-[300px]">
+              <Icon name="stream" className="text-secondary text-[40px] mb-5 mx-auto" />
+              <h3 className="text-[22px] font-semibold mb-3">Lazy streaming engine</h3>
+              <p className="text-on-surface-variant/75 text-[14px] leading-relaxed">
+                Preview alternative timelines in real time without recompiling. Compare three solver strategies side-by-side.
+              </p>
+            </div>
+
+            <div className="md:col-span-4 glass glass-hover rounded-3xl p-10 relative overflow-hidden min-h-[260px] flex flex-col">
+              <Icon name="calendar_month" className="text-tertiary text-[40px] mb-5" />
+              <h3 className="text-[22px] font-semibold mb-3">Holiday-aware</h3>
+              <p className="text-on-surface-variant/75 text-[14px] leading-relaxed">
+                Regional holiday calendars, religious observances, and maintenance windows handled as hard constraints.
+              </p>
+            </div>
+
+            <div className="md:col-span-8 glass glass-hover rounded-3xl p-10 relative overflow-hidden" id="how">
+              <h3 className="text-[10px] uppercase tracking-[0.22em] text-on-surface-variant/60 mb-8 font-semibold">How it works</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                {[
+                  { n: '01', t: 'Ingest',    d: 'Drop student registrations, course inventory, and venue capacity. CSV, XLSX, or live API.', tone: 'primary' },
+                  { n: '02', t: 'Constrain', d: 'Lock holidays, faculty availability, and accessibility needs as solver constraints.',         tone: 'secondary' },
+                  { n: '03', t: 'Deploy',    d: 'Three optimal timelines — Optimal, Fastest, Relaxed — pushed to every institutional portal.', tone: 'tertiary' },
+                ].map(s => (
+                  <div key={s.n}>
+                    <div className={`text-[40px] font-black opacity-30 mb-1 ${s.tone === 'primary' ? 'text-primary' : s.tone === 'secondary' ? 'text-secondary' : 'text-tertiary'}`}>{s.n}</div>
+                    <h4 className="font-bold mb-2 text-[15px]">{s.t}</h4>
+                    <p className="text-[12.5px] text-on-surface-variant/70 leading-relaxed">{s.d}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-    </section>
-  )
-}
+        </section>
 
-function FaqSection() {
-  const [openIdx, setOpenIdx] = useState(null)
+        <section id="cta" className="px-6 md:px-16 py-24 relative overflow-hidden" style={{ background: 'linear-gradient(180deg, transparent, rgba(6,14,32,0.6))' }}>
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-px" style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.10), transparent)' }} />
+          <div className="max-w-[1280px] mx-auto flex flex-col items-center text-center">
+            <h2 className="text-balance text-[40px] md:text-[56px] font-bold leading-tight max-w-3xl mb-8">
+              Ready to eliminate scheduling conflicts <span className="grad-text">forever</span>?
+            </h2>
+            <GradButton size="lg" iconAfter="bolt" onClick={() => navigate('/register')} className="mb-20">
+              Optimize your institution
+            </GradButton>
 
-  return (
-    <section
-      style={{
-        background: 'var(--surface-container-low)',
-        padding: '6rem 2rem',
-        borderTop: '1px solid var(--outline-variant)',
-      }}
-    >
-      <div style={{ maxWidth: '700px', margin: '0 auto' }}>
-        <h2
-          style={{
-            fontFamily: 'Sora, sans-serif',
-            fontSize: 'clamp(1.5rem, 3vw, 2rem)',
-            fontWeight: 700,
-            color: 'var(--on-surface)',
-            marginBottom: '2.5rem',
-            letterSpacing: '-0.02em',
-          }}
-        >
-          Frequently Asked Questions
-        </h2>
-
-        <div className="card" style={{ overflow: 'hidden', padding: 0 }}>
-          {FAQS.map((faq, i) => (
-            <div key={i} className="faq-item">
-              <button
-                onClick={() => setOpenIdx(openIdx === i ? null : i)}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '1.25rem 1.5rem',
-                  background: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  gap: '1rem',
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: 'Sora, sans-serif',
-                    fontSize: '0.95rem',
-                    fontWeight: 600,
-                    color: 'var(--on-surface)',
-                    letterSpacing: '-0.01em',
-                  }}
-                >
-                  {faq.q}
-                </span>
-                <span
-                  className="material-icons-round"
-                  style={{
-                    fontSize: '1.25rem',
-                    color: 'var(--outline)',
-                    transition: 'transform 0.2s',
-                    transform: openIdx === i ? 'rotate(180deg)' : 'rotate(0)',
-                    flexShrink: 0,
-                  }}
-                >
-                  expand_more
-                </span>
-              </button>
-              {openIdx === i && (
-                <div
-                  style={{
-                    padding: '0 1.5rem 1.25rem',
-                    fontFamily: 'Inter, sans-serif',
-                    fontSize: '0.9rem',
-                    color: 'var(--on-surface-variant)',
-                    lineHeight: 1.7,
-                  }}
-                >
-                  {faq.a}
-                </div>
-              )}
+            <div id="faq" className="w-full max-w-3xl text-left border-t border-white/5 pt-16">
+              <h4 className="text-center text-[10px] uppercase tracking-[0.3em] text-on-surface-variant/50 mb-10 font-semibold">Common inquiries</h4>
+              <div className="space-y-3">
+                {[
+                  'Can Syncademic integrate with existing LMS platforms?',
+                  'How does the algorithm handle last-minute room changes?',
+                  'What is the processing time for a 10,000-student schedule?',
+                  'Do you support custom religious or regional observance calendars?',
+                ].map((q, i) => <FAQRow key={i} q={q} defaultOpen={i === 0} />)}
+              </div>
             </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  )
-}
+          </div>
+        </section>
 
-function Footer() {
-  return (
-    <footer
-      style={{
-        background: 'var(--on-surface)',
-        padding: '2rem',
-        textAlign: 'center',
-      }}
-    >
-      <div
-        style={{
-          maxWidth: '1280px',
-          margin: '0 auto',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '1rem',
-        }}
-      >
-        <span
-          style={{
-            fontFamily: 'Sora, sans-serif',
-            fontSize: '0.85rem',
-            fontWeight: 600,
-            color: 'rgba(255,255,255,0.4)',
-          }}
-        >
-          © 2024 Syncademic Labs
-        </span>
-        <div style={{ display: 'flex', gap: '2rem' }}>
-          {['Privacy', 'Terms', 'API Docs', 'Support'].map(link => (
-            <a
-              key={link}
-              href="#"
-              style={{
-                fontFamily: 'Inter, sans-serif',
-                fontSize: '0.8rem',
-                color: 'rgba(255,255,255,0.35)',
-                textDecoration: 'none',
-              }}
-              onMouseEnter={e => (e.target.style.color = 'rgba(255,255,255,0.7)')}
-              onMouseLeave={e => (e.target.style.color = 'rgba(255,255,255,0.35)')}
-            >
-              {link}
-            </a>
-          ))}
-        </div>
+        <footer className="px-6 md:px-16 py-12 flex flex-col md:flex-row justify-between items-center gap-6 border-t border-white/5">
+          <BrandMark size={36} />
+          <p className="text-[10px] uppercase tracking-[0.22em] text-on-surface-variant/50">© 2026 Syncademic Labs · Organic Noir Excellence</p>
+          <div className="flex gap-7 text-[11px] uppercase tracking-[0.12em] text-on-surface-variant/60">
+            {['Privacy', 'Terms', 'API', 'Support'].map(l => (
+              <a key={l} className="hover:text-secondary" href="#">{l}</a>
+            ))}
+          </div>
+        </footer>
       </div>
-    </footer>
-  )
-}
-
-// ── Page ──────────────────────────────────────────────────────────────────
-export default function LandingPage() {
-  return (
-    <PageShell style={{ minHeight: '100vh' }}>
-      <Nav />
-      <HeroSection />
-      <FeaturesSection />
-      <ProcessSection />
-      <CtaSection />
-      <FaqSection />
-      <Footer />
-    </PageShell>
+    </div>
   )
 }

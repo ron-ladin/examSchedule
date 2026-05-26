@@ -1,473 +1,287 @@
-/**
- * ResultsView.jsx — SCRUM-92, 93, 94
- *
- * Displays up to three ranked schedule options produced by AppController.run():
- *   "Optimal"  — fewest conflicts, balanced gap
- *   "Fastest"  — shortest duration
- *   "Relaxed"  — maximum study gap
- *
- * Also renders:
- *   NavBar           (SCRUM-92) — shared sticky navigation
- *   Pagination       (SCRUM-92) — previous schedules via GET /api/schedules
- *   Export button    (SCRUM-94) — downloads selected schedule via exportSchedule
- *   Programme colours(SCRUM-93) — schedule cards use programme accent via colorFor
- */
-
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useScheduler } from '../hooks/useScheduler'
-import { api, ApiError } from '../api/client'
-import { SEMESTER_LABELS, MOED_LABELS, SEMESTER, MOED } from '../models/types'
-import NavBar from './NavBar'
-import { MotionCard, StaggerList, StaggerItem, PageShell } from './Motion'
+import { Icon, Chip, GradButton, GhostButton, WorkspaceShell, useCurrent } from './Shared'
 
-const OPTION_META = [
-  {
-    key:         'optimal',
-    label:       'Optimal',
-    icon:        'star',
-    chipColor:   'chip-blue',
-    description: 'Best balance of conflict resolution and study gaps.',
-    accent:      'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+const CARDS = {
+  optimal: {
+    glow: { bg: 'rgba(173,198,255,0.20)', outer: 'rgba(173,198,255,0.18)', border: 'rgba(173,198,255,0.35)', fg: '#adc6ff' },
+    badge: 'Best balance', badgeTone: 'primary', n: 1, name: 'Optimal', icon: 'star',
+    duration: '21 days', durationColor: '#dae2fd', studyGap: '3.2 days', gapBar: 85, load: 'Moderate',
   },
-  {
-    key:         'fastest',
-    label:       'Fastest',
-    icon:        'bolt',
-    chipColor:   'chip-purple',
-    description: 'Shortest overall exam period duration.',
-    accent:      'linear-gradient(135deg, #8b5cf6, #ec4899)',
+  fastest: {
+    glow: { bg: 'rgba(208,188,255,0.20)', outer: 'rgba(208,188,255,0.18)', border: 'rgba(208,188,255,0.35)', fg: '#d0bcff' },
+    badge: 'Time efficient', badgeTone: 'secondary', n: 2, name: 'Fastest', icon: 'bolt',
+    duration: '14 days', durationColor: '#d0bcff', studyGap: '1.8 days', gapBar: 95, load: 'Intense',
   },
-  {
-    key:         'relaxed',
-    label:       'Relaxed',
-    icon:        'self_improvement',
-    chipColor:   'chip-green',
-    description: 'Maximum study gap between consecutive exams.',
-    accent:      'linear-gradient(135deg, #10b981, #3b82f6)',
+  relaxed: {
+    glow: { bg: 'rgba(255,183,134,0.20)', outer: 'rgba(255,183,134,0.18)', border: 'rgba(255,183,134,0.35)', fg: '#ffb786' },
+    badge: 'Low pressure', badgeTone: 'tertiary', n: 3, name: 'Relaxed', icon: 'self_improvement',
+    duration: '28 days', durationColor: '#ffb786', studyGap: '4.5 days', gapBar: 60, load: 'Minimal',
   },
-]
-
-function ResourceBadge({ load }) {
-  const map = { Minimal: 'chip-green', Moderate: 'chip-orange', Intense: 'chip-red' }
-  return <span className={`chip ${map[load] || 'chip-blue'}`}>{load}</span>
 }
 
-function ScheduleCard({ meta, schedule, selected, onSelect, onExplore }) {
-  const isSelected = selected === meta.key
-
+function ResultCard({ c, selected, onSelect }) {
+  const { glow, badge, badgeTone, n, name, icon, duration, durationColor, studyGap, gapBar, load } = c
   return (
-    <MotionCard
-      onClick={() => onSelect(meta.key)}
-      style={{
-        borderRadius: '1.5rem',
-        padding: '1.75rem',
-        border: '2px solid',
-        borderColor: isSelected ? '#3b82f6' : 'var(--outline-variant)',
-        background: isSelected
-          ? 'linear-gradient(135deg, rgba(59,130,246,0.06), rgba(139,92,246,0.06))'
-          : 'var(--surface-container-lowest)',
-        cursor: 'pointer',
-        transition: 'border-color 0.2s ease, background 0.2s ease',
-        boxShadow: isSelected ? '0 0 0 4px rgba(59,130,246,0.1), var(--glass-shadow)' : 'var(--glass-shadow)',
-        position: 'relative',
-        overflow: 'hidden',
-      }}
+    <div
+      onClick={onSelect}
+      className="glass glass-hover rounded-[28px] p-7 flex flex-col relative overflow-hidden cursor-pointer transition-all"
+      style={selected ? {
+        borderColor: glow.border,
+        boxShadow: `0 0 60px ${glow.outer}, 0 30px 60px -12px rgba(0,0,0,0.55)`,
+        transform: 'translateY(-4px)',
+      } : {}}
     >
-      {/* Accent top bar */}
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', background: isSelected ? meta.accent : 'transparent', transition: 'background 0.2s' }} />
+      <div className="absolute -top-16 -right-16 w-48 h-48 rounded-full pointer-events-none transition-all duration-500"
+        style={{ background: glow.bg, filter: 'blur(60px)' }} />
 
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: meta.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: isSelected ? 1 : 0.7 }}>
-            <span className="material-icons-round" style={{ color: 'white', fontSize: '1.3rem' }}>{meta.icon}</span>
-          </div>
-          <div>
-            <h3 style={{ fontFamily: 'Sora, sans-serif', fontSize: '1.05rem', fontWeight: 700, color: 'var(--on-surface)', letterSpacing: '-0.01em' }}>
-              {meta.label}
-            </h3>
-            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.78rem', color: 'var(--on-surface-variant)' }}>
-              {meta.description}
-            </p>
-          </div>
-        </div>
-        {isSelected && (
-          <span className="material-icons-round" style={{ color: '#3b82f6', fontSize: '1.3rem', flexShrink: 0 }}>check_circle</span>
-        )}
-      </div>
-
-      {/* Metrics */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
-        {[
-          { label: 'Conflicts', value: schedule?.totalConflicts ?? 0,             icon: 'warning',        unit: ''  },
-          { label: 'Duration',  value: schedule?.durationDays  ?? '—',            icon: 'schedule',       unit: 'd' },
-          { label: 'Avg Gap',   value: schedule?.avgStudyGap?.toFixed(1) ?? '—',  icon: 'calendar_today', unit: 'd' },
-        ].map(m => (
-          <div key={m.label} style={{ padding: '0.75rem', borderRadius: '0.75rem', background: 'var(--surface-container)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.25rem' }}>
-              <span className="material-icons-round" style={{ fontSize: '0.85rem', color: 'var(--outline)' }}>{m.icon}</span>
-              <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.7rem', color: 'var(--on-surface-variant)', fontWeight: 500 }}>{m.label}</span>
-            </div>
-            <span style={{ fontFamily: 'Sora, sans-serif', fontSize: '1.3rem', fontWeight: 800, color: 'var(--on-surface)', letterSpacing: '-0.02em' }}>
-              {m.value}{m.unit}
-            </span>
-          </div>
-        ))}
-        <div style={{ padding: '0.75rem', borderRadius: '0.75rem', background: 'var(--surface-container)' }}>
-          <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.7rem', color: 'var(--on-surface-variant)', display: 'block', marginBottom: '0.35rem', fontWeight: 500 }}>Resource Load</span>
-          <ResourceBadge load={schedule?.resourceLoad ?? 'Moderate'} />
-        </div>
-      </div>
-
-      <button
-        className="btn-outline"
-        onClick={e => { e.stopPropagation(); onExplore(meta.key) }}
-        style={{ width: '100%', justifyContent: 'center', fontSize: '0.82rem', padding: '0.6rem 1.25rem' }}
-      >
-        Explore Details
-        <span className="material-icons-round" style={{ fontSize: '0.9rem' }}>arrow_forward</span>
-      </button>
-    </MotionCard>
-  )
-}
-
-function WeeklyDistribution() {
-  const weeks      = ['W1', 'W2', 'W3', 'W4', 'W5']
-  const mockCounts = [4, 7, 5, 6, 3]
-  const max        = Math.max(...mockCounts)
-
-  return (
-    <div>
-      <p style={{ fontFamily: 'Sora, sans-serif', fontSize: '0.85rem', fontWeight: 600, color: 'var(--on-surface)', marginBottom: '0.75rem' }}>
-        Weekly Distribution
-      </p>
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', height: '80px' }}>
-        {weeks.map((w, i) => (
-          <div key={w} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.35rem' }}>
-            <div style={{ width: '100%', height: `${(mockCounts[i] / max) * 60}px`, borderRadius: '4px 4px 0 0', background: 'var(--gradient-primary)', opacity: 0.7 + (i * 0.05) }} />
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.65rem', color: 'var(--outline)', letterSpacing: '0.03em' }}>{w}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ── SCRUM-92: Schedule history with pagination ────────────────────────────────
-
-const PAGE_SIZE = 5
-
-const MOCK_HISTORY = [
-  { id: 'sch-001', periodKey: 'FALL - Aleph', totalConflicts: 0, durationDays: 21, createdAt: '2025-01-10' },
-  { id: 'sch-002', periodKey: 'FALL - Bet',   totalConflicts: 1, durationDays: 18, createdAt: '2025-01-08' },
-  { id: 'sch-003', periodKey: 'SPRI - Aleph', totalConflicts: 0, durationDays: 25, createdAt: '2024-12-20' },
-  { id: 'sch-004', periodKey: 'SPRI - Bet',   totalConflicts: 2, durationDays: 20, createdAt: '2024-12-15' },
-  { id: 'sch-005', periodKey: 'FALL - Aleph', totalConflicts: 0, durationDays: 19, createdAt: '2024-11-30' },
-  { id: 'sch-006', periodKey: 'SUMM - Aleph', totalConflicts: 0, durationDays: 14, createdAt: '2024-11-20' },
-]
-
-function ScheduleHistory({ toast }) {
-  const [page,    setPage]    = useState(1)
-  const [items,   setItems]   = useState([])
-  const [total,   setTotal]   = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [exporting, setExporting] = useState(null)
-
-  const totalPages = Math.ceil(total / PAGE_SIZE) || 1
-
-  const load = useCallback(async (p) => {
-    setLoading(true)
-    try {
-      const data = await api.getSchedules({ page: p, pageSize: PAGE_SIZE })
-      setItems(data.schedules)
-      setTotal(data.total)
-    } catch {
-      // Backend offline — use mock
-      const start = (p - 1) * PAGE_SIZE
-      setItems(MOCK_HISTORY.slice(start, start + PAGE_SIZE))
-      setTotal(MOCK_HISTORY.length)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { load(page) }, [page, load])
-
-  const handleExport = async (item) => {
-    setExporting(item.id)
-    try {
-      const blob = await api.exportSchedule(item.id)
-      const url  = URL.createObjectURL(blob)
-      const a    = document.createElement('a')
-      a.href     = url
-      a.download = `schedule-${item.id}.txt`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    } catch (err) {
-      const msg = err instanceof ApiError
-        ? `Export failed (${err.status})`
-        : 'Backend offline — export unavailable.'
-      toast?.(msg, 'warning')
-    } finally {
-      setExporting(null)
-    }
-  }
-
-  return (
-    <div className="card" style={{ padding: '1.75rem', marginTop: '1.75rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-        <div>
-          <h3 style={{ fontFamily: 'Sora, sans-serif', fontSize: '1rem', fontWeight: 700, color: 'var(--on-surface)', letterSpacing: '-0.01em' }}>
-            Schedule History
+      <div className="relative flex justify-between items-start mb-7">
+        <div className="flex flex-col gap-2">
+          <Chip tone={badgeTone}>{badge}</Chip>
+          <h3 className="text-[24px] font-bold leading-tight">
+            Option {n}<br /><span className="grad-text-cool">{name}</span>
           </h3>
-          <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.78rem', color: 'var(--on-surface-variant)', marginTop: '0.15rem' }}>
-            {total} saved schedules
-          </p>
         </div>
-
-        {/* Pagination controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <button
-            onClick={() => setPage(p => Math.max(1, p - 1))}
-            disabled={page === 1 || loading}
-            style={{ background: 'none', border: '1.5px solid var(--outline-variant)', borderRadius: '0.5rem', cursor: page === 1 ? 'default' : 'pointer', padding: '0.3rem 0.5rem', opacity: page === 1 ? 0.4 : 1 }}
-          >
-            <span className="material-icons-round" style={{ fontSize: '1rem', color: 'var(--on-surface-variant)' }}>chevron_left</span>
-          </button>
-          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.75rem', color: 'var(--on-surface-variant)', minWidth: '4rem', textAlign: 'center' }}>
-            {page} / {totalPages}
-          </span>
-          <button
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages || loading}
-            style={{ background: 'none', border: '1.5px solid var(--outline-variant)', borderRadius: '0.5rem', cursor: page === totalPages ? 'default' : 'pointer', padding: '0.3rem 0.5rem', opacity: page === totalPages ? 0.4 : 1 }}
-          >
-            <span className="material-icons-round" style={{ fontSize: '1rem', color: 'var(--on-surface-variant)' }}>chevron_right</span>
-          </button>
+        <div className="w-12 h-12 rounded-2xl glass-inner flex items-center justify-center"
+          style={{ boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)' }}>
+          <Icon name={icon} fill className="text-[26px]" style={{ color: glow.fg }} />
         </div>
       </div>
 
-      {loading ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem', color: 'var(--outline)' }}>
-          <span className="material-icons-round" style={{ fontSize: '1.1rem', animation: 'spin 1s linear infinite' }}>sync</span>
-          <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.82rem' }}>Loading history...</span>
+      <div className="relative grid grid-cols-2 gap-3 mb-7">
+        <div className="glass-inner rounded-2xl p-4">
+          <p className="text-[10px] uppercase tracking-widest text-on-surface-variant/60 mb-1">Conflicts</p>
+          <p className="text-[28px] font-bold text-primary leading-none">0</p>
         </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          {items.map(item => (
-            <div
-              key={item.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '1rem',
-                padding: '0.875rem 1rem',
-                borderRadius: '0.875rem',
-                background: 'var(--surface-container-low)',
-                border: '1px solid var(--outline-variant)',
-              }}
-            >
-              <span className="material-icons-round" style={{ color: 'var(--primary)', fontSize: '1.1rem', flexShrink: 0 }}>
-                calendar_today
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontFamily: 'Sora, sans-serif', fontSize: '0.85rem', fontWeight: 600, color: 'var(--on-surface)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {item.periodKey}
-                </p>
-                <p style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.65rem', color: 'var(--outline)', marginTop: '0.1rem' }}>
-                  {item.createdAt} · {item.durationDays}d · {item.totalConflicts} conflicts
-                </p>
-              </div>
-              {item.totalConflicts > 0 && (
-                <span className="chip chip-red" style={{ fontSize: '0.6rem', flexShrink: 0 }}>{item.totalConflicts}</span>
-              )}
-              {/* SCRUM-94 — export per history item */}
-              <button
-                onClick={() => handleExport(item)}
-                disabled={exporting === item.id}
-                style={{ background: 'none', border: '1.5px solid var(--outline-variant)', borderRadius: '0.5rem', cursor: 'pointer', padding: '0.35rem 0.625rem', display: 'flex', alignItems: 'center', gap: '0.25rem', opacity: exporting === item.id ? 0.6 : 1 }}
-              >
-                {exporting === item.id
-                  ? <span className="material-icons-round" style={{ fontSize: '0.9rem', color: 'var(--primary)', animation: 'spin 1s linear infinite' }}>sync</span>
-                  : <span className="material-icons-round" style={{ fontSize: '0.9rem', color: 'var(--on-surface-variant)' }}>download</span>
-                }
-                <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.75rem', color: 'var(--on-surface-variant)' }}>Export</span>
-              </button>
-            </div>
-          ))}
+        <div className="glass-inner rounded-2xl p-4">
+          <p className="text-[10px] uppercase tracking-widest text-on-surface-variant/60 mb-1">Duration</p>
+          <p className="text-[28px] font-bold leading-none" style={{ color: durationColor }}>{duration}</p>
+        </div>
+      </div>
+
+      <div className="relative flex flex-col gap-3 mb-7">
+        <div className="flex justify-between items-center">
+          <span className="text-[13px] text-on-surface-variant">Avg. study gap</span>
+          <span className="text-[12px] uppercase tracking-widest text-on-surface font-semibold">{studyGap}</span>
+        </div>
+        <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+          <div className="h-full rounded-full transition-all duration-700"
+            style={{ width: `${gapBar}%`, background: glow.fg, boxShadow: `0 0 12px ${glow.fg}88` }} />
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[13px] text-on-surface-variant">Resource load</span>
+          <span className="text-[12px] uppercase tracking-widest font-semibold" style={{ color: glow.fg }}>{load}</span>
+        </div>
+      </div>
+
+      <button className="relative mt-auto flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/[0.08] transition-all text-[12px] uppercase tracking-[0.08em] font-semibold text-on-surface group/link">
+        Explore details
+        <Icon name="arrow_forward" className="text-[14px] group-hover/link:translate-x-1 transition-transform" />
+      </button>
+
+      {selected && (
+        <div className="absolute top-4 right-4 rounded-full p-1.5" style={{ background: glow.fg, boxShadow: `0 0 16px ${glow.fg}` }}>
+          <Icon name="check" className="text-[14px] text-on-primary" />
         </div>
       )}
     </div>
   )
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+function DistroChart({ selected }) {
+  const distros = {
+    optimal: [40, 70, 90, 50, 20],
+    fastest: [85, 95, 100, 0, 0],
+    relaxed: [30, 50, 60, 55, 45],
+  }
+  const colors = {
+    optimal: { mid: 'rgba(173,198,255,0.55)', low: 'rgba(173,198,255,0.18)' },
+    fastest: { mid: 'rgba(208,188,255,0.55)', low: 'rgba(208,188,255,0.18)' },
+    relaxed: { mid: 'rgba(255,183,134,0.55)', low: 'rgba(255,183,134,0.18)' },
+  }
+  const data = distros[selected], c = colors[selected], max = Math.max(...data, 1)
+  return (
+    <div>
+      <div className="flex items-end gap-3 h-48">
+        {data.map((v, i) => (
+          <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
+            <div className="text-[11px] text-on-surface-variant/60 font-mono opacity-0 group-hover:opacity-100 transition-opacity">{v}%</div>
+            <div className="w-full rounded-t-xl transition-all duration-700"
+              style={{
+                height: `${(v / max) * 100}%`,
+                background: v > 70 ? c.mid : c.low,
+                boxShadow: v > 70 ? `0 0 18px ${c.mid}` : 'none',
+              }} />
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-between mt-4 text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/50 font-semibold">
+        {['Week 1','Week 2','Week 3','Week 4','Week 5'].map(w => <span key={w}>{w}</span>)}
+      </div>
+    </div>
+  )
+}
 
 export default function ResultsView() {
   const navigate = useNavigate()
-  const { results, processingState } = useScheduler()
+  const current = useCurrent()
+  const [selected, setSelected] = useState('optimal')
+  const [moed, setMoed] = useState('A')
 
-  const [selectedSemester, setSelectedSemester] = useState(SEMESTER.FALL)
-  const [selectedMoed,     setSelectedMoed]     = useState(MOED.Aleph)
-  const [selectedOption,   setSelectedOption]   = useState('optimal')
-  const [exporting,        setExporting]        = useState(false)
-
-  const schedules = results ?? [
-    { periodKey: 'FALL - Aleph', assignments: [], totalConflicts: 0, durationDays: 21, avgStudyGap: 3.2, resourceLoad: 'Moderate' },
-    { periodKey: 'FALL - Aleph', assignments: [], totalConflicts: 0, durationDays: 14, avgStudyGap: 1.8, resourceLoad: 'Intense'  },
-    { periodKey: 'FALL - Aleph', assignments: [], totalConflicts: 0, durationDays: 28, avgStudyGap: 4.5, resourceLoad: 'Minimal'  },
-  ]
-
-  const handleExplore = (optionKey) => {
-    setSelectedOption(optionKey)
-    navigate('/calendar')
-  }
-
-  // SCRUM-94 — Export selected schedule
-  const handleExportSelected = async () => {
-    const idx        = OPTION_META.findIndex(m => m.key === selectedOption)
-    const schedule   = schedules[idx]
-    const scheduleId = schedule?.id ?? `demo-${selectedOption}`
-    setExporting(true)
-    try {
-      const blob = await api.exportSchedule(scheduleId)
-      const url  = URL.createObjectURL(blob)
-      const a    = document.createElement('a')
-      a.href     = url
-      a.download = `schedule-${selectedOption}.txt`
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    } catch {
-      // Demo fallback: download a plain-text stub
-      const content = `Schedule: ${selectedOption}\nPeriod: ${schedule?.periodKey}\nDuration: ${schedule?.durationDays}d\nConflicts: ${schedule?.totalConflicts}`
-      const blob    = new Blob([content], { type: 'text/plain' })
-      const url     = URL.createObjectURL(blob)
-      const a       = document.createElement('a')
-      a.href = url; a.download = `schedule-${selectedOption}.txt`
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    } finally {
-      setExporting(false)
-    }
-  }
-
-  const selectStyle = {
-    padding: '0.5rem 0.875rem',
-    borderRadius: '9999px',
-    border: '1.5px solid var(--outline-variant)',
-    background: 'var(--surface-container-lowest)',
-    fontFamily: 'Inter, sans-serif',
-    fontSize: '0.82rem',
-    color: 'var(--on-surface)',
-    cursor: 'pointer',
-    outline: 'none',
-  }
-
-  // SCRUM-94 — NavBar right slot: Export Selected button
-  const navRight = (
-    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-      <button
-        className="btn-outline"
-        onClick={handleExportSelected}
-        disabled={exporting}
-        style={{ fontSize: '0.8rem', padding: '0.45rem 1rem', opacity: exporting ? 0.6 : 1 }}
-      >
-        {exporting
-          ? <span className="material-icons-round" style={{ fontSize: '0.9rem', animation: 'spin 1s linear infinite' }}>sync</span>
-          : <span className="material-icons-round" style={{ fontSize: '0.9rem' }}>download</span>
-        }
-        Export Selected
-      </button>
-      <a href="#" style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.8rem', color: 'var(--outline)', textDecoration: 'none' }}>Help</a>
-      <a href="/" style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.8rem', color: 'var(--outline)', textDecoration: 'none' }}>Sign Out</a>
-    </div>
-  )
+  const sel = CARDS[selected]
 
   return (
-    <PageShell style={{ minHeight: '100vh', background: 'var(--surface)' }}>
+    <WorkspaceShell
+      current={current}
+      title="Results"
+      subtitle="Winter 2026"
+      right={
+        <Chip tone="primary" className="mr-2">
+          <Icon name="check_circle" fill className="text-[12px]" /> 3 timelines streamed
+        </Chip>
+      }
+    >
+      <div className="screen-anim space-y-10">
 
-      {/* SCRUM-92 — Shared NavBar */}
-      <NavBar currentPath="/results" rightContent={navRight} />
-
-      <main style={{ maxWidth: '1280px', margin: '0 auto', padding: '2.5rem 2rem' }}>
-
-        {/* Page header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '2rem' }}>
-          <div>
-            <h1 style={{ fontFamily: 'Sora, sans-serif', fontSize: '1.75rem', fontWeight: 800, color: 'var(--on-surface)', letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>
-              Schedule Results
-            </h1>
-            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.875rem', color: 'var(--on-surface-variant)' }}>
-              Three optimized options generated — select one to proceed.
-            </p>
-          </div>
-
-          {/* Filters */}
-          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <select value={selectedSemester} onChange={e => setSelectedSemester(e.target.value)} style={selectStyle}>
-              {Object.entries(SEMESTER_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-            <select value={selectedMoed} onChange={e => setSelectedMoed(e.target.value)} style={selectStyle}>
-              {Object.entries(MOED_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-            <button className="btn-secondary" style={{ fontSize: '0.82rem', padding: '0.5rem 1rem' }}
-              onClick={() => navigate('/dashboard')}
-            >
-              <span className="material-icons-round" style={{ fontSize: '0.9rem' }}>refresh</span>
-              Re-Calculate
-            </button>
-          </div>
-        </div>
-
-        {/* Three option cards */}
-        <StaggerList style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
-          {OPTION_META.map((meta, i) => (
-            <StaggerItem key={meta.key}>
-              <ScheduleCard
-                meta={meta}
-                schedule={schedules[i]}
-                selected={selectedOption}
-                onSelect={setSelectedOption}
-                onExplore={handleExplore}
-              />
-            </StaggerItem>
-          ))}
-        </StaggerList>
-
-        {/* Summary panel */}
-        <div className="card" style={{ padding: '1.75rem', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '2rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <WeeklyDistribution />
-
-          <div>
-            <p style={{ fontFamily: 'Sora, sans-serif', fontSize: '0.85rem', fontWeight: 600, color: 'var(--on-surface)', marginBottom: '0.75rem' }}>
-              Solver Health
-            </p>
-            <span style={{ fontFamily: 'Sora, sans-serif', fontSize: '2.5rem', fontWeight: 800, letterSpacing: '-0.03em', background: 'var(--gradient-primary)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
-              99.8%
-            </span>
-            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.78rem', color: 'var(--on-surface-variant)', marginTop: '0.25rem' }}>
-              No critical conflicts detected
-            </p>
-          </div>
-
-          <div style={{ padding: '1.25rem', borderRadius: '1rem', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', minWidth: '220px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-              <span className="material-icons-round" style={{ color: '#f59e0b', fontSize: '1.1rem' }}>schedule</span>
-              <span style={{ fontFamily: 'Sora, sans-serif', fontSize: '0.82rem', fontWeight: 700, color: 'var(--on-surface)' }}>Upcoming Deadline</span>
+        {/* Filter bar */}
+        <section className="glass rounded-2xl p-5 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-5">
+          <div className="flex flex-wrap gap-5 items-center">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold">Semester</span>
+              <select className="liquid-input rounded-lg px-4 py-2 text-[13px] min-w-[180px]">
+                <option>Winter 2026</option>
+                <option>Spring 2026</option>
+                <option>Fall 2025</option>
+              </select>
             </div>
-            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.78rem', color: 'var(--on-surface-variant)', lineHeight: 1.5, marginBottom: '0.5rem' }}>
-              Submission of Moed A schedules to Registrar
-            </p>
-            <span className="chip chip-orange">2 DAYS LEFT</span>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold">Examination period</span>
+              <div className="flex glass-inner p-1 rounded-lg">
+                {['A', 'B', 'Resit'].map(m => (
+                  <button key={m} onClick={() => setMoed(m)}
+                    className="px-4 py-1.5 rounded-md text-[12px] uppercase tracking-[0.08em] font-semibold transition-all"
+                    style={moed === m ? {
+                      background: 'linear-gradient(90deg, #3b82f6, #8b5cf6)',
+                      color: '#fff',
+                      boxShadow: '0 0 14px rgba(173,198,255,0.4)',
+                    } : { color: 'rgba(218,226,253,0.6)' }}>
+                    Moed {m}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
+          <div className="flex items-center gap-3">
+            <GhostButton size="sm" icon="tune">Advanced filters</GhostButton>
+            <GradButton size="sm" icon="refresh" onClick={() => navigate('/processing')}>Re-calculate</GradButton>
+          </div>
+        </section>
 
-        {/* SCRUM-92 — Paginated schedule history */}
-        <ScheduleHistory />
-      </main>
-    </PageShell>
+        {/* Schedule cards */}
+        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {Object.entries(CARDS).map(([key, c]) => (
+            <ResultCard key={key} c={c} selected={selected === key} onSelect={() => setSelected(key)} />
+          ))}
+        </section>
+
+        {/* Analytics */}
+        <section className="grid grid-cols-12 gap-6">
+          <div className="col-span-12 md:col-span-7 glass rounded-3xl p-7">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.22em] text-on-surface-variant/60 font-semibold mb-2">Distribution by week</p>
+                <h3 className="text-[22px] font-semibold">Exam load · Option {sel.n} ({sel.name})</h3>
+              </div>
+              <Chip tone={sel.badgeTone}>{sel.badge}</Chip>
+            </div>
+            <DistroChart selected={selected} />
+            <div className="grid grid-cols-4 gap-4 mt-6 pt-6 border-t border-white/5">
+              {[
+                { k: 'Peak day',        v: 'Dec 13' },
+                { k: 'Empty slots',     v: '46'     },
+                { k: 'Cross-faculty',   v: '12%'    },
+                { k: 'Avg students',    v: '58'     },
+              ].map(m => (
+                <div key={m.k}>
+                  <div className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold mb-1">{m.k}</div>
+                  <div className="text-[20px] font-bold text-on-surface">{m.v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="col-span-12 md:col-span-3 glass rounded-3xl p-7 flex flex-col items-center text-center justify-center">
+            <div className="relative w-32 h-32 mb-5">
+              <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+                <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="2" />
+                <circle cx="18" cy="18" r="15.9" fill="none" stroke="url(#health-grad)" strokeWidth="2"
+                  strokeDasharray="99.8 100" strokeLinecap="round"
+                  style={{ filter: 'drop-shadow(0 0 6px rgba(173,198,255,0.5))' }} />
+                <defs>
+                  <linearGradient id="health-grad" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor="#3b82f6" />
+                    <stop offset="100%" stopColor="#8b5cf6" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <Icon name="auto_awesome" fill className="text-primary text-[20px] mb-1" />
+                <div className="text-[20px] font-bold">99.8%</div>
+              </div>
+            </div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold">Solver health</p>
+          </div>
+
+          <div className="col-span-12 md:col-span-2 glass rounded-3xl p-6 flex flex-col justify-between">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.22em] text-on-surface-variant/60 font-semibold mb-3">Upcoming deadline</p>
+              <p className="text-[14px] text-on-surface leading-relaxed">Submit Moed A schedule to the registrar.</p>
+            </div>
+            <div className="flex items-center gap-2 mt-5 text-tertiary">
+              <Icon name="alarm" className="text-[16px]" />
+              <span className="text-[12px] uppercase tracking-widest font-bold">2 days left</span>
+            </div>
+          </div>
+        </section>
+
+        {/* Comparison table */}
+        <section className="glass rounded-3xl p-7">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-[22px] font-semibold">Side-by-side comparison</h3>
+            <GradButton size="sm" icon="check" onClick={() => navigate('/calendar')}>Deploy {sel.name}</GradButton>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-[13px]">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 border-b border-white/5">
+                  <th className="py-3 pr-4">Metric</th>
+                  {Object.values(CARDS).map(c => (
+                    <th key={c.name} className="py-3 px-4" style={{ color: c.glow.fg }}>{c.name}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { k: 'Duration',              v: ['21 days', '14 days', '28 days'] },
+                  { k: 'Conflicts',             v: ['0', '0', '0'] },
+                  { k: 'Avg. study gap',        v: ['3.2 days', '1.8 days', '4.5 days'] },
+                  { k: 'Peak student load/day', v: ['112', '168', '82'] },
+                  { k: 'Room utilization',      v: ['86%', '94%', '61%'] },
+                  { k: 'Faculty travel time',   v: ['Low', 'Moderate', 'Minimal'] },
+                  { k: 'Weekend exams',         v: ['1', '3', '0'] },
+                ].map((row, i) => (
+                  <tr key={i} className="border-b border-white/5 hover:bg-white/[0.02]">
+                    <td className="py-3 pr-4 text-on-surface-variant/80">{row.k}</td>
+                    {row.v.map((v, j) => (
+                      <td key={j} className={`py-3 px-4 font-semibold ${j === 0 ? 'text-on-surface' : 'text-on-surface-variant'}`}>{v}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </WorkspaceShell>
   )
 }

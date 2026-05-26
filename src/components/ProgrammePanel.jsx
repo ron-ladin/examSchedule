@@ -76,7 +76,7 @@ export default function ProgrammePanel({ selected = [], onChange, toast }) {
       {/* Search */}
       <div style={{ position: 'relative', marginBottom: '1rem' }}>
         <span
-          className="material-icons-round"
+          className="material-symbols-outlined"
           style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--outline)', fontSize: '1rem', pointerEvents: 'none' }}
         >
           search
@@ -104,7 +104,7 @@ export default function ProgrammePanel({ selected = [], onChange, toast }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '340px', overflowY: 'auto' }}>
         {loading ? (
           <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--outline)' }}>
-            <span className="material-icons-round" style={{ fontSize: '1.5rem', animation: 'spin 1s linear infinite' }}>sync</span>
+            <span className="material-symbols-outlined" style={{ fontSize: '1.5rem', animation: 'spin 1s linear infinite' }}>sync</span>
             <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.82rem', marginTop: '0.5rem' }}>Loading programmes...</p>
           </div>
         ) : filtered.length === 0 ? (
@@ -147,7 +147,7 @@ export default function ProgrammePanel({ selected = [], onChange, toast }) {
                 </div>
 
                 {/* Checkbox */}
-                <span className="material-icons-round" style={{ fontSize: '1.1rem', color: isSelected ? color : 'var(--outline-variant)', transition: 'color 0.15s' }}>
+                <span className="material-symbols-outlined" style={{ fontSize: '1.1rem', color: isSelected ? color : 'var(--outline-variant)', transition: 'color 0.15s' }}>
                   {isSelected ? 'check_box' : 'check_box_outline_blank'}
                 </span>
               </button>
@@ -177,7 +177,7 @@ export default function ProgrammePanel({ selected = [], onChange, toast }) {
                     onClick={() => toggle(id)}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color, lineHeight: 1, marginLeft: '0.2rem' }}
                   >
-                    <span className="material-icons-round" style={{ fontSize: '0.8rem' }}>close</span>
+                    <span className="material-symbols-outlined" style={{ fontSize: '0.8rem' }}>close</span>
                   </button>
                 </span>
               )

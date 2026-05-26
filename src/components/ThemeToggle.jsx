@@ -38,7 +38,7 @@ export default function ThemeToggle({ size = 1.1, color }) {
       }}
     >
       <span
-        className="material-icons-round"
+        className="material-symbols-outlined"
         style={{
           fontSize: `${size}rem`,
           color: color ?? 'var(--on-surface-variant)',

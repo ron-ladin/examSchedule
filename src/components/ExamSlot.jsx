@@ -106,7 +106,7 @@ export default function ExamSlot({ exam, size = 'full', onClick }) {
           ].filter(Boolean).map(row => (
             <div key={row.icon} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem' }}>
               <span
-                className="material-icons-round"
+                className="material-symbols-outlined"
                 style={{ fontSize: '0.85rem', color: 'var(--outline)', marginTop: '1px', flexShrink: 0 }}
               >
                 {row.icon}

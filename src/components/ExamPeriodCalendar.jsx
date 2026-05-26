@@ -240,7 +240,7 @@ function PeriodPanel({ period, onUpdate, toast }) {
         }}
       >
         <span
-          className="material-icons-round"
+          className="material-symbols-outlined"
           style={{ fontSize: '1.1rem', color: 'var(--primary)', flexShrink: 0 }}
         >
           date_range
@@ -278,7 +278,7 @@ function PeriodPanel({ period, onUpdate, toast }) {
           )}
         </div>
         <span
-          className="material-icons-round"
+          className="material-symbols-outlined"
           style={{
             fontSize: '1.1rem',
             color: 'var(--on-surface-variant)',
@@ -356,8 +356,8 @@ function PeriodPanel({ period, onUpdate, toast }) {
                   style={{ fontSize: '0.78rem', padding: '0.45rem 1rem', opacity: savingRange ? 0.6 : 1 }}
                 >
                   {savingRange
-                    ? <span className="material-icons-round" style={{ fontSize: '0.9rem', animation: 'spin 1s linear infinite' }}>sync</span>
-                    : <span className="material-icons-round" style={{ fontSize: '0.9rem' }}>save</span>
+                    ? <span className="material-symbols-outlined" style={{ fontSize: '0.9rem', animation: 'spin 1s linear infinite' }}>sync</span>
+                    : <span className="material-symbols-outlined" style={{ fontSize: '0.9rem' }}>save</span>
                   }
                   Save Range
                 </button>
@@ -460,12 +460,12 @@ export default function ExamPeriodCalendar({ toast }) {
 
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1.5rem', color: 'var(--outline)' }}>
-          <span className="material-icons-round" style={{ fontSize: '1.25rem', animation: 'spin 1s linear infinite' }}>sync</span>
+          <span className="material-symbols-outlined" style={{ fontSize: '1.25rem', animation: 'spin 1s linear infinite' }}>sync</span>
           <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.82rem' }}>Loading exam periods...</span>
         </div>
       ) : periods.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--outline)' }}>
-          <span className="material-icons-round" style={{ fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>event_busy</span>
+          <span className="material-symbols-outlined" style={{ fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>event_busy</span>
           <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.85rem' }}>
             No periods found. Upload <span className="mono" style={{ color: 'var(--primary)' }}>dates.txt</span> first.
           </p>

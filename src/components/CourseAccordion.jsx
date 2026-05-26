@@ -146,7 +146,7 @@ function ProgrammeItem({ programme, isSelected, isOpen, onToggle, courses, loadi
           </span>
         )}
         <span
-          className="material-icons-round"
+          className="material-symbols-outlined"
           style={{
             fontSize: '1.1rem',
             color: 'var(--on-surface-variant)',
@@ -165,7 +165,7 @@ function ProgrammeItem({ programme, isSelected, isOpen, onToggle, courses, loadi
           {loading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem', color: 'var(--outline)' }}>
               <span
-                className="material-icons-round"
+                className="material-symbols-outlined"
                 style={{ fontSize: '1.1rem', animation: 'spin 1s linear infinite' }}
               >
                 sync
@@ -267,7 +267,7 @@ export default function CourseAccordion({ selectedPrograms = [], programmes = []
         className="card"
         style={{ padding: '2rem', textAlign: 'center', color: 'var(--outline)' }}
       >
-        <span className="material-icons-round" style={{ fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>
+        <span className="material-symbols-outlined" style={{ fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>
           school
         </span>
         <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.85rem' }}>

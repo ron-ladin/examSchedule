@@ -1,453 +1,271 @@
-/**
- * DetailedCalendar.jsx — SCRUM-90, 91, 92, 93, 94
- *
- * Three view modes:
- *   Month  — monthly calendar grid (default)
- *   List   — SCRUM-91: SemesterGroupLayout — exams grouped by semester
- *   Today  — jumps to today's date in month view
- *
- * Uses:
- *   NavBar            (SCRUM-92) — shared sticky top navigation
- *   ExamSlot          (SCRUM-90) — coloured compact + full exam cards
- *   SemesterGroupLayout (SCRUM-91)
- *   colorFor          (SCRUM-93) — programme colour applied to calendar cells
- *   Export button     (SCRUM-94) — calls api.exportSchedule → triggers download
- */
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Icon, GradButton, WorkspaceShell, useCurrent } from './Shared'
 
-import { useState, useMemo } from 'react'
-import { useScheduler } from '../hooks/useScheduler'
-import { api, ApiError } from '../api/client'
-import { colorFor } from '../utils/progColor'
-import NavBar from './NavBar'
-import ExamSlot from './ExamSlot'
-import SemesterGroupLayout from './SemesterGroupLayout'
-import { MotionCard, PageShell } from './Motion'
+const EXAMS = {
+  2:  [{ code: 'CS-401',   title: 'Algorithms',      tone: 'primary'   }, { code: 'MATH-101', title: 'Calculus I',       tone: 'secondary' }],
+  3:  [{ code: 'PHYS-202', title: 'Magnetism',        tone: 'tertiary'  }],
+  5:  [{ code: 'ECON-101', title: 'Macro',            tone: 'primary'   }],
+  6:  [{ code: 'CS-205',   title: 'Operating Systems',tone: 'primary'   }, { code: 'CS-101', title: 'Intro CS', tone: 'primary' }],
+  9:  [{ code: 'BIO-150',  title: 'Genetics',         tone: 'secondary' }],
+  10: [{ code: 'CS-401',   title: 'Final',            tone: 'primary',  pulse: true }],
+  11: [{ code: 'HIST-220', title: 'Mod. Hist.',       tone: 'tertiary'  }],
+  12: [{ code: 'LIT-330',  title: 'Joyce',            tone: 'secondary' }, { code: 'PSYC-180', title: 'Cognition', tone: 'primary' }],
+  13: [{ code: 'CHEM-201 ⨯ MATH-220', title: 'Conflict', tone: 'error', conflict: true }],
+  16: [{ code: 'MATH-201', title: 'Linear Alg.',      tone: 'primary'   }],
+  17: [{ code: 'ENG-310',  title: 'Romantics',        tone: 'secondary' }],
+  18: [{ code: 'MATH-101', title: 'Calc I',           tone: 'primary'   }, { code: 'STAT-110', title: 'Stats',     tone: 'primary' }],
+  19: [{ code: 'PHYS-101 ⨯ CS-303', title: 'Conflict', tone: 'error',   conflict: true }],
+  20: [{ code: 'ARCH-440', title: 'Design Lab',       tone: 'tertiary'  }],
+}
 
-const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const MONTHS = [
-  'January','February','March','April','May','June',
-  'July','August','September','October','November','December',
-]
+const toneStyles = {
+  primary:   { bg: 'rgba(173,198,255,0.14)', bd: '#adc6ff', fg: '#adc6ff' },
+  secondary: { bg: 'rgba(208,188,255,0.14)', bd: '#d0bcff', fg: '#d0bcff' },
+  tertiary:  { bg: 'rgba(255,183,134,0.14)', bd: '#ffb786', fg: '#ffb786' },
+  error:     { bg: 'rgba(147,0,10,0.35)',    bd: '#ff8a82', fg: '#ffb4ab' },
+}
 
-// Mock exam data — replace with useScheduler().results[selectedOption].assignments
-const MOCK_EXAMS = [
-  { courseId: '83512', courseName: 'Advanced Algorithms', instructor: 'Prof. R. Chen', date: '2024-12-05', conflicts: 1, room: 'Science Building, Hall A-105', time: '14:00 - 17:00', proctors: ['Dr. A. Cohen', 'T. Shapiro'] },
-  { courseId: '83401', courseName: 'Operating Systems',   instructor: 'Dr. M. Levy',   date: '2024-12-09', conflicts: 0, room: 'Bldg B, Hall 201',             time: '09:00 - 12:00', proctors: ['Prof. Y. Klein'] },
-  { courseId: '83301', courseName: 'Data Structures',     instructor: 'Dr. E. Golan',  date: '2024-12-12', conflicts: 0, room: 'Main Auditorium',               time: '10:00 - 13:00', proctors: ['Dr. S. Bar'] },
-  { courseId: '83201', courseName: 'Calculus 2',          instructor: 'Prof. O. Some', date: '2024-12-16', conflicts: 0, room: 'Hall C-301',                    time: '08:00 - 11:00', proctors: ['T. Rosen'] },
-  { courseId: '83101', courseName: 'Physics 1',           instructor: 'Prof. B. Tal',  date: '2024-12-19', conflicts: 0, room: 'Physics Lab, Wing D',            time: '13:00 - 16:00', proctors: ['Dr. N. Cohen'] },
-]
-
-function pad(n) { return String(n).padStart(2, '0') }
-function isoDate(year, month, day) { return `${year}-${pad(month + 1)}-${pad(day)}` }
-
-// ── Calendar grid with programme colour coding (SCRUM-93) ─────────────────────
-
-function CalendarGrid({ year, month, exams, selectedDate, onSelect }) {
-  const firstDay    = new Date(year, month, 1).getDay()
-  const daysInMonth = new Date(year, month + 1, 0).getDate()
-
-  const examsByDate = useMemo(() => {
-    const map = {}
-    exams.forEach(e => {
-      if (!map[e.date]) map[e.date] = []
-      map[e.date].push(e)
-    })
-    return map
-  }, [exams])
-
-  const cells = []
-  for (let i = 0; i < firstDay; i++) cells.push(null)
-  for (let d = 1; d <= daysInMonth; d++) cells.push(d)
-
+function LegendDot({ color, label, pulse }) {
   return (
-    <div>
-      {/* Day headers */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', marginBottom: '0.25rem' }}>
-        {DAYS_OF_WEEK.map(d => (
-          <div
-            key={d}
-            style={{
-              textAlign: 'center',
-              padding: '0.5rem 0',
-              fontFamily: 'JetBrains Mono, monospace',
-              fontSize: '0.7rem',
-              color: 'var(--outline)',
-              letterSpacing: '0.04em',
-            }}
-          >
-            {d}
-          </div>
-        ))}
-      </div>
-
-      {/* Cells */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' }}>
-        {cells.map((day, i) => {
-          if (!day) return <div key={`e-${i}`} />
-          const iso       = isoDate(year, month, day)
-          const dayExams  = examsByDate[iso] || []
-          const hasConflict = dayExams.some(e => e.conflicts > 0)
-          const isSelected  = iso === selectedDate
-          const isToday     = iso === new Date().toISOString().slice(0, 10)
-
-          return (
-            <MotionCard
-              key={iso}
-              onClick={() => onSelect(iso)}
-              style={{
-                minHeight: '72px',
-                borderRadius: '0.625rem',
-                padding: '0.5rem',
-                cursor: 'pointer',
-                border: '1.5px solid',
-                borderColor: isSelected
-                  ? '#3b82f6'
-                  : hasConflict
-                  ? 'rgba(186,26,26,0.3)'
-                  : dayExams.length > 0
-                  ? 'rgba(59,130,246,0.25)'
-                  : 'var(--outline-variant)',
-                background: isSelected
-                  ? 'linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.1))'
-                  : hasConflict
-                  ? 'rgba(186,26,26,0.06)'
-                  : dayExams.length > 0
-                  ? 'rgba(59,130,246,0.04)'
-                  : 'var(--surface-container-lowest)',
-                transition: 'border-color 0.15s, background 0.15s',
-                boxShadow: isSelected ? '0 0 0 3px rgba(59,130,246,0.15)' : 'none',
-              }}
-            >
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: '22px',
-                  height: '22px',
-                  borderRadius: '50%',
-                  background: isToday ? 'var(--gradient-primary)' : 'transparent',
-                  fontFamily: 'Inter, sans-serif',
-                  fontSize: '0.78rem',
-                  fontWeight: isToday ? 700 : 400,
-                  color: isToday ? 'white' : 'var(--on-surface)',
-                  marginBottom: '0.25rem',
-                }}
-              >
-                {day}
-              </span>
-
-              {/* Compact exam pills — SCRUM-90 colour coded (SCRUM-93) */}
-              {dayExams.slice(0, 2).map(ex => (
-                <ExamSlot key={ex.courseId} exam={ex} size="compact" />
-              ))}
-              {dayExams.length > 2 && (
-                <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.6rem', color: 'var(--outline)' }}>
-                  +{dayExams.length - 2}
-                </span>
-              )}
-            </MotionCard>
-          )
-        })}
-      </div>
+    <div className="inline-flex items-center gap-2 glass-inner rounded-full px-3 py-1.5">
+      <span className={`w-2 h-2 rounded-full ${pulse ? 'pulse-soft' : ''}`} style={{ background: color, boxShadow: `0 0 8px ${color}` }} />
+      <span className="text-on-surface-variant/80 font-semibold text-[11px]">{label}</span>
     </div>
   )
 }
 
-// ── Detail sidebar using ExamSlot (SCRUM-90) ──────────────────────────────────
-
-function ExamDetailSidebar({ date, exams }) {
-  if (!date) {
-    return (
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          height: '100%',
-          gap: '0.75rem',
-          padding: '2rem',
-          textAlign: 'center',
-        }}
-      >
-        <span className="material-icons-round" style={{ color: 'var(--outline-variant)', fontSize: '2.5rem' }}>
-          event_note
-        </span>
-        <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.85rem', color: 'var(--outline)' }}>
-          Select a date to view exam details
-        </p>
-      </div>
-    )
-  }
-
-  const d         = new Date(date + 'T00:00:00')
-  const formatted = d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-
+function FocusedDayCard({ day }) {
+  const exams = EXAMS[day] || []
   return (
-    <div style={{ padding: '1.5rem', overflowY: 'auto' }}>
-      <div style={{ marginBottom: '1.25rem' }}>
-        <p style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.7rem', color: 'var(--outline)', letterSpacing: '0.06em', marginBottom: '0.25rem' }}>
-          SELECTED DATE
-        </p>
-        <h3 style={{ fontFamily: 'Sora, sans-serif', fontSize: '1rem', fontWeight: 700, color: 'var(--on-surface)', letterSpacing: '-0.01em' }}>
-          {formatted}
-        </h3>
+    <div className="glass rounded-3xl p-6">
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-[10px] uppercase tracking-[0.22em] text-on-surface-variant/60 font-semibold">Focused day</p>
+        <Icon name="event" className="text-primary text-[18px]" />
       </div>
+      <h3 className="text-[28px] font-bold mb-1">Dec {String(day).padStart(2, '0')}, 2026</h3>
+      <p className="text-[11px] text-on-surface-variant/60 mb-5">
+        {exams.length === 0 ? 'No exams scheduled' : `${exams.length} exam${exams.length === 1 ? '' : 's'} scheduled`}
+      </p>
 
       {exams.length === 0 ? (
-        <div style={{ padding: '1.25rem', borderRadius: '0.875rem', background: 'var(--surface-container)', textAlign: 'center' }}>
-          <span className="material-icons-round" style={{ color: 'var(--success)', fontSize: '1.5rem', display: 'block', marginBottom: '0.4rem' }}>event_available</span>
-          <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.82rem', color: 'var(--on-surface-variant)' }}>No exams scheduled</p>
+        <div className="glass-inner rounded-xl p-5 text-center text-[12px] text-on-surface-variant/60">
+          <Icon name="event_available" className="text-on-surface-variant/40 text-[28px] mb-2 block" />
+          Empty slot. Click <Icon name="add" className="text-[12px] align-middle" /> to schedule.
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {exams.map(ex => <ExamSlot key={ex.courseId} exam={ex} size="full" />)}
+        <div className="space-y-2.5">
+          {exams.map((ev, i) => {
+            const s = toneStyles[ev.tone]
+            return (
+              <div key={i} className="glass-inner rounded-xl p-3"
+                style={{ borderLeft: `3px solid ${s.bd}`, boxShadow: ev.conflict ? 'inset 0 0 18px rgba(147,0,10,0.3)' : 'none' }}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-bold" style={{ color: s.fg }}>{ev.conflict && '⚠ '}{ev.code}</span>
+                  <span className="text-[10px] font-mono text-on-surface-variant/50">09:00 AM</span>
+                </div>
+                <p className="text-[11px] text-on-surface-variant/70 mt-1">{ev.title}</p>
+                <div className="flex items-center gap-3 mt-2 text-[10px] text-on-surface-variant/50">
+                  <span className="flex items-center gap-1"><Icon name="groups" className="text-[12px]" /> 142</span>
+                  <span className="flex items-center gap-1"><Icon name="room" className="text-[12px]" /> Hall Alpha</span>
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
   )
 }
 
-// ── Export helper (SCRUM-94) ──────────────────────────────────────────────────
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob)
-  const a   = document.createElement('a')
-  a.href     = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+function InsightsCard() {
+  return (
+    <div className="glass rounded-3xl p-6">
+      <div className="flex items-center gap-3 mb-5">
+        <Icon name="insights" className="text-primary" />
+        <h3 className="font-semibold text-[15px]">Schedule insights</h3>
+      </div>
+      <div className="space-y-4">
+        <div className="glass-inner rounded-xl p-4 flex justify-between items-center">
+          <div>
+            <p className="text-[10px] uppercase tracking-widest text-on-surface-variant/50 font-semibold">Total exams</p>
+            <p className="text-[22px] font-bold text-primary">142</p>
+          </div>
+          <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+            <Icon name="assignment" className="text-primary text-[18px]" />
+          </div>
+        </div>
+        <div className="glass-inner rounded-xl p-4">
+          <div className="flex justify-between items-center mb-2">
+            <p className="text-[10px] uppercase tracking-widest text-on-surface-variant/50 font-semibold">Student overlaps</p>
+            <span className="text-error text-[11px] font-bold">↑ 12%</span>
+          </div>
+          <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+            <div className="h-full bg-error rounded-full" style={{ width: '24%' }} />
+          </div>
+          <p className="mt-2 text-[10px] text-on-surface-variant/60">34 critical conflicts remaining</p>
+        </div>
+        <div className="glass-inner rounded-xl p-4">
+          <div className="flex justify-between items-center mb-2">
+            <p className="text-[10px] uppercase tracking-widest text-on-surface-variant/50 font-semibold">Room utilization</p>
+            <span className="text-primary text-[11px] font-bold">88%</span>
+          </div>
+          <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+            <div className="h-full rounded-full" style={{ width: '88%', background: 'linear-gradient(90deg, #3b82f6, #8b5cf6)' }} />
+          </div>
+          <p className="mt-2 text-[10px] text-on-surface-variant/60">Peak: Dec 12 – Dec 15</p>
+        </div>
+      </div>
+    </div>
+  )
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+function PendingResolutionsCard() {
+  const conflicts = [
+    { t: 'CS-401 vs MATH-101',       s: 'Dec 10, 09:00 AM · 12 students',    level: 'error'    },
+    { t: 'Room Alpha overcapacity',   s: 'Dec 12, 02:00 PM · PHYS-202',       level: 'tertiary' },
+    { t: 'Prof. Miller double-booked',s: 'Dec 13 · 2 exams concurrent',       level: 'error'    },
+    { t: 'Accessibility seat shortfall',s:'Dec 18 · STAT-110',                level: 'tertiary' },
+  ]
+  return (
+    <div className="glass rounded-3xl p-6">
+      <div className="flex justify-between items-center mb-5">
+        <div className="flex items-center gap-3">
+          <Icon name="warning" className="text-tertiary" />
+          <h3 className="font-semibold text-[15px]">Pending resolutions</h3>
+        </div>
+        <span className="px-2 py-0.5 rounded-full bg-tertiary/10 text-tertiary text-[10px] font-bold">4 new</span>
+      </div>
+      <div className="space-y-2.5 max-h-[260px] overflow-y-auto pr-1">
+        {conflicts.map((c, i) => (
+          <div key={i} className="glass-inner rounded-xl p-3 group hover:translate-x-1 transition-transform cursor-pointer"
+            style={{ borderLeft: `3px solid ${c.level === 'error' ? '#ff8a82' : '#ffb786'}` }}>
+            <p className="text-[12px] font-bold text-on-surface">{c.t}</p>
+            <p className="text-[10px] text-on-surface-variant/60 mt-1">{c.s}</p>
+            <div className="flex gap-3 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button className="text-[10px] font-bold text-primary hover:underline">Re-schedule</button>
+              <button className="text-[10px] font-bold text-on-surface-variant hover:underline">Ignore</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button className="btn-grad w-full mt-5 py-3 rounded-xl text-[11px] uppercase tracking-[0.08em] font-bold flex items-center justify-center gap-2">
+        <Icon name="auto_awesome" className="text-[14px]" /> Launch auto-resolver
+      </button>
+    </div>
+  )
+}
 
 export default function DetailedCalendar() {
-  const { results } = useScheduler()
+  const navigate = useNavigate()
+  const current = useCurrent()
+  const [focusedDay, setFocusedDay] = useState(10)
 
-  const [year,         setYear]        = useState(2024)
-  const [month,        setMonth]       = useState(11)   // December = 11
-  const [selectedDate, setSelectedDate] = useState(null)
-  const [viewMode,     setViewMode]    = useState('month')   // 'today' | 'month' | 'list'
-  const [exporting,    setExporting]   = useState(false)
-
-  const exams = results?.[0]?.assignments?.length
-    ? results[0].assignments
-    : MOCK_EXAMS
-
-  const selectedExams = useMemo(
-    () => exams.filter(e => e.date === selectedDate),
-    [exams, selectedDate],
-  )
-
-  const prevMonth = () => {
-    if (month === 0) { setYear(y => y - 1); setMonth(11) }
-    else setMonth(m => m - 1)
-  }
-  const nextMonth = () => {
-    if (month === 11) { setYear(y => y + 1); setMonth(0) }
-    else setMonth(m => m + 1)
-  }
-
-  // SCRUM-94 — Export schedule
-  const handleExport = async () => {
-    setExporting(true)
-    try {
-      const scheduleId = results?.[0]?.id ?? 'demo-schedule'
-      const blob       = await api.exportSchedule(scheduleId)
-      downloadBlob(blob, `schedule-${scheduleId}.txt`)
-    } catch {
-      // In demo mode the backend isn't running — offer a CSV of mock data instead
-      const csv = [
-        'courseId,courseName,instructor,date,time,room',
-        ...exams.map(e =>
-          [e.courseId, `"${e.courseName}"`, e.instructor, e.date, e.time ?? '', e.room ?? ''].join(',')
-        ),
-      ].join('\n')
-      downloadBlob(new Blob([csv], { type: 'text/csv' }), 'schedule-export.csv')
-    } finally {
-      setExporting(false)
-    }
-  }
-
-  // ── NavBar right slot: Add Exam + Export ────────────────────────────────────
-  const navRight = (
-    <div style={{ display: 'flex', gap: '0.625rem', alignItems: 'center' }}>
-      <button
-        className="btn-outline"
-        onClick={handleExport}
-        disabled={exporting}
-        style={{ fontSize: '0.8rem', padding: '0.45rem 1rem', opacity: exporting ? 0.6 : 1 }}
-      >
-        {exporting
-          ? <span className="material-icons-round" style={{ fontSize: '0.9rem', animation: 'spin 1s linear infinite' }}>sync</span>
-          : <span className="material-icons-round" style={{ fontSize: '0.9rem' }}>download</span>
-        }
-        Export
-      </button>
-      <button className="btn-primary" style={{ padding: '0.5rem 1.25rem', fontSize: '0.82rem' }}>
-        <span className="material-icons-round" style={{ fontSize: '0.9rem' }}>add</span>
-        Add New Exam
-      </button>
-    </div>
-  )
+  // Dec 2026: Dec 1 is Tuesday. Prepend Nov 30 (Mon)
+  const cells = []
+  cells.push({ d: 30, prev: true })
+  for (let i = 1; i <= 31; i++) cells.push({ d: i })
+  for (let i = 1; i <= 4; i++) cells.push({ d: i, next: true })
 
   return (
-    <PageShell style={{ minHeight: '100vh', background: 'var(--surface)' }}>
+    <WorkspaceShell
+      current={current}
+      title="December 2026"
+      subtitle="Moed A · Week 50"
+      right={
+        <div className="flex items-center bg-white/5 rounded-full px-2 py-1 gap-1 border border-white/[0.08] mr-2">
+          <button className="p-1.5 rounded-full hover:bg-white/5 text-on-surface-variant hover:text-primary">
+            <Icon name="chevron_left" className="text-[18px]" />
+          </button>
+          <span className="px-3 text-[11px] uppercase tracking-[0.12em] font-semibold">Today</span>
+          <button className="p-1.5 rounded-full hover:bg-white/5 text-on-surface-variant hover:text-primary">
+            <Icon name="chevron_right" className="text-[18px]" />
+          </button>
+        </div>
+      }
+    >
+      <div className="screen-anim grid grid-cols-12 gap-6">
 
-      {/* SCRUM-92 — Shared NavBar */}
-      <NavBar currentPath="/calendar" rightContent={navRight} />
+        {/* Calendar grid */}
+        <section className="col-span-12 lg:col-span-9">
+          <div className="glass rounded-3xl overflow-hidden">
+            <div className="grid grid-cols-7" style={{ background: 'rgba(6,14,32,0.5)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              {['MON','TUE','WED','THU','FRI','SAT','SUN'].map(d => (
+                <div key={d} className="py-3.5 text-center text-[10px] uppercase tracking-[0.22em] font-semibold text-on-surface-variant/70">{d}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 auto-rows-[120px]">
+              {cells.map((cell, i) => {
+                const muted = cell.prev || cell.next
+                const exams = !muted ? EXAMS[cell.d] : null
+                const isWeekend = (i % 7 === 5) || (i % 7 === 6)
+                const isFocused = !muted && cell.d === focusedDay
+                return (
+                  <button key={i}
+                    onClick={() => !muted && setFocusedDay(cell.d)}
+                    className={`p-2.5 text-left relative transition-all duration-300 ${muted ? 'opacity-30 cursor-default' : 'hover:bg-white/[0.04]'}`}
+                    style={{
+                      background: isWeekend && !muted ? 'rgba(6,14,32,0.3)' : 'transparent',
+                      borderRight: (i % 7) !== 6 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                      borderBottom: '1px solid rgba(255,255,255,0.04)',
+                      boxShadow: isFocused ? 'inset 0 0 0 2px rgba(173,198,255,0.5), inset 0 0 30px rgba(173,198,255,0.12)' : 'none',
+                    }}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className={`text-[11px] font-semibold ${isFocused ? 'text-primary' : 'text-on-surface-variant/80'}`}>
+                        {String(cell.d).padStart(2, '0')}
+                      </span>
+                      {exams && exams.length > 1 && (
+                        <span className="text-[9px] text-on-surface-variant/40 font-bold">{exams.length}</span>
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      {exams && exams.slice(0, 2).map((ev, j) => {
+                        const s = toneStyles[ev.tone]
+                        return (
+                          <div key={j}
+                            className={`px-1.5 py-1 rounded text-[9px] font-bold tracking-wide truncate ${ev.pulse ? 'pulse-soft' : ''}`}
+                            style={{
+                              background: s.bg, color: s.fg, borderLeft: `2px solid ${s.bd}`,
+                              boxShadow: ev.conflict ? 'inset 0 0 12px rgba(147,0,10,0.4)' : ev.pulse ? `0 0 12px ${s.bd}88` : 'none',
+                            }}>
+                            {ev.conflict && '⚠ '}{ev.code}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
 
-      <div
+          <div className="flex flex-wrap gap-3 mt-5">
+            <LegendDot color="#adc6ff" label="Engineering & Sciences" />
+            <LegendDot color="#d0bcff" label="Humanities" />
+            <LegendDot color="#ffb786" label="Social Sciences" />
+            <LegendDot color="#ffb4ab" label="Conflict" pulse />
+          </div>
+        </section>
+
+        {/* Side insights */}
+        <section className="col-span-12 lg:col-span-3 space-y-6">
+          <FocusedDayCard day={focusedDay} />
+          <InsightsCard />
+          <PendingResolutionsCard />
+        </section>
+      </div>
+
+      {/* FAB */}
+      <button
+        className="fixed bottom-8 right-8 w-14 h-14 rounded-2xl flex items-center justify-center text-white active:scale-95 transition-all z-50 group"
         style={{
-          maxWidth: '1280px',
-          margin: '0 auto',
-          padding: '2rem',
-          display: viewMode === 'list' ? 'block' : 'grid',
-          gridTemplateColumns: '1fr 320px',
-          gap: '1.5rem',
-          alignItems: 'start',
+          background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+          boxShadow: '0 0 30px rgba(173,198,255,0.4), 0 12px 30px -10px rgba(139,92,246,0.5)',
         }}
       >
-        {/* ── List view (SCRUM-91) ────────────────────────────────────────── */}
-        {viewMode === 'list' ? (
-          <div className="card" style={{ padding: '1.75rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-              <h2 style={{ fontFamily: 'Sora, sans-serif', fontSize: '1.15rem', fontWeight: 700, color: 'var(--on-surface)', letterSpacing: '-0.02em' }}>
-                All Exams by Semester
-              </h2>
-              <ViewToggle viewMode={viewMode} onChange={(m) => {
-                setViewMode(m)
-                if (m === 'today') {
-                  const now = new Date()
-                  setYear(now.getFullYear()); setMonth(now.getMonth())
-                  setSelectedDate(now.toISOString().slice(0, 10))
-                  setViewMode('month')
-                }
-              }} />
-            </div>
-            <SemesterGroupLayout exams={exams} onSelectExam={ex => {
-              const d = new Date(ex.date + 'T00:00:00')
-              setYear(d.getFullYear()); setMonth(d.getMonth())
-              setSelectedDate(ex.date)
-              setViewMode('month')
-            }} />
-          </div>
-        ) : (
-          <>
-            {/* ── Calendar panel (Month / Today) ─────────────────────────── */}
-            <div className="card" style={{ padding: '1.75rem' }}>
-
-              {/* Calendar header */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <button
-                    onClick={prevMonth}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0.25rem', borderRadius: '0.5rem' }}
-                  >
-                    <span className="material-icons-round" style={{ color: 'var(--on-surface-variant)' }}>chevron_left</span>
-                  </button>
-                  <h2 style={{ fontFamily: 'Sora, sans-serif', fontSize: '1.15rem', fontWeight: 700, color: 'var(--on-surface)', letterSpacing: '-0.02em' }}>
-                    {MONTHS[month]} {year}
-                  </h2>
-                  <button
-                    onClick={nextMonth}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0.25rem', borderRadius: '0.5rem' }}
-                  >
-                    <span className="material-icons-round" style={{ color: 'var(--on-surface-variant)' }}>chevron_right</span>
-                  </button>
-                </div>
-
-                <ViewToggle viewMode={viewMode} onChange={(m) => {
-                  setViewMode(m)
-                  if (m === 'today') {
-                    const now = new Date()
-                    setYear(now.getFullYear()); setMonth(now.getMonth())
-                    setSelectedDate(now.toISOString().slice(0, 10))
-                    setViewMode('month')
-                  }
-                }} />
-              </div>
-
-              <CalendarGrid
-                year={year}
-                month={month}
-                exams={exams}
-                selectedDate={selectedDate}
-                onSelect={setSelectedDate}
-              />
-
-              {/* Legend (SCRUM-93) */}
-              <div style={{ display: 'flex', gap: '1.5rem', marginTop: '1.25rem', flexWrap: 'wrap' }}>
-                <LegendItem color="rgba(59,130,246,0.3)" label="Exam scheduled" />
-                <LegendItem color="rgba(186,26,26,0.3)"  label="Conflict detected" />
-                <LegendItem color="var(--gradient-primary)" label="Today" />
-              </div>
-            </div>
-
-            {/* ── Detail sidebar ─────────────────────────────────────────── */}
-            <div className="card" style={{ minHeight: '500px', display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: 0 }}>
-              <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--outline-variant)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ fontFamily: 'Sora, sans-serif', fontSize: '0.9rem', fontWeight: 700, color: 'var(--on-surface)', letterSpacing: '-0.01em' }}>
-                  Exam Details
-                </h3>
-                {selectedDate && (
-                  <button onClick={() => setSelectedDate(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                    <span className="material-icons-round" style={{ color: 'var(--outline)', fontSize: '1rem' }}>close</span>
-                  </button>
-                )}
-              </div>
-              <ExamDetailSidebar date={selectedDate} exams={selectedExams} />
-            </div>
-          </>
-        )}
-      </div>
-    </PageShell>
-  )
-}
-
-// ── Small helpers ─────────────────────────────────────────────────────────────
-
-function LegendItem({ color, label }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-      <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: color, flexShrink: 0 }} />
-      <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.75rem', color: 'var(--on-surface-variant)' }}>{label}</span>
-    </div>
-  )
-}
-
-function ViewToggle({ viewMode, onChange }) {
-  return (
-    <div style={{ display: 'flex', gap: '0.25rem', padding: '0.25rem', background: 'var(--surface-container)', borderRadius: '9999px' }}>
-      {[
-        { key: 'today', label: 'Today' },
-        { key: 'month', label: 'Month' },
-        { key: 'list',  label: 'List'  },
-      ].map(({ key, label }) => (
-        <button
-          key={key}
-          onClick={() => onChange(key)}
-          style={{
-            padding: '0.35rem 0.875rem',
-            borderRadius: '9999px',
-            border: 'none',
-            background: viewMode === key ? 'white' : 'transparent',
-            boxShadow: viewMode === key ? 'var(--glass-shadow)' : 'none',
-            fontFamily: 'Sora, sans-serif',
-            fontSize: '0.8rem',
-            fontWeight: 600,
-            color: viewMode === key ? 'var(--primary)' : 'var(--on-surface-variant)',
-            cursor: 'pointer',
-            transition: 'all 0.15s',
-          }}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
+        <Icon name="add" className="text-[26px] group-hover:rotate-90 transition-transform" />
+      </button>
+    </WorkspaceShell>
   )
 }

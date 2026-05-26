@@ -1,20 +1,5 @@
-/**
- * Dashboard.jsx
- * Source: Stitch screen "Data Input Dashboard - English"
- * Design freeze: Sora font · Liquid Glass · Electric Blue→Deep Purple gradient
- *
- * Upload zone binding (Python file readers):
- *   courses  slot → courses.txt  → src/adapters/readers/course_file_reader.py
- *   dates    slot → dates.txt    → src/adapters/readers/exam_period_file_reader.py
- *   programs slot → programs.txt → src/adapters/readers/program_selector_reader.py
- *
- * Placeholders embedded below (grep "PLACEHOLDER"):
- *   - Manual Entry Drawer   → <ManualEntryDrawer /> (to be implemented)
- *   - Settings Panel        → <SettingsPanel />      (to be implemented)
- */
-
 import { useState, useRef, useCallback } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useScheduler } from '../hooks/useScheduler'
 import { useToast } from '../hooks/useToast'
 import { ToastContainer } from './Toast'
@@ -23,769 +8,114 @@ import { DATA_FILES } from '../models/types'
 import ProgrammePanel from './ProgrammePanel'
 import CourseAccordion from './CourseAccordion'
 import ExamPeriodCalendar from './ExamPeriodCalendar'
-import ThemeToggle from './ThemeToggle'
-import { PageShell } from './Motion'
+import { Icon, Chip, GradButton, GhostButton, WorkspaceShell, useCurrent } from './Shared'
 
-// ── Sidebar navigation items ───────────────────────────────────────────────
-const NAV_ITEMS = [
-  { icon: 'dashboard',       label: 'Dashboard',      path: '/dashboard',  active: true  },
-  { icon: 'calendar_today',  label: 'Schedules',      path: '/results',    active: false },
-  { icon: 'auto_fix_high',   label: 'Conflict Solver',path: '/calendar',   active: false },
-  { icon: 'history',         label: 'History',        path: '#',           active: false },
-  { icon: 'settings',        label: 'Settings',       path: '#settings',   active: false },
-]
-
-// ── Upload card config — keyed to Python file readers ─────────────────────
+/* ── Upload card config ─────────────────────────────────────────── */
 const UPLOAD_CARDS = [
-  {
-    key:       'courses',
-    icon:      'inventory_2',
-    title:     'Courses Inventory',
-    desc:      'Upload your courses list with program offerings, instructors, and evaluation types.',
-    fileName:  DATA_FILES.COURSES,    // courses.txt → course_file_reader.py
-    accept:    '.txt,.csv',
-    format:    'TXT · CSV',
-  },
-  {
-    key:       'dates',
-    icon:      'date_range',
-    title:     'Exam Periods',
-    desc:      'Upload the exam window definitions — semester dates, moedim ranges, and exclusions.',
-    fileName:  DATA_FILES.DATES,      // dates.txt → exam_period_file_reader.py
-    accept:    '.txt,.csv',
-    format:    'TXT · CSV',
-  },
-  {
-    key:       'programs',
-    icon:      'group',
-    title:     'Program Selection',
-    desc:      'Upload the list of program IDs to include in this scheduling run.',
-    fileName:  DATA_FILES.PROGRAMS,   // programs.txt → program_selector_reader.py
-    accept:    '.txt,.csv',
-    format:    'TXT · CSV',
-  },
+  { key: 'courses',  icon: 'inventory_2',  title: 'Courses Inventory',   tone: 'secondary',
+    blurb: 'Upload your courses list with program offerings, instructors, and evaluation types.',
+    fileName: DATA_FILES.COURSES, accept: '.txt,.csv' },
+  { key: 'dates',   icon: 'date_range',   title: 'Exam Periods',         tone: 'tertiary',
+    blurb: 'Upload the exam window definitions — semester dates, moedim ranges, and exclusions.',
+    fileName: DATA_FILES.DATES,   accept: '.txt,.csv' },
+  { key: 'programs',icon: 'group',        title: 'Program Selection',    tone: 'primary',
+    blurb: 'Upload the list of program IDs to include in this scheduling run.',
+    fileName: DATA_FILES.PROGRAMS,accept: '.txt,.csv' },
 ]
 
-// ── Sub-components ─────────────────────────────────────────────────────────
-
-function Sidebar({ settingsOpen, onSettingsToggle }) {
-  return (
-    <aside
-      style={{
-        width: '240px',
-        flexShrink: 0,
-        background: 'var(--surface-container-lowest)',
-        borderRight: '1px solid var(--outline-variant)',
-        display: 'flex',
-        flexDirection: 'column',
-        padding: '1.5rem 1rem',
-        minHeight: '100vh',
-        position: 'sticky',
-        top: 0,
-      }}
-    >
-      {/* Logo */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          padding: '0 0.5rem',
-          marginBottom: '2rem',
-        }}
-      >
-        <div
-          style={{
-            width: '30px',
-            height: '30px',
-            borderRadius: '8px',
-            background: 'var(--gradient-primary)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <span className="material-icons-round" style={{ color: 'white', fontSize: '1rem' }}>
-            auto_fix_high
-          </span>
-        </div>
-        <span
-          style={{
-            fontFamily: 'Sora, sans-serif',
-            fontWeight: 700,
-            fontSize: '1rem',
-            color: 'var(--on-surface)',
-            letterSpacing: '-0.02em',
-          }}
-        >
-          Syncademic
-        </span>
-      </div>
-
-      {/* Nav items */}
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1 }}>
-        {NAV_ITEMS.map(item => (
-          item.path === '#settings' ? (
-            <button
-              key={item.label}
-              onClick={onSettingsToggle}
-              className={`sidebar-item${settingsOpen ? ' active' : ''}`}
-              style={{ border: 'none', width: '100%', textAlign: 'left' }}
-            >
-              <span className="material-icons-round">{item.icon}</span>
-              {item.label}
-            </button>
-          ) : (
-            <Link
-              key={item.label}
-              to={item.path}
-              className={`sidebar-item${item.active ? ' active' : ''}`}
-            >
-              <span className="material-icons-round">{item.icon}</span>
-              {item.label}
-            </Link>
-          )
-        ))}
-      </nav>
-
-      {/* System status */}
-      <div
-        style={{
-          padding: '0.75rem 1rem',
-          borderRadius: '0.75rem',
-          background: 'var(--surface-container)',
-          marginTop: '1rem',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
-          <div
-            style={{
-              width: '6px',
-              height: '6px',
-              borderRadius: '50%',
-              background: 'var(--success)',
-            }}
-          />
-          <span
-            style={{
-              fontFamily: 'JetBrains Mono, monospace',
-              fontSize: '0.65rem',
-              color: 'var(--on-surface-variant)',
-              letterSpacing: '0.04em',
-            }}
-          >
-            SYSTEM OPTIMAL
-          </span>
-        </div>
-        <span
-          style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: '0.7rem',
-            color: 'var(--outline)',
-          }}
-        >
-          AI Engine v4.2.0 Online
-        </span>
-      </div>
-    </aside>
-  )
-}
-
-function TopBar() {
-  return (
-    <header
-      style={{
-        height: '64px',
-        borderBottom: '1px solid var(--outline-variant)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '0 2rem',
-        background: 'var(--surface-container-lowest)',
-        position: 'sticky',
-        top: 0,
-        zIndex: 10,
-      }}
-    >
-      <div>
-        <h1
-          style={{
-            fontFamily: 'Sora, sans-serif',
-            fontSize: '1.1rem',
-            fontWeight: 700,
-            color: 'var(--on-surface)',
-            letterSpacing: '-0.02em',
-          }}
-        >
-          Dashboard
-        </h1>
-        <p
-          style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: '0.75rem',
-            color: 'var(--on-surface-variant)',
-          }}
-        >
-          Initialize a new scheduling session
-        </p>
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-        <button
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            padding: '0.5rem',
-            borderRadius: '0.5rem',
-          }}
-        >
-          <span className="material-icons-round" style={{ color: 'var(--on-surface-variant)', fontSize: '1.3rem' }}>
-            notifications_none
-          </span>
-        </button>
-
-        {/* User avatar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
-          <div
-            style={{
-              width: '34px',
-              height: '34px',
-              borderRadius: '50%',
-              background: 'var(--gradient-primary)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontFamily: 'Sora, sans-serif',
-              fontSize: '0.8rem',
-              fontWeight: 700,
-              color: 'white',
-            }}
-          >
-            AT
-          </div>
-          <div>
-            <p
-              style={{
-                fontFamily: 'Sora, sans-serif',
-                fontSize: '0.8rem',
-                fontWeight: 600,
-                color: 'var(--on-surface)',
-              }}
-            >
-              Dr. Aris Thorne
-            </p>
-            <p
-              style={{
-                fontFamily: 'Inter, sans-serif',
-                fontSize: '0.7rem',
-                color: 'var(--on-surface-variant)',
-              }}
-            >
-              Exam Coordinator
-            </p>
-          </div>
-        </div>
-
-        <ThemeToggle />
-
-        <Link
-          to="/"
-          style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: '0.8rem',
-            color: 'var(--outline)',
-            textDecoration: 'none',
-          }}
-        >
-          Sign Out
-        </Link>
-      </div>
-    </header>
-  )
-}
-
-function UploadCard({ card, file, uploading, onFileSelect, isDragOver, onDragOver, onDragLeave, onDrop }) {
-  const inputRef = useRef(null)
-
-  return (
-    <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      {/* Card header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-        <div
-          style={{
-            width: '40px',
-            height: '40px',
-            borderRadius: '10px',
-            background: file
-              ? 'rgba(16,185,129,0.1)'
-              : 'linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.1))',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-            border: '1px solid',
-            borderColor: file ? 'rgba(16,185,129,0.2)' : 'var(--outline-variant)',
-          }}
-        >
-          <span
-            className="material-icons-round"
-            style={{
-              fontSize: '1.25rem',
-              color: file ? 'var(--success)' : 'var(--primary)',
-            }}
-          >
-            {file ? 'check_circle' : card.icon}
-          </span>
-        </div>
-        <div>
-          <h3
-            style={{
-              fontFamily: 'Sora, sans-serif',
-              fontSize: '0.95rem',
-              fontWeight: 700,
-              color: 'var(--on-surface)',
-              marginBottom: '0.2rem',
-              letterSpacing: '-0.01em',
-            }}
-          >
-            {card.title}
-          </h3>
-          <p
-            style={{
-              fontFamily: 'Inter, sans-serif',
-              fontSize: '0.8rem',
-              color: 'var(--on-surface-variant)',
-              lineHeight: 1.5,
-            }}
-          >
-            {card.desc}
-          </p>
-        </div>
-      </div>
-
-      {/* Upload zone */}
-      <div
-        className={`upload-zone${isDragOver ? ' drag-over' : ''}${file ? ' has-file' : ''}`}
-        style={{ padding: '1.5rem', textAlign: 'center' }}
-        onClick={() => inputRef.current?.click()}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        onDrop={onDrop}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept={card.accept}
-          style={{ display: 'none' }}
-          onChange={e => e.target.files[0] && onFileSelect(e.target.files[0])}
-        />
-
-        {uploading ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-            <span className="material-icons-round" style={{ color: 'var(--primary)', fontSize: '1.1rem', animation: 'spin 1s linear infinite' }}>
-              sync
-            </span>
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem', color: 'var(--primary)' }}>
-              Uploading...
-            </span>
-          </div>
-        ) : file ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-            <span className="material-icons-round" style={{ color: 'var(--success)', fontSize: '1.1rem' }}>
-              insert_drive_file
-            </span>
-            <span
-              style={{
-                fontFamily: 'JetBrains Mono, monospace',
-                fontSize: '0.8rem',
-                color: 'var(--success)',
-                fontWeight: 500,
-              }}
-            >
-              {file.name}
-            </span>
-            <button
-              onClick={e => { e.stopPropagation(); onFileSelect(null) }}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '0',
-                lineHeight: 1,
-              }}
-            >
-              <span className="material-icons-round" style={{ color: 'var(--outline)', fontSize: '1rem' }}>
-                close
-              </span>
-            </button>
-          </div>
-        ) : (
-          <>
-            <span
-              className="material-icons-round"
-              style={{ color: 'var(--outline)', fontSize: '1.75rem', display: 'block', marginBottom: '0.5rem' }}
-            >
-              cloud_upload
-            </span>
-            <p
-              style={{
-                fontFamily: 'Inter, sans-serif',
-                fontSize: '0.8rem',
-                color: 'var(--on-surface-variant)',
-                marginBottom: '0.25rem',
-              }}
-            >
-              Drop <span className="mono" style={{ color: 'var(--primary)', fontWeight: 500 }}>{card.fileName}</span> here
-            </p>
-            <p
-              style={{
-                fontFamily: 'JetBrains Mono, monospace',
-                fontSize: '0.65rem',
-                color: 'var(--outline)',
-                letterSpacing: '0.04em',
-              }}
-            >
-              {card.format}
-            </p>
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PLACEHOLDER: Manual Entry Drawer
-// Replace this comment block with <ManualEntryDrawer /> when implementing.
-// The drawer should slide in from the right and expose a form that creates
-// Course records equivalent to a parsed courses.txt row:
-//   { id, name, instructor, evaluationType, offerings: [{ programId, year, semester, requirement }] }
-// Completed entries should be appended to the 'manualCourses' state in useScheduler.
-// ─────────────────────────────────────────────────────────────────────────────
-function ManualEntryDrawerPlaceholder({ open, onClose }) {
-  if (!open) return null
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 100,
-        display: 'flex',
-        justifyContent: 'flex-end',
-      }}
-    >
-      <div
-        style={{ flex: 1, background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}
-        onClick={onClose}
-      />
-      <aside
-        className="glass-light"
-        style={{
-          width: '420px',
-          padding: '2rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1.5rem',
-          overflowY: 'auto',
-          borderLeft: '1px solid var(--outline-variant)',
-          borderRadius: 0,
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2
-            style={{
-              fontFamily: 'Sora, sans-serif',
-              fontSize: '1.1rem',
-              fontWeight: 700,
-              color: 'var(--on-surface)',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Add Course Manually
-          </h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-            <span className="material-icons-round" style={{ color: 'var(--outline)' }}>close</span>
-          </button>
-        </div>
-
-        {/* PLACEHOLDER — form fields to be implemented */}
-        <div
-          style={{
-            padding: '2rem',
-            borderRadius: '1rem',
-            background: 'var(--surface-container)',
-            textAlign: 'center',
-            border: '2px dashed var(--outline-variant)',
-          }}
-        >
-          <span className="material-icons-round" style={{ color: 'var(--outline)', fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>
-            edit_note
-          </span>
-          <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.85rem', color: 'var(--on-surface-variant)' }}>
-            Manual Entry form — to be implemented
-          </p>
-          <p style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.7rem', color: 'var(--outline)', marginTop: '0.5rem' }}>
-            Fields: id · name · instructor · evaluationType · offerings[]
-          </p>
-        </div>
-      </aside>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PLACEHOLDER: Settings Panel
-// Replace this comment block with <SettingsPanel /> when implementing.
-// Settings to expose (aligned with ExamPeriod & AppController config):
-//   1. Rest Days toggle  — array of weekday indices (0=Sun … 6=Sat)
-//      Populates ExamPeriod._is_excluded_date() logic on the backend.
-//   2. Holiday Upload    — date range picker or file upload for excluded_dates
-//      Appended to ExamPeriod.excluded_dates before generation.
-//   3. Min Gap Days      — minimum study gap enforced by ScheduleGenerator
-//   4. Prefer Early Moed — prioritize Aleph before Bet in sorting
-// ─────────────────────────────────────────────────────────────────────────────
-function SettingsPanelPlaceholder({ open, onClose, settings, updateSetting }) {
-  if (!open) return null
-
-  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-
-  const toggleRestDay = (idx) => {
-    const current = settings.restDays || []
-    const updated = current.includes(idx)
-      ? current.filter(d => d !== idx)
-      : [...current, idx]
-    updateSetting('restDays', updated)
-  }
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 100,
-        display: 'flex',
-        justifyContent: 'flex-end',
-      }}
-    >
-      <div
-        style={{ flex: 1, background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)' }}
-        onClick={onClose}
-      />
-      <aside
-        className="glass-light"
-        style={{
-          width: '380px',
-          padding: '2rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1.5rem',
-          overflowY: 'auto',
-          borderLeft: '1px solid var(--outline-variant)',
-          borderRadius: 0,
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2
-            style={{
-              fontFamily: 'Sora, sans-serif',
-              fontSize: '1.1rem',
-              fontWeight: 700,
-              color: 'var(--on-surface)',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Settings
-          </h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-            <span className="material-icons-round" style={{ color: 'var(--outline)' }}>close</span>
-          </button>
-        </div>
-
-        {/* Rest Days toggle */}
-        <div>
-          <h3
-            style={{
-              fontFamily: 'Sora, sans-serif',
-              fontSize: '0.875rem',
-              fontWeight: 600,
-              color: 'var(--on-surface)',
-              marginBottom: '0.75rem',
-            }}
-          >
-            Rest Days
-          </h3>
-          <p
-            style={{
-              fontFamily: 'Inter, sans-serif',
-              fontSize: '0.8rem',
-              color: 'var(--on-surface-variant)',
-              marginBottom: '0.875rem',
-              lineHeight: 1.5,
-            }}
-          >
-            Toggle days on which exams cannot be scheduled.
-            Populates <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--primary)' }}>ExamPeriod.excluded_dates</span>.
-          </p>
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            {DAYS.map((day, idx) => {
-              const isRest = (settings.restDays || []).includes(idx)
-              return (
-                <button
-                  key={day}
-                  onClick={() => toggleRestDay(idx)}
-                  style={{
-                    padding: '0.4rem 0.75rem',
-                    borderRadius: '9999px',
-                    border: '1.5px solid',
-                    borderColor: isRest ? 'var(--secondary)' : 'var(--outline-variant)',
-                    background: isRest
-                      ? 'linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.1))'
-                      : 'transparent',
-                    fontFamily: 'Sora, sans-serif',
-                    fontSize: '0.78rem',
-                    fontWeight: 600,
-                    color: isRest ? 'var(--secondary)' : 'var(--on-surface-variant)',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  {day}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Holiday upload — PLACEHOLDER */}
-        <div>
-          <h3
-            style={{
-              fontFamily: 'Sora, sans-serif',
-              fontSize: '0.875rem',
-              fontWeight: 600,
-              color: 'var(--on-surface)',
-              marginBottom: '0.75rem',
-            }}
-          >
-            Holiday Exclusions
-          </h3>
-          <p
-            style={{
-              fontFamily: 'Inter, sans-serif',
-              fontSize: '0.8rem',
-              color: 'var(--on-surface-variant)',
-              marginBottom: '0.875rem',
-              lineHeight: 1.5,
-            }}
-          >
-            Upload a list of holiday dates to exclude from all exam periods.
-            Merged into <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--primary)' }}>ExamPeriod.excluded_dates</span>.
-          </p>
-          {/* PLACEHOLDER — holiday file upload or date picker to be implemented */}
-          <div
-            className="upload-zone"
-            style={{ padding: '1.25rem', textAlign: 'center' }}
-          >
-            <span
-              className="material-icons-round"
-              style={{ color: 'var(--outline)', fontSize: '1.5rem', display: 'block', marginBottom: '0.4rem' }}
-            >
-              event_busy
-            </span>
-            <p
-              style={{
-                fontFamily: 'Inter, sans-serif',
-                fontSize: '0.78rem',
-                color: 'var(--on-surface-variant)',
-              }}
-            >
-              Holiday list upload — to be implemented
-            </p>
-          </div>
-        </div>
-
-        {/* Min gap days */}
-        <div>
-          <h3
-            style={{
-              fontFamily: 'Sora, sans-serif',
-              fontSize: '0.875rem',
-              fontWeight: 600,
-              color: 'var(--on-surface)',
-              marginBottom: '0.5rem',
-            }}
-          >
-            Minimum Study Gap
-          </h3>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <input
-              type="range"
-              min={0}
-              max={7}
-              value={settings.minGapDays ?? 1}
-              onChange={e => updateSetting('minGapDays', Number(e.target.value))}
-              style={{ flex: 1, accentColor: 'var(--primary)' }}
-            />
-            <span
-              style={{
-                fontFamily: 'JetBrains Mono, monospace',
-                fontSize: '0.9rem',
-                fontWeight: 600,
-                color: 'var(--primary)',
-                minWidth: '2rem',
-                textAlign: 'right',
-              }}
-            >
-              {settings.minGapDays ?? 1}d
-            </span>
-          </div>
-          <p
-            style={{
-              fontFamily: 'Inter, sans-serif',
-              fontSize: '0.75rem',
-              color: 'var(--outline)',
-              marginTop: '0.25rem',
-            }}
-          >
-            Days enforced between consecutive exams for the same student group
-          </p>
-        </div>
-      </aside>
-    </div>
-  )
-}
-
-// ── Upload helpers keyed to API calls ─────────────────────────────────────
 const UPLOAD_FN = {
   courses:  (file) => api.uploadCourses(file),
   dates:    (file) => api.uploadPeriods(file),
-  programs: (file) => Promise.resolve({ message: 'Programs file stored locally.' }),
+  programs: () => Promise.resolve({ message: 'Programs file stored locally.' }),
 }
 
-// ── Main component ─────────────────────────────────────────────────────────
+function DropZone({ tone, label, fileName, onSelect, uploading }) {
+  const [drag, setDrag] = useState(false)
+  const inputRef = useRef(null)
+  const tones = {
+    primary:   { fg: '#adc6ff', glow: 'rgba(173,198,255,0.30)' },
+    secondary: { fg: '#d0bcff', glow: 'rgba(208,188,255,0.30)' },
+    tertiary:  { fg: '#ffb786', glow: 'rgba(255,183,134,0.30)' },
+  }
+  const t = tones[tone]
+  return (
+    <div
+      onDragEnter={e => { e.preventDefault(); setDrag(true) }}
+      onDragOver={e => e.preventDefault()}
+      onDragLeave={() => setDrag(false)}
+      onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) onSelect(f) }}
+      onClick={() => inputRef.current?.click()}
+      className="w-full rounded-2xl py-7 px-5 flex flex-col items-center gap-2 cursor-pointer relative overflow-hidden transition-all"
+      style={{
+        border: `2px dashed ${drag ? t.fg : 'rgba(255,255,255,0.10)'}`,
+        background: drag ? `radial-gradient(circle at center, ${t.glow}, transparent 70%)` : fileName ? 'rgba(173,198,255,0.04)' : 'transparent',
+      }}
+    >
+      <input ref={inputRef} type="file" className="hidden" onChange={e => e.target.files[0] && onSelect(e.target.files[0])} />
+      {uploading ? (
+        <>
+          <div className="w-5 h-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+          <span className="text-[11px] text-primary font-semibold tracking-widest uppercase">Uploading…</span>
+        </>
+      ) : fileName ? (
+        <>
+          <Icon name="check_circle" fill className="text-[26px]" style={{ color: t.fg }} />
+          <span className="text-[12px] font-bold text-on-surface">{fileName.name || fileName}</span>
+          <span className="text-[10px] text-on-surface-variant/60">Click to replace</span>
+        </>
+      ) : (
+        <>
+          <Icon name="upload_file" className="text-on-surface-variant/50 text-[26px]" />
+          <span className="text-[10px] uppercase tracking-[0.16em] font-semibold text-on-surface-variant/70">{label}</span>
+        </>
+      )}
+    </div>
+  )
+}
+
+function DataCard({ config, file, uploading, onSelect }) {
+  const tones = {
+    primary:   { fg: '#adc6ff', glow: 'rgba(173,198,255,0.18)' },
+    secondary: { fg: '#d0bcff', glow: 'rgba(208,188,255,0.18)' },
+    tertiary:  { fg: '#ffb786', glow: 'rgba(255,183,134,0.18)' },
+  }
+  const t = tones[config.tone]
+  return (
+    <div className="glass glass-hover rounded-3xl p-7 flex flex-col group relative overflow-hidden">
+      <div className="absolute -top-20 -right-20 w-48 h-48 rounded-full pointer-events-none" style={{ background: t.glow, filter: 'blur(60px)' }} />
+      <div className="relative">
+        <div className="w-14 h-14 rounded-2xl glass-inner flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-500"
+          style={{ boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)' }}>
+          <Icon name={config.icon} className="text-[26px]" style={{ color: t.fg }} />
+        </div>
+        <h3 className="text-[22px] font-semibold mb-3">{config.title}</h3>
+        <p className="text-on-surface-variant/70 text-[13px] mb-6 leading-relaxed">{config.blurb}</p>
+        <DropZone tone={config.tone} label="Drop file here" fileName={file} onSelect={onSelect} uploading={uploading} />
+      </div>
+    </div>
+  )
+}
+
+function Metric({ k, v }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold mb-1">{k}</div>
+      <div className="text-[20px] font-bold text-on-surface">{v}</div>
+    </div>
+  )
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
+  const current = useCurrent()
   const { files, setFile, settings, updateSetting, isReadyToGenerate, startProcessing,
           selectedPrograms, setSelectedPrograms } = useScheduler()
   const { toasts, toast, dismiss } = useToast()
 
-  const [manualEntryOpen, setManualEntryOpen] = useState(false)
-  const [settingsOpen,     setSettingsOpen]    = useState(false)
-  const [configTab,        setConfigTab]       = useState('programmes')  // 'programmes' | 'periods'
-  const [dragOver,         setDragOver]        = useState({})
-  const [uploading,        setUploading]       = useState({})
+  const [configTab,  setConfigTab]  = useState('programmes')
+  const [uploading,  setUploading]  = useState({})
 
-  const handleDragOver  = useCallback((key, e) => { e.preventDefault(); setDragOver(p => ({ ...p, [key]: true }))  }, [])
-  const handleDragLeave = useCallback((key)    => { setDragOver(p => ({ ...p, [key]: false }))                      }, [])
-
-  const handleDrop = useCallback((key, e) => {
-    e.preventDefault()
-    setDragOver(p => ({ ...p, [key]: false }))
-    const dropped = e.dataTransfer.files[0]
-    if (dropped) handleFileSelect(key, dropped)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const filesUploaded = Object.values(files).filter(Boolean).length
 
   const handleFileSelect = useCallback(async (key, file) => {
     if (!file) { setFile(key, null); return }
@@ -810,284 +140,222 @@ export default function Dashboard() {
   }
 
   return (
-    <PageShell style={{ display: 'flex', minHeight: '100vh', background: 'var(--surface)' }}>
-      <Sidebar settingsOpen={settingsOpen} onSettingsToggle={() => setSettingsOpen(true)} />
+    <WorkspaceShell
+      current={current}
+      title="Dashboard Overview"
+      subtitle="Initialize Session"
+      right={
+        <button className="glass btn-ghost rounded-full px-4 py-2 text-[11px] uppercase tracking-[0.12em] font-semibold text-on-surface flex items-center gap-2 mr-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-primary pulse-soft" />
+          Engine v4.2.0
+        </button>
+      }
+    >
+      <div className="screen-anim space-y-12">
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <TopBar />
+        {/* Hero */}
+        <section className="grid grid-cols-12 gap-6 items-end">
+          <div className="col-span-12 lg:col-span-8">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-on-surface-variant/60 font-semibold mb-3">Initialize session</p>
+            <h1 className="text-[44px] md:text-[56px] font-extrabold tracking-tight leading-[1.05] mb-4 text-balance">
+              Upload your datasets to begin <span className="grad-text-cool">orchestration</span>.
+            </h1>
+            <p className="text-on-surface-variant/75 text-[15px] max-w-2xl leading-relaxed">
+              The Syncademic engine will optimize classroom utility and minimize student conflicts across faculties. Three timelines are streamed in parallel.
+            </p>
+          </div>
+          <div className="col-span-12 lg:col-span-4">
+            <div className="glass rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold">Data integrity</span>
+                <span className="text-[11px] font-bold text-primary">{Math.round((filesUploaded / 3) * 100)}%</span>
+              </div>
+              <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden mb-3">
+                <div className="h-full transition-all duration-700"
+                  style={{ width: `${(filesUploaded / 3) * 100}%`, background: 'linear-gradient(90deg,#3b82f6,#8b5cf6)', boxShadow: '0 0 12px rgba(173,198,255,0.5)' }} />
+              </div>
+              <p className="text-[11px] text-on-surface-variant/60">{filesUploaded} of 3 datasets validated</p>
+            </div>
+          </div>
+        </section>
 
-        <main style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
+        {/* Upload cards */}
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {UPLOAD_CARDS.map(card => (
+            <DataCard
+              key={card.key}
+              config={card}
+              file={files[card.key]}
+              uploading={uploading[card.key]}
+              onSelect={f => handleFileSelect(card.key, f)}
+            />
+          ))}
+        </section>
 
-          {/* ── Session header ─────────────────────────────────────────── */}
-          <div style={{ marginBottom: '2rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+        {/* Summary tiles */}
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-5">
+          {[
+            { k: 'Active cohort',  v: '8,412', d: '↑ 6.2% YoY',         tone: 'primary',   icon: 'groups'       },
+            { k: 'Exams to place', v: '142',   d: 'across 12 faculties', tone: 'secondary', icon: 'assignment'   },
+            { k: 'Venues',         v: '37',    d: '88% utilization',     tone: 'tertiary',  icon: 'meeting_room' },
+            { k: 'Days available', v: '21',    d: 'Dec 1 – Dec 21',      tone: 'primary',   icon: 'date_range'   },
+          ].map(s => (
+            <div key={s.k} className="glass glass-hover rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold">{s.k}</span>
+                <div className="w-8 h-8 rounded-lg glass-inner flex items-center justify-center">
+                  <Icon name={s.icon} className={`text-[16px] ${s.tone === 'primary' ? 'text-primary' : s.tone === 'secondary' ? 'text-secondary' : 'text-tertiary'}`} />
+                </div>
+              </div>
+              <div className={`text-[30px] font-bold leading-none mb-1 ${s.tone === 'primary' ? 'text-primary' : s.tone === 'secondary' ? 'text-secondary' : 'text-tertiary'}`}>{s.v}</div>
+              <div className="text-[11px] text-on-surface-variant/60">{s.d}</div>
+            </div>
+          ))}
+        </section>
+
+        {/* Recent runs + Constraints */}
+        <section className="grid grid-cols-12 gap-6">
+          <div className="col-span-12 lg:col-span-7 glass glass-hover rounded-3xl p-7">
+            <div className="flex items-center justify-between mb-6">
               <div>
-                <h2
-                  style={{
-                    fontFamily: 'Sora, sans-serif',
-                    fontSize: '1.4rem',
-                    fontWeight: 700,
-                    color: 'var(--on-surface)',
-                    letterSpacing: '-0.02em',
-                    marginBottom: '0.25rem',
-                  }}
-                >
-                  Initialize Session
-                </h2>
-                <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.875rem', color: 'var(--on-surface-variant)' }}>
-                  Upload the three required data files to begin schedule generation.
-                </p>
+                <p className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold mb-2">Recent solver runs</p>
+                <h3 className="text-[22px] font-semibold">Last 7 days</h3>
               </div>
-
-              {/* Progress indicator */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                {UPLOAD_CARDS.map(card => (
-                  <div
-                    key={card.key}
-                    style={{
-                      width: '8px',
-                      height: '8px',
-                      borderRadius: '50%',
-                      background: files[card.key]
-                        ? 'var(--success)'
-                        : 'var(--outline-variant)',
-                      transition: 'background 0.2s',
-                    }}
-                  />
-                ))}
-                <span
-                  style={{
-                    fontFamily: 'JetBrains Mono, monospace',
-                    fontSize: '0.7rem',
-                    color: 'var(--on-surface-variant)',
-                    marginLeft: '0.25rem',
-                  }}
-                >
-                  {Object.values(files).filter(Boolean).length} / 3 uploaded
-                </span>
-              </div>
+              <Chip tone="primary">Online</Chip>
+            </div>
+            <div className="flex items-end gap-3 h-32">
+              {[35, 52, 48, 78, 64, 92, 88, 100].map((v, i) => {
+                const labels = ['18', '19', '20', '21', '22', '23', '24', '25']
+                const active = i === 7
+                return (
+                  <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
+                    <div className="text-[10px] font-bold text-on-surface-variant/40 group-hover:text-primary transition-colors">{v === 100 ? 18 : Math.round(v * 18 / 100)}</div>
+                    <div className="w-full rounded-t-lg transition-all relative" style={{
+                      height: `${v}%`,
+                      background: active ? 'linear-gradient(180deg, #adc6ff 0%, rgba(139,92,246,0.4) 100%)' : 'rgba(173,198,255,0.18)',
+                      boxShadow: active ? '0 0 20px rgba(173,198,255,0.4)' : 'none',
+                    }} />
+                    <div className="text-[9px] uppercase tracking-widest text-on-surface-variant/50">May {labels[i]}</div>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-white/5">
+              <Metric k="Avg solve time" v="11.4s" />
+              <Metric k="Solver health" v="99.8%" />
+              <Metric k="Conflicts resolved" v="2,847" />
             </div>
           </div>
 
-          {/* ── Upload cards ───────────────────────────────────────────── */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-              gap: '1.25rem',
-              marginBottom: '2rem',
-            }}
-          >
-            {UPLOAD_CARDS.map(card => (
-              <UploadCard
-                key={card.key}
-                card={card}
-                file={files[card.key]}
-                uploading={uploading[card.key]}
-                onFileSelect={f => handleFileSelect(card.key, f)}
-                isDragOver={dragOver[card.key]}
-                onDragOver={e  => handleDragOver(card.key, e)}
-                onDragLeave={() => handleDragLeave(card.key)}
-                onDrop={e      => handleDrop(card.key, e)}
-              />
-            ))}
-          </div>
-
-          {/* ── Action row ─────────────────────────────────────────────── */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '1rem',
-              flexWrap: 'wrap',
-              padding: '1.5rem',
-              background: 'var(--surface-container-lowest)',
-              border: '1px solid var(--outline-variant)',
-              borderRadius: '1.25rem',
-            }}
-          >
-            {/* Manual entry — PLACEHOLDER trigger */}
-            <button
-              className="btn-secondary"
-              onClick={() => setManualEntryOpen(true)}
-              style={{ gap: '0.4rem' }}
-            >
-              <span className="material-icons-round" style={{ fontSize: '1rem' }}>add</span>
-              Add Course Manually
-            </button>
-
-            <div style={{ flex: 1 }} />
-
-            {!isReadyToGenerate && (
-              <p
-                style={{
-                  fontFamily: 'Inter, sans-serif',
-                  fontSize: '0.8rem',
-                  color: 'var(--outline)',
-                }}
-              >
-                Upload all 3 files to enable generation
-              </p>
-            )}
-
-            <button
-              className="btn-primary"
-              disabled={!isReadyToGenerate}
-              onClick={handleGenerate}
-              style={{
-                opacity: isReadyToGenerate ? 1 : 0.45,
-                cursor: isReadyToGenerate ? 'pointer' : 'not-allowed',
-              }}
-            >
-              <span className="material-icons-round" style={{ fontSize: '1.1rem' }}>auto_awesome</span>
-              Generate Schedule
-            </button>
-          </div>
-
-          {/* ── Info strip: file format reminder ─────────────────────── */}
-          <div
-            style={{
-              marginTop: '1.5rem',
-              padding: '1rem 1.25rem',
-              borderRadius: '0.875rem',
-              background: 'var(--surface-container)',
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '0.75rem',
-            }}
-          >
-            <span className="material-icons-round" style={{ color: 'var(--primary)', fontSize: '1.1rem', marginTop: '1px', flexShrink: 0 }}>
-              info
-            </span>
-            <div>
-              <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.8rem', color: 'var(--on-surface)', marginBottom: '0.25rem', fontWeight: 500 }}>
-                Expected file format
-              </p>
-              <p style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.75rem', color: 'var(--on-surface-variant)', lineHeight: 1.6 }}>
-                <strong>courses.txt</strong> — delimited by <code>$$$$</code> · fields: name, id, instructor, offerings, eval_type<br />
-                <strong>dates.txt</strong> — semester / moed / date ranges / excluded dates<br />
-                <strong>programs.txt</strong> — one program ID per line (e.g. 83101)
-              </p>
-            </div>
-          </div>
-
-          {/* ── Configure Session (appears once all 3 files are uploaded) ── */}
-          {isReadyToGenerate && (
-            <div style={{ marginTop: '2.5rem' }}>
-
-              {/* Section header + tab bar */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
-                <div>
-                  <h2 style={{ fontFamily: 'Sora, sans-serif', fontSize: '1.2rem', fontWeight: 700, color: 'var(--on-surface)', letterSpacing: '-0.02em', marginBottom: '0.2rem' }}>
-                    Configure Session
-                  </h2>
-                  <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.82rem', color: 'var(--on-surface-variant)' }}>
-                    Select programmes, browse courses, and tune exam period windows.
-                  </p>
-                </div>
-
-                {/* Tab toggle */}
-                <div style={{ display: 'flex', gap: '0.25rem', padding: '0.25rem', background: 'var(--surface-container)', borderRadius: '9999px' }}>
-                  {[
-                    { key: 'programmes', label: 'Programmes & Courses', icon: 'school'      },
-                    { key: 'periods',    label: 'Exam Periods',          icon: 'date_range'  },
-                  ].map(tab => (
-                    <button
-                      key={tab.key}
-                      onClick={() => setConfigTab(tab.key)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.35rem',
-                        padding: '0.4rem 1rem',
-                        borderRadius: '9999px',
-                        border: 'none',
-                        background: configTab === tab.key ? 'white' : 'transparent',
-                        boxShadow: configTab === tab.key ? 'var(--glass-shadow)' : 'none',
-                        fontFamily: 'Sora, sans-serif',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        color: configTab === tab.key ? 'var(--primary)' : 'var(--on-surface-variant)',
-                        cursor: 'pointer',
-                        transition: 'all 0.15s',
-                      }}
-                    >
-                      <span className="material-icons-round" style={{ fontSize: '0.95rem' }}>{tab.icon}</span>
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
+          <div className="col-span-12 lg:col-span-5 glass glass-hover rounded-3xl p-7">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.18em] text-on-surface-variant/60 font-semibold mb-2">Active constraints</p>
+                <h3 className="text-[22px] font-semibold">8 hard rules</h3>
               </div>
-
-              {/* Tab content */}
-              {configTab === 'programmes' ? (
-                <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '1.25rem', alignItems: 'start' }}>
-                  <ProgrammePanel
-                    selected={selectedPrograms}
-                    onChange={setSelectedPrograms}
-                    toast={toast}
-                  />
-                  <CourseAccordion
-                    selectedPrograms={selectedPrograms}
-                    programmes={[]}
-                    toast={toast}
-                  />
-                </div>
-              ) : (
-                <ExamPeriodCalendar toast={toast} />
-              )}
+              <button className="glass-inner rounded-full px-3 py-1.5 text-[11px] font-semibold text-on-surface-variant hover:text-primary transition-colors">
+                <Icon name="tune" className="text-[14px] mr-1 align-middle" /> Adjust
+              </button>
             </div>
-          )}
-        </main>
+            <div className="space-y-3">
+              {[
+                { l: 'No back-to-back examinations within 12h',  on: true  },
+                { l: 'Religious holidays (3 calendars)',           on: true  },
+                { l: 'Min 2-day study gap between disciplines',   on: true  },
+                { l: 'Venue capacity ≤ 1.05× enrolled',           on: true  },
+                { l: 'Accessibility-first room assignment',        on: true  },
+                { l: 'Faculty workload caps',                      on: false },
+              ].map((c, i) => (
+                <div key={i} className="glass-inner rounded-xl px-4 py-3 flex items-center justify-between">
+                  <span className="text-[13px] text-on-surface-variant flex items-center gap-3">
+                    <span className="w-1.5 h-1.5 rounded-full" style={{
+                      background: c.on ? '#adc6ff' : 'rgba(255,255,255,0.2)',
+                      boxShadow: c.on ? '0 0 8px rgba(173,198,255,0.6)' : 'none',
+                    }} />
+                    {c.l}
+                  </span>
+                  <div className="w-9 h-5 rounded-full relative transition-all" style={{ background: c.on ? 'rgba(173,198,255,0.25)' : 'rgba(255,255,255,0.08)' }}>
+                    <div className="w-4 h-4 rounded-full absolute top-0.5 transition-all" style={{
+                      left: c.on ? 'calc(100% - 18px)' : '2px',
+                      background: c.on ? '#adc6ff' : 'rgba(255,255,255,0.3)',
+                      boxShadow: c.on ? '0 0 10px rgba(173,198,255,0.7)' : 'none',
+                    }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
 
-        {/* ── Footer ───────────────────────────────────────────────────── */}
-        <footer
+        {/* CTA strip */}
+        <section
+          className="rounded-[28px] p-8 md:p-10 flex flex-col md:flex-row items-center justify-between gap-8 relative overflow-hidden"
           style={{
-            padding: '1rem 2rem',
-            borderTop: '1px solid var(--outline-variant)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            background: 'var(--surface-container-lowest)',
+            background: 'linear-gradient(135deg, rgba(59,130,246,0.10), rgba(139,92,246,0.10))',
+            border: '1px solid rgba(173,198,255,0.18)',
+            backdropFilter: 'blur(40px)',
           }}
         >
-          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.7rem', color: 'var(--outline)' }}>
-            © 2024 Syncademic Labs
-          </span>
-          <div style={{ display: 'flex', gap: '1.5rem' }}>
-            {['Security Protocol', 'Privacy Policy', 'API Docs'].map(l => (
-              <a
-                key={l}
-                href="#"
-                style={{
-                  fontFamily: 'Inter, sans-serif',
-                  fontSize: '0.75rem',
-                  color: 'var(--outline)',
-                  textDecoration: 'none',
-                }}
-              >
-                {l}
-              </a>
-            ))}
+          <div className="absolute -inset-px rounded-[28px] pointer-events-none" style={{
+            background: 'radial-gradient(40% 60% at 20% 20%, rgba(59,130,246,0.18), transparent 70%), radial-gradient(40% 60% at 80% 80%, rgba(139,92,246,0.18), transparent 70%)',
+          }} />
+          <div className="relative max-w-xl">
+            <Chip tone={isReadyToGenerate ? 'primary' : 'tertiary'} className="mb-3">
+              {isReadyToGenerate ? 'All systems go' : `${3 - filesUploaded} dataset${3 - filesUploaded === 1 ? '' : 's'} pending`}
+            </Chip>
+            <h3 className="text-[28px] md:text-[32px] font-bold leading-tight mb-2">Ready to orchestrate?</h3>
+            <p className="text-on-surface-variant/75 text-[14px] leading-relaxed">
+              Review your data integrity or proceed to generate the optimal schedule. You can manually adjust parameters in the next step.
+            </p>
           </div>
-        </footer>
+          <div className="relative flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+            <GhostButton size="md" icon="add">Add course manually</GhostButton>
+            <GradButton size="md" icon="auto_awesome" onClick={handleGenerate} disabled={!isReadyToGenerate}>
+              Generate schedule
+            </GradButton>
+          </div>
+        </section>
+
+        {/* Configure Session */}
+        {isReadyToGenerate && (
+          <section>
+            <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
+              <div>
+                <h2 className="text-[28px] font-bold tracking-tight mb-1">Configure Session</h2>
+                <p className="text-on-surface-variant/70 text-[14px]">Select programmes, browse courses, and tune exam period windows.</p>
+              </div>
+              <div className="flex glass-inner p-1 rounded-full gap-1">
+                {[
+                  { key: 'programmes', label: 'Programmes & Courses', icon: 'school'    },
+                  { key: 'periods',    label: 'Exam Periods',         icon: 'date_range' },
+                ].map(tab => (
+                  <button key={tab.key} onClick={() => setConfigTab(tab.key)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-full text-[12px] uppercase tracking-[0.08em] font-semibold transition-all"
+                    style={configTab === tab.key ? {
+                      background: 'linear-gradient(90deg, #3b82f6, #8b5cf6)',
+                      color: '#fff',
+                      boxShadow: '0 0 14px rgba(173,198,255,0.4)',
+                    } : { color: 'rgba(218,226,253,0.6)' }}>
+                    <Icon name={tab.icon} className="text-[16px]" />
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {configTab === 'programmes' ? (
+              <div className="grid gap-5" style={{ gridTemplateColumns: '300px 1fr' }}>
+                <ProgrammePanel selected={selectedPrograms} onChange={setSelectedPrograms} toast={toast} />
+                <CourseAccordion selectedPrograms={selectedPrograms} programmes={[]} toast={toast} />
+              </div>
+            ) : (
+              <ExamPeriodCalendar toast={toast} />
+            )}
+          </section>
+        )}
       </div>
 
-      {/* ── PLACEHOLDER: Manual Entry Drawer ─────────────────────────────── */}
-      <ManualEntryDrawerPlaceholder
-        open={manualEntryOpen}
-        onClose={() => setManualEntryOpen(false)}
-      />
-
-      {/* ── PLACEHOLDER: Settings Panel ──────────────────────────────────── */}
-      <SettingsPanelPlaceholder
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        settings={settings}
-        updateSetting={updateSetting}
-      />
-
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
-    </PageShell>
+    </WorkspaceShell>
   )
 }

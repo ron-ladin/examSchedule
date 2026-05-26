@@ -43,7 +43,7 @@ export default function NavBar({ currentPath, rightContent }) {
             justifyContent: 'center',
           }}
         >
-          <span className="material-icons-round" style={{ color: 'white', fontSize: '0.9rem' }}>
+          <span className="material-symbols-outlined" style={{ color: 'white', fontSize: '0.9rem' }}>
             auto_fix_high
           </span>
         </div>
@@ -69,7 +69,7 @@ export default function NavBar({ currentPath, rightContent }) {
             className={`sidebar-item${currentPath === item.path ? ' active' : ''}`}
             style={{ padding: '0.5rem 0.875rem', borderRadius: '9999px' }}
           >
-            <span className="material-icons-round" style={{ fontSize: '1rem' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>
               {item.icon}
             </span>
             {item.label}

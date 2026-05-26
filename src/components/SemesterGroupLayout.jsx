@@ -40,7 +40,7 @@ export default function SemesterGroupLayout({ exams = [], onSelectExam }) {
     return (
       <div style={{ padding: '3rem 2rem', textAlign: 'center', color: 'var(--outline)' }}>
         <span
-          className="material-icons-round"
+          className="material-symbols-outlined"
           style={{ fontSize: '2.5rem', display: 'block', marginBottom: '0.75rem' }}
         >
           event_note
@@ -85,7 +85,7 @@ export default function SemesterGroupLayout({ exams = [], onSelectExam }) {
                 }}
               >
                 <span
-                  className="material-icons-round"
+                  className="material-symbols-outlined"
                   style={{ fontSize: '0.9rem', color: 'var(--primary)' }}
                 >
                   school
