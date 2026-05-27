@@ -58,7 +58,7 @@ _PROG_COLORS = ["#AED6F1", "#A9DFBF", "#F9E79F", "#F5CBA7", "#D2B4DE"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Module-level helper
+# Module-level helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_data_table(headers: List[str]) -> QTableWidget:
@@ -78,6 +78,15 @@ def _make_data_table(headers: List[str]) -> QTableWidget:
     table.verticalHeader().setVisible(False)
     table.setAlternatingRowColors(True)
     return table
+
+
+def _file_header(title: str, desc: str) -> tuple:
+    """Return a (bold title QLabel, muted description QLabel) pair for the Files group box."""
+    t = QLabel(title)
+    t.setStyleSheet("font-weight: bold; font-size: 11px;")
+    d = QLabel(desc)
+    d.setStyleSheet("font-size: 10px; color: rgba(173,198,255,0.55);")
+    return t, d
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -348,37 +357,72 @@ class InputScreen(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
+        # Workflow hint banner — tells the user the three steps at a glance
+        steps_lbl = QLabel("① Load files  ·  ② Select programme  ·  ③ Generate")
+        steps_lbl.setWordWrap(True)
+        steps_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        steps_lbl.setStyleSheet(
+            "font-size: 10px; color: rgba(173,198,255,0.6);"
+            "background: rgba(255,255,255,0.04); border-radius: 4px; padding: 4px 6px;"
+        )
+        layout.addWidget(steps_lbl)
+
         # Section — Load Mode
         mode_box = QGroupBox("Load Mode")
-        ml = QHBoxLayout(mode_box)
-        ml.setSpacing(4)
+        ml = QVBoxLayout(mode_box)
+        radios_row = QHBoxLayout()
+        radios_row.setSpacing(4)
         self._mode_group = QButtonGroup(self)
         for label in ("Replace", "Append", "Update"):
             rb = QRadioButton(label)
             self._mode_group.addButton(rb)
-            ml.addWidget(rb)
+            radios_row.addWidget(rb)
         self._mode_group.buttons()[0].setChecked(True)
+        ml.addLayout(radios_row)
+        mode_hint = QLabel("Replace: clear all  ·  Append: add new  ·  Update: overwrite by ID")
+        mode_hint.setStyleSheet("font-size: 10px; color: rgba(173,198,255,0.55);")
+        mode_hint.setWordWrap(True)
+        ml.addWidget(mode_hint)
         layout.addWidget(mode_box)
 
         # Section — Files
         files_box = QGroupBox("Files")
         fl = QVBoxLayout(files_box)
-        fl.setSpacing(6)
+        fl.setSpacing(4)
 
-        # Courses row
+        # Courses sub-section
+        th, dh = _file_header("\U0001f4da Courses", "Course IDs, names & programme links")
+        fl.addWidget(th)
+        fl.addWidget(dh)
         cr = QHBoxLayout()
         self._load_courses_btn = QPushButton("Load Courses")
         self._load_courses_btn.clicked.connect(self._load_courses)
+        self._load_courses_btn.setToolTip(
+            "Load a .txt file containing courses:\n"
+            "  • course ID, name, year, semester\n"
+            "  • programme assignment (CS, Math…)\n"
+            "  • requirement type (obligatory / elective)"
+        )
         self._courses_label = QLabel("No file loaded")
         self._courses_label.setWordWrap(True)
         cr.addWidget(self._load_courses_btn)
         cr.addWidget(self._courses_label, 1)
         fl.addLayout(cr)
 
-        # Periods row
+        fl.addSpacing(6)
+
+        # Exam Periods sub-section
+        th2, dh2 = _file_header("\U0001f4c5 Exam Periods", "Scheduling date windows (start → end)")
+        fl.addWidget(th2)
+        fl.addWidget(dh2)
         pr = QHBoxLayout()
         self._load_periods_btn = QPushButton("Load Periods")
         self._load_periods_btn.clicked.connect(self._load_dates)
+        self._load_periods_btn.setToolTip(
+            "Load a .txt file containing exam periods:\n"
+            "  • period name (e.g. Moed A, Moed B)\n"
+            "  • start date and end date"
+        )
         self._dates_label = QLabel("No file loaded")
         self._dates_label.setWordWrap(True)
         pr.addWidget(self._load_periods_btn)
@@ -424,10 +468,23 @@ class InputScreen(QWidget):
         self._workspace = QTabWidget()
 
         # Tab 1 — Course Details (§2.3)
+        course_tab = QWidget()
+        ct_layout = QVBoxLayout(course_tab)
+        ct_layout.setContentsMargins(0, 0, 0, 0)
+        self._courses_placeholder = QLabel(
+            "No courses loaded yet.\n\nLoad a courses file from the sidebar."
+        )
+        self._courses_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._courses_placeholder.setStyleSheet(
+            "font-size: 13px; color: rgba(173,198,255,0.5);"
+        )
+        ct_layout.addWidget(self._courses_placeholder)
         self._course_table = _make_data_table(
             ["Course Name", "ID", "Year", "Semester", "Requirement", "Evaluation"]
         )
-        self._workspace.addTab(self._course_table, "Course Details")
+        self._course_table.setVisible(False)
+        ct_layout.addWidget(self._course_table)
+        self._workspace.addTab(course_tab, "Course Details")
 
         # Tab 2 — Exam Periods (§2.4)
         self._periods_container = QWidget()
@@ -548,6 +605,10 @@ class InputScreen(QWidget):
                         course.evaluation_type,
                     ]):
                         self._course_table.setItem(row, col, QTableWidgetItem(value))
+        # Show placeholder when there are no rows (nothing selected or no courses loaded)
+        has_rows = self._course_table.rowCount() > 0
+        self._courses_placeholder.setVisible(not has_rows)
+        self._course_table.setVisible(has_rows)
 
     # ── Tab 2: Exam period date editors ───────────────────────────────────────
 
