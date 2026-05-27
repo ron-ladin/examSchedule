@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 
@@ -28,7 +28,7 @@ _cache = JsonCacheAdapter()
 @router.patch("/courses/upload", response_model=UploadResponseDTO)
 async def upload_courses(
     file: UploadFile = File(...),
-    mode: str = Query(default="replace", pattern="^(replace|append)$"),
+    mode: Literal["replace", "append"] = Query(default="replace"),
     session: SessionData = Depends(get_session),
 ) -> UploadResponseDTO:
     """Accept a JSON file of course objects.
@@ -50,7 +50,7 @@ async def upload_courses(
 @router.patch("/periods/upload", response_model=UploadResponseDTO)
 async def upload_periods(
     file: UploadFile = File(...),
-    mode: str = Query(default="replace", pattern="^(replace|append)$"),
+    mode: Literal["replace", "append"] = Query(default="replace"),
     session: SessionData = Depends(get_session),
 ) -> UploadResponseDTO:
     """Accept a JSON file of exam period objects.
