@@ -429,6 +429,26 @@ class InputScreen(QWidget):
         pr.addWidget(self._dates_label, 1)
         fl.addLayout(pr)
 
+        fl.addSpacing(6)
+
+        # Programmes sub-section
+        th3, dh3 = _file_header("\U0001f393 Programmes", "Which programmes to schedule (max 5)")
+        fl.addWidget(th3)
+        fl.addWidget(dh3)
+        pr2 = QHBoxLayout()
+        self._load_programs_btn = QPushButton("Load Programs")
+        self._load_programs_btn.clicked.connect(self._load_programs)
+        self._load_programs_btn.setToolTip(
+            "Load a .txt file listing programme IDs to schedule:\n"
+            "  • comma-separated 5-digit IDs  (e.g. 83101, 83102)\n"
+            "  • maximum 5 programmes"
+        )
+        self._programs_label = QLabel("No file loaded")
+        self._programs_label.setWordWrap(True)
+        pr2.addWidget(self._load_programs_btn)
+        pr2.addWidget(self._programs_label, 1)
+        fl.addLayout(pr2)
+
         layout.addWidget(files_box)
 
         # Section — Programme selection (§2.2)
@@ -438,7 +458,7 @@ class InputScreen(QWidget):
 
         # Placeholder shown while the list is empty (before a courses file is loaded)
         self._prog_placeholder = QLabel(
-            "Programmes appear here\nafter loading a courses file."
+            "Programmes appear here\nafter loading a programs or courses file."
         )
         self._prog_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._prog_placeholder.setStyleSheet(
@@ -555,6 +575,23 @@ class InputScreen(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Load Error", str(exc))
             logger.exception("Error loading exam periods")
+
+    def _load_programs(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Programs File", "", "Text files (*.txt);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            count = self._controller.load_programs(Path(path))
+            self._programs_label.setText(f"{Path(path).name}  ({count})")
+            self._programs_label.setStyleSheet("font-size:10px; color:#a9dfbf;")
+            self._refresh_programme_list()
+            self._status_label.setText(f"{count} programme(s) loaded.")
+            self._update_gen_btn()
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Error", str(exc))
+            logger.exception("Error loading programs")
 
     # ── Programme management ───────────────────────────────────────────────────
 

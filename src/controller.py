@@ -25,6 +25,7 @@ from src.adapters.exact_conflict_strategy import ExactConflictStrategy
 from src.adapters.in_memory_data_provider import InMemoryDataProvider
 from src.adapters.readers.course_file_reader import CourseFileReader
 from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
+from src.adapters.readers.program_selector_reader import ProgramSelectorReader
 from src.adapters.text_file_exporter import TextFileExporter
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
@@ -67,6 +68,7 @@ class DesktopController:
         self._courses: List[Course] = []
         self._exam_periods: List[ExamPeriod] = []
         self._selected_programs: List[str] = []
+        self._loaded_program_ids: List[str] = []  # populated by load_programs()
 
     # ── Data loading ──────────────────────────────────────────────────────────
 
@@ -84,6 +86,16 @@ class DesktopController:
             mode, len(new_courses), len(self._courses),
         )
         return len(self._courses)
+
+    def load_programs(self, path: Path) -> int:
+        """
+        Load programme IDs from a comma-separated programmes file.
+        Returns the number of programme IDs loaded.
+        """
+        reader = ProgramSelectorReader(Path(path))
+        self._loaded_program_ids = reader.read()
+        logger.info("load_programs: loaded=%d ids=%s", len(self._loaded_program_ids), self._loaded_program_ids)
+        return len(self._loaded_program_ids)
 
     def load_periods(self, path: Path, mode: str = "replace") -> int:
         """
@@ -140,7 +152,13 @@ class DesktopController:
         return bool(self._exam_periods)
 
     def get_programme_ids(self) -> List[str]:
-        """Return sorted unique programme IDs from all loaded course offerings."""
+        """
+        Return programme IDs to display in the sidebar list.
+        Prefers the explicitly loaded programs file; falls back to IDs
+        derived from course offerings if no programs file has been loaded.
+        """
+        if self._loaded_program_ids:
+            return list(self._loaded_program_ids)
         ids: set = set()
         for course in self._courses:
             for offering in course.offerings:
