@@ -38,3 +38,6 @@ class SessionData:
 
     # Set on successful generation completion; surfaced by GET /api/data/status
     last_run: datetime | None = None
+
+    # Period keys excluded from generation; managed by PATCH /api/periods/{key}/exclusions
+    excluded_periods: set[str] = field(default_factory=set)
