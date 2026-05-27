@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from datetime import datetime
+import tempfile
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 
+from src.adapters.readers.course_file_reader import CourseFileReader
+from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
 from src.api.adapters.json_cache_adapter import JsonCacheAdapter
 from src.api.exceptions.domain import DomainValidationError
 from src.api.schemas.data import DataStatusDTO, UploadResponseDTO
 from src.api.session.models import SessionData
 from src.api.session.store import get_session
 from src.domain.course import Course
-from src.domain.course_offering import CourseOffering
 from src.domain.exam_period import ExamPeriod
 
 router = APIRouter()
@@ -31,13 +32,13 @@ async def upload_courses(
     mode: Literal["replace", "append"] = Query(default="replace"),
     session: SessionData = Depends(get_session),
 ) -> UploadResponseDTO:
-    """Accept a JSON file of course objects.
+    """Accept a courses.txt file ($$$$-delimited format).
 
     mode=replace clears session.courses then loads the new list.
     mode=append extends session.courses with the new list.
     """
     contents = await file.read()
-    parsed = _parse_courses(contents, file.content_type or "")
+    parsed = _parse_courses(contents)
     if mode == "replace":
         session.courses = parsed
     else:
@@ -53,16 +54,23 @@ async def upload_periods(
     mode: Literal["replace", "append"] = Query(default="replace"),
     session: SessionData = Depends(get_session),
 ) -> UploadResponseDTO:
-    """Accept a JSON file of exam period objects.
+    """Accept a dates.txt file ($$$$-delimited format).
 
     mode=replace clears session.periods then loads the new list.
     mode=append extends session.periods with the new list.
+    Raises 400 if any period key in the upload already exists in the session.
     """
     contents = await file.read()
-    parsed = _parse_periods(contents, file.content_type or "")
+    parsed = _parse_periods(contents)
     if mode == "replace":
         session.periods = parsed
     else:
+        existing_keys = {p.get_key() for p in session.periods}
+        for p in parsed:
+            if p.get_key() in existing_keys:
+                raise DomainValidationError(
+                    f"Period '{p.get_key()}' already exists in the session"
+                )
         session.periods.extend(parsed)
     await asyncio.to_thread(_cache.save, session.courses, session.periods)
     return UploadResponseDTO(count=len(session.periods), mode=mode)
@@ -90,71 +98,31 @@ async def data_status(
 # Private parsers
 # ---------------------------------------------------------------------------
 
-def _parse_courses(contents: bytes, content_type: str) -> list[Course]:
-    """Parse uploaded bytes into Course domain objects (JSON format)."""
+def _parse_courses(contents: bytes) -> list[Course]:
+    """Parse uploaded bytes into Course domain objects using CourseFileReader."""
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+        f.write(contents)
+        tmp = Path(f.name)
     try:
-        raw: Any = json.loads(contents.decode("utf-8"))
-        if not isinstance(raw, list):
-            raise DomainValidationError("Expected a JSON array of course objects")
-        result: list[Course] = []
-        for item in raw:
-            offerings = [
-                CourseOffering(
-                    program_id=str(o["program_id"]),
-                    year=int(o["year"]),
-                    semester=str(o["semester"]),
-                    requirement=str(o["requirement"]),
-                )
-                for o in item.get("offerings", [])
-            ]
-            result.append(
-                Course(
-                    id=str(item["id"]),
-                    name=str(item["name"]),
-                    instructor=str(item["instructor"]),
-                    evaluation_type=str(item["evaluation_type"]),
-                    offerings=offerings,
-                )
-            )
-        return result
-    except DomainValidationError:
-        raise
+        return CourseFileReader(tmp).read()
+    except ValueError as exc:
+        raise DomainValidationError(str(exc)) from exc
     except Exception as exc:
         raise DomainValidationError(f"Invalid course data: {exc}") from exc
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
-def _parse_periods(contents: bytes, content_type: str) -> list[ExamPeriod]:
-    """Parse uploaded bytes into ExamPeriod domain objects (JSON format).
-
-    Expected date format: DD-MM-YYYY (matches the project file format standard).
-    """
+def _parse_periods(contents: bytes) -> list[ExamPeriod]:
+    """Parse uploaded bytes into ExamPeriod domain objects using ExamPeriodFileReader."""
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+        f.write(contents)
+        tmp = Path(f.name)
     try:
-        raw: Any = json.loads(contents.decode("utf-8"))
-        if not isinstance(raw, list):
-            raise DomainValidationError("Expected a JSON array of period objects")
-        result: list[ExamPeriod] = []
-        for item in raw:
-            date_ranges = [
-                (
-                    datetime.strptime(str(r[0]), "%d-%m-%Y").date(),
-                    datetime.strptime(str(r[1]), "%d-%m-%Y").date(),
-                )
-                for r in item.get("date_ranges", [])
-            ]
-            excluded_dates = {
-                datetime.strptime(str(d), "%d-%m-%Y").date()
-                for d in item.get("excluded_dates", [])
-            }
-            result.append(
-                ExamPeriod(
-                    semester=str(item["semester"]),
-                    moed=str(item["moed"]),
-                    date_ranges=date_ranges,
-                    excluded_dates=excluded_dates,
-                )
-            )
-        return result
-    except DomainValidationError:
-        raise
+        return ExamPeriodFileReader(tmp).read()
+    except ValueError as exc:
+        raise DomainValidationError(str(exc)) from exc
     except Exception as exc:
         raise DomainValidationError(f"Invalid period data: {exc}") from exc
+    finally:
+        tmp.unlink(missing_ok=True)
