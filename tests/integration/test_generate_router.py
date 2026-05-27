@@ -4,7 +4,7 @@ from __future__ import annotations
 # Covers: double-trigger guard (409 BUSY), no-data guard (400),
 # 202 acceptance, generation timeout path, and status polling.
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -108,28 +108,28 @@ def test_generate_second_call_blocked_while_running(client_with_data) -> None:
 
 def test_generate_returns_202_when_data_present(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.routers.generate._sync_generate", return_value=[]):
         response = tc.post("/api/schedules/generate", json={"programs": []})
     assert response.status_code == 202
 
 
 def test_generate_202_body_has_message(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.routers.generate._sync_generate", return_value=[]):
         body = tc.post("/api/schedules/generate", json={"programs": []}).json()
     assert "message" in body
 
 
 def test_generate_202_body_has_session_id(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.routers.generate._sync_generate", return_value=[]):
         body = tc.post("/api/schedules/generate", json={"programs": []}).json()
     assert "session_id" in body
 
 
 def test_generate_status_is_completed_after_successful_run(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.routers.generate._sync_generate", return_value=[]):
         tc.post("/api/schedules/generate", json={"programs": []})
     status = tc.get("/api/generate/status").json()
     assert status["status"] == "completed"
@@ -141,18 +141,22 @@ def test_generate_status_is_completed_after_successful_run(client_with_data) -> 
 # patching asyncio.wait_for while to_thread coroutine is already constructed.
 # ---------------------------------------------------------------------------
 
-def _timeout_run(session, programs):
-    """Simulate the timeout branch of _run_generation."""
+def _make_timeout_mock(settings_timeout: int) -> AsyncMock:
+    """Return an AsyncMock that simulates the timeout branch of _run_generation."""
     from src.api.config import settings
-    session.generation_status = "failed"
-    session.generation_error = (
-        f"Generation exceeded the {settings.generation_timeout_seconds}s timeout"
-    )
+
+    async def _timeout_run(session, programs, executor):
+        session.generation_status = "failed"
+        session.generation_error = (
+            f"Generation exceeded the {settings.generation_timeout_seconds}s timeout"
+        )
+
+    return AsyncMock(side_effect=_timeout_run)
 
 
 def test_generate_status_is_failed_on_timeout(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._run_generation", side_effect=_timeout_run):
+    with patch("src.api.routers.generate._run_generation", new=_make_timeout_mock(120)):
         tc.post("/api/schedules/generate", json={"programs": []})
     status = tc.get("/api/generate/status").json()
     assert status["status"] == "failed"
@@ -160,7 +164,7 @@ def test_generate_status_is_failed_on_timeout(client_with_data) -> None:
 
 def test_generate_error_message_mentions_timeout(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._run_generation", side_effect=_timeout_run):
+    with patch("src.api.routers.generate._run_generation", new=_make_timeout_mock(120)):
         tc.post("/api/schedules/generate", json={"programs": []})
     error = tc.get("/api/generate/status").json()["error"]
     assert error is not None
@@ -170,10 +174,10 @@ def test_generate_error_message_mentions_timeout(client_with_data) -> None:
 def test_generate_can_restart_after_timeout(client_with_data) -> None:
     tc, _ = client_with_data
     # First call times out
-    with patch("src.api.routers.generate._run_generation", side_effect=_timeout_run):
+    with patch("src.api.routers.generate._run_generation", new=_make_timeout_mock(120)):
         tc.post("/api/schedules/generate", json={})
     # Status is "failed", not "running" — a second call must be accepted
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.routers.generate._sync_generate", return_value=[]):
         retry = tc.post("/api/schedules/generate", json={})
     assert retry.status_code == 202
 
@@ -210,7 +214,7 @@ def test_generate_error_message_contains_exception_text(client_with_data) -> Non
 
 def test_generate_rejects_more_than_five_programs(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.routers.generate._sync_generate", return_value=[]):
         response = tc.post(
             "/api/schedules/generate",
             json={"programs": ["11111", "22222", "33333", "44444", "55555", "66666"]},
@@ -220,7 +224,7 @@ def test_generate_rejects_more_than_five_programs(client_with_data) -> None:
 
 def test_generate_rejects_duplicate_programs(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.routers.generate._sync_generate", return_value=[]):
         response = tc.post(
             "/api/schedules/generate",
             json={"programs": ["11111", "11111"]},
@@ -230,7 +234,7 @@ def test_generate_rejects_duplicate_programs(client_with_data) -> None:
 
 def test_generate_rejects_non_five_digit_program_id(client_with_data) -> None:
     tc, _ = client_with_data
-    with patch("src.api.routers.generate._sync_generate", return_value=None):
+    with patch("src.api.routers.generate._sync_generate", return_value=[]):
         response = tc.post(
             "/api/schedules/generate",
             json={"programs": ["ABC", "1234"]},

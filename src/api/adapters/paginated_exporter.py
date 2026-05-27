@@ -96,6 +96,11 @@ class PaginatedExporter(IOutputExporter):
                 return
             self._items.append(item)
 
+    def get_all(self) -> list[Any]:
+        """Return a snapshot of every stored schedule (for IPC transfer in _sync_generate)."""
+        with self._lock:
+            return list(self._items)
+
     def get_page(self, page: int, size: int = PAGE_SIZE) -> list[Any]:
         """Return one page of schedules. page=0 is the first page, page=1 is the second, etc."""
         with self._lock:

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from concurrent.futures import Executor
 from datetime import datetime, timezone
+from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 
 from src.adapters.exact_conflict_strategy import ExactConflictStrategy
 from src.api.adapters.in_memory_data_provider import InMemoryDataProvider
+from src.api.adapters.paginated_exporter import PaginatedExporter
 from src.api.config import settings
 from src.api.exceptions.domain import BusyError, DomainValidationError
 from src.api.schemas.generate import (
@@ -17,6 +20,8 @@ from src.api.schemas.generate import (
 )
 from src.api.session.models import SessionData
 from src.api.session.store import get_session
+from src.domain.course import Course
+from src.domain.exam_period import ExamPeriod
 from src.engine.app_controller import AppController
 from src.engine.schedule_generator import ScheduleGenerator
 
@@ -27,44 +32,73 @@ router = APIRouter(tags=["generate"])
 _SESSION_ID = "default"
 
 
-def _sync_generate(session: SessionData, programs: list[str]) -> None:
-    """Run AppController synchronously — called inside asyncio.to_thread."""
-    courses = session.courses
-    # Exclude any periods the user has toggled off via PATCH /api/periods/{key}/exclusions.
-    # session.periods is never mutated — exclusion is purely a session flag in excluded_periods.
-    periods = [
-        p for p in session.periods
-        if p.get_key() not in session.excluded_periods
-    ]
+def get_executor(request: Request) -> Executor:
+    """FastAPI dependency — inject the process/thread executor from app state."""
+    return request.app.state.executor
 
+
+def _sync_generate(
+    courses: list[Course],
+    periods: list[ExamPeriod],
+    excluded_periods: set[str],
+    programs: list[str],
+) -> list[Any]:
+    """Run AppController in a worker (process or thread) and return all results.
+
+    Pure function — no shared state, no side effects on the caller's objects.
+    Must be a module-level function so ProcessPoolExecutor can pickle it.
+
+    Returns a plain list[dict] so the result crosses the process boundary cleanly.
+    """
+    active_periods = [p for p in periods if p.get_key() not in excluded_periods]
+    exporter = PaginatedExporter()
     data_provider = InMemoryDataProvider(
         courses=courses,
-        periods=periods,
+        periods=active_periods,
         selected_programs=programs,
     )
     generator = ScheduleGenerator(conflict_strategy=ExactConflictStrategy(selected_programs=programs))
     controller = AppController(
         data_provider=data_provider,
-        exporter=session.exporter,
+        exporter=exporter,
         generator=generator,
         selected_programs=programs,
     )
     controller.run()
+    return exporter.get_all()
 
 
-async def _run_generation(session: SessionData, programs: list[str]) -> None:
-    """Background coroutine: run generation with a hard timeout (SCRUM-123).
+async def _run_generation(
+    session: SessionData,
+    programs: list[str],
+    executor: Executor,
+) -> None:
+    """Background coroutine: run generation in a worker and load results back (SCRUM-123).
 
-    On TimeoutError: asyncio cancels this coroutine, but the underlying thread
-    spawned by to_thread cannot be forcibly stopped — it will run to completion
-    in the background. The exporter lock prevents corruption; stale add() calls
-    after timeout are bounded by MAX_SCHEDULES and are discarded on next reset().
+    Uses run_in_executor so the event loop stays responsive during generation.
+    With ProcessPoolExecutor the heavy backtracking runs on a separate CPU core,
+    bypassing the GIL. With ThreadPoolExecutor (tests) it runs in a thread.
+
+    On TimeoutError: the worker cannot be forcibly stopped — it runs to completion
+    in the background. Results that arrive after timeout are discarded because
+    session.exporter.reset() is called before the next run.
     """
+    loop = asyncio.get_running_loop()
+
     try:
-        await asyncio.wait_for(
-            asyncio.to_thread(_sync_generate, session, programs),
+        results: list[Any] = await asyncio.wait_for(
+            loop.run_in_executor(
+                executor,
+                _sync_generate,
+                session.courses,
+                session.periods,
+                session.excluded_periods,
+                programs,
+            ),
             timeout=settings.generation_timeout_seconds,
         )
+        for item in results:
+            session.exporter.add(item)
         session.generation_status = "completed"
         session.last_run = datetime.now(tz=timezone.utc)
         logger.info("Generation completed — %d schedules", session.exporter.total())
@@ -85,6 +119,7 @@ async def trigger_generation(
     body: GenerateRequestDTO,
     background_tasks: BackgroundTasks,
     session: SessionData = Depends(get_session),
+    executor: Executor = Depends(get_executor),
 ) -> GenerateResponseDTO:
     """Start a background schedule generation job (SCRUM-75).
 
@@ -106,7 +141,7 @@ async def trigger_generation(
     session.generation_error = None
     session.exporter.reset()
 
-    background_tasks.add_task(_run_generation, session, body.programs)
+    background_tasks.add_task(_run_generation, session, body.programs, executor)
 
     return GenerateResponseDTO(
         message="Generation started",

@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import os
+
+# Force ThreadPoolExecutor in tests so unittest.mock.patch works across the
+# boundary — ProcessPoolExecutor spawns a fresh process where patches are gone.
+os.environ.setdefault("USE_PROCESS_POOL", "false")
+
 from collections.abc import Generator
 
 import pytest

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import AsyncGenerator
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -43,8 +44,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     app.state.session_store = SessionStore()
+
+    # CPU-bound generation runs in a ProcessPoolExecutor to bypass the GIL.
+    # Tests set USE_PROCESS_POOL=false to keep everything in-process so
+    # unittest.mock.patch works across process boundaries.
+    if settings.use_process_pool:
+        app.state.executor = ProcessPoolExecutor(max_workers=1)
+        logger.info("Generation executor: ProcessPoolExecutor (max_workers=1)")
+    else:
+        app.state.executor = ThreadPoolExecutor(max_workers=1)
+        logger.info("Generation executor: ThreadPoolExecutor (use_process_pool=false)")
+
     yield
-    # Nothing to tear down in v1.0 — SessionStore holds only in-memory state
+
+    app.state.executor.shutdown(wait=False)
 
 
 def create_app() -> FastAPI:
