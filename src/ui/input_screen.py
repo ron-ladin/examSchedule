@@ -434,10 +434,24 @@ class InputScreen(QWidget):
         # Section — Programme selection (§2.2)
         prog_box = QGroupBox("Study Programmes  (max 5)")
         pl = QVBoxLayout(prog_box)
+        pl.setSpacing(4)
+
+        # Placeholder shown while the list is empty (before a courses file is loaded)
+        self._prog_placeholder = QLabel(
+            "Programmes appear here\nafter loading a courses file."
+        )
+        self._prog_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._prog_placeholder.setStyleSheet(
+            "font-size: 10px; color: rgba(173,198,255,0.45); padding: 8px 4px;"
+        )
+        pl.addWidget(self._prog_placeholder)
+
         self._prog_list = QListWidget()
         self._prog_list.setMinimumHeight(100)
+        self._prog_list.setVisible(False)   # hidden until populated
         self._prog_list.itemChanged.connect(self._on_programme_toggled)
         pl.addWidget(self._prog_list)
+
         self._prog_count_lbl = QLabel("0 / 5 selected")
         self._prog_count_lbl.setStyleSheet("font-size: 11px;")
         pl.addWidget(self._prog_count_lbl)
@@ -553,6 +567,10 @@ class InputScreen(QWidget):
             item.setCheckState(Qt.CheckState.Unchecked)
             self._prog_list.addItem(item)
         self._prog_list.blockSignals(False)
+        # Toggle between the placeholder hint and the populated list
+        has_items = self._prog_list.count() > 0
+        self._prog_placeholder.setVisible(not has_items)
+        self._prog_list.setVisible(has_items)
         self._update_prog_label()
 
     def _on_programme_toggled(self, item: QListWidgetItem) -> None:
