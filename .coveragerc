@@ -1,0 +1,6 @@
+[run]
+omit =
+    src/ui/*
+
+[report]
+fail_under = 85
