@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.config import settings
 from src.api.exceptions.handlers import register_handlers
-from src.api.routers import data, generate, health, periods
+from src.api.routers import data, generate, health, periods, schedules
 from src.api.session.store import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -76,6 +76,7 @@ def create_app() -> FastAPI:
     app.include_router(generate.router)
     app.include_router(data.router, prefix="/api/data", tags=["data"])
     app.include_router(periods.router, prefix="/api/periods", tags=["periods"])
+    app.include_router(schedules.router)
 
     register_handlers(app)
 
