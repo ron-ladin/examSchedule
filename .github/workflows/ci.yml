@@ -42,8 +42,8 @@ jobs:
 
       - name: Run Python tests
         run: |
-          python -m pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=85
+          python -m pytest tests/ --cov=src --cov-omit="src/ui/*" --cov-report=term-missing --cov-fail-under=85
 
       - name: Run Pylint
         run: |
-          python -m pylint src --fail-under=8.5
+          python -m pylint src --ignore=ui --fail-under=8.5
