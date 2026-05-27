@@ -30,7 +30,12 @@ _SESSION_ID = "default"
 def _sync_generate(session: SessionData, programs: list[str]) -> None:
     """Run AppController synchronously — called inside asyncio.to_thread."""
     courses = session.courses
-    periods = session.periods
+    # Exclude any periods the user has toggled off via PATCH /api/periods/{key}/exclusions.
+    # session.periods is never mutated — exclusion is purely a session flag in excluded_periods.
+    periods = [
+        p for p in session.periods
+        if p.get_key() not in session.excluded_periods
+    ]
 
     data_provider = InMemoryDataProvider(
         courses=courses,
