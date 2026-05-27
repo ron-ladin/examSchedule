@@ -53,3 +53,17 @@ class IOutputExporter(_V1IOutputExporter):
     def reset(self) -> None:
         """Delete all stored items and start fresh."""
         ...
+
+    @abstractmethod
+    def get_page_with_total(self, page: int, size: int) -> tuple[list[Any], int]:
+        """Return one page and the total count in a single atomic operation.
+
+        Why atomic: separate get_page() + total() calls allow reset() to fire
+        between the two lock acquisitions, producing an inconsistent response
+        (e.g. X-Total-Count=500 with an empty items list). Holding the lock for
+        both reads guarantees the header and the body always agree.
+
+        Returns:
+            (items, total) — items is the page slice, total is the full count.
+        """
+        ...

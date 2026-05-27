@@ -112,3 +112,18 @@ class PaginatedExporter(IOutputExporter):
         """Delete all stored schedules. Called before starting a new generation run."""
         with self._lock:
             self._items = []
+
+    def get_page_with_total(self, page: int, size: int) -> tuple[list[Any], int]:
+        """Return one page and the total count in a single atomic operation.
+
+        Why this exists instead of calling get_page() + total() separately:
+        reset() can fire between two separate lock acquisitions, making the
+        X-Total-Count header disagree with the items list in the response body.
+        Holding the lock for both reads guarantees they are always consistent.
+
+        Returns:
+            (items, total) — items is the page slice, total is the full count.
+        """
+        with self._lock:
+            start = page * size
+            return self._items[start : start + size], len(self._items)
