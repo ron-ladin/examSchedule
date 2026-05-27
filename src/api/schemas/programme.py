@@ -1,23 +1,24 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from typing import Literal
+
+from pydantic import BaseModel
 
 
-class CourseDTO(BaseModel):
-    """Represents a single course in a programme."""
+class ProgrammeSummaryDTO(BaseModel):
+    """One programme entry returned by GET /api/programmes (SCRUM-70)."""
 
-    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+
+
+class CourseDetailDTO(BaseModel):
+    """One course entry returned by GET /api/programmes/{id}/courses (SCRUM-71)."""
 
     id: str
     name: str
     instructor: str
-    programme: str | None = None
-
-
-class ProgrammeDTO(BaseModel):
-    """Represents a study programme and its associated courses."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    name: str
-    courses: list[CourseDTO] = []
+    evaluation_type: str
+    year: int
+    semester: str
+    requirement: Literal["Obligatory", "Elective"]

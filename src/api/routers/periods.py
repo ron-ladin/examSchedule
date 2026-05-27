@@ -11,6 +11,25 @@ from src.domain.exam_period import ExamPeriod
 router = APIRouter()
 
 
+@router.get("", response_model=list[ExamPeriodDTO])
+async def list_periods(
+    session: SessionData = Depends(get_session),
+) -> list[ExamPeriodDTO]:
+    """Return all exam periods currently loaded in the session (SCRUM-72).
+
+    Returns an empty list if no periods file has been uploaded yet.
+    The excluded flag reflects the current exclusion state of each period.
+    """
+    result = []
+    for p in session.periods:
+        try:
+            result.append(ExamPeriodDTO.from_domain(p, excluded=p.get_key() in session.excluded_periods))
+        except ValueError:
+            # Period has no date_ranges yet — skip it rather than crashing the whole list.
+            pass
+    return result
+
+
 @router.patch("/{key}/exclusions", response_model=ExamPeriodDTO)
 async def toggle_exclusions(
     key: str,
