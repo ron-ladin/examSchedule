@@ -34,3 +34,6 @@ class SessionData:
     # Generation job state — read by GET /api/generate/status (SCRUM-76)
     generation_status: GenerationStatus = "idle"
     generation_error: str | None = None
+
+    # Period keys excluded from generation; managed by PATCH /api/periods/{key}/exclusions
+    excluded_periods: set[str] = field(default_factory=set)
