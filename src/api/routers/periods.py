@@ -22,6 +22,9 @@ async def toggle_exclusions(
     excluded=true removes the period from schedule generation.
     excluded=false re-enables it.
     Raises 404 if no period with the given key exists.
+
+    Note: period keys contain spaces (e.g. "FALL - Aleph").  Callers must
+    percent-encode them: ``/api/periods/FALL%20-%20Aleph/exclusions``.
     """
     period = _find_period(session, key)
     if body.excluded:
@@ -45,6 +48,10 @@ async def update_range(
     if body.start >= body.end:
         raise DomainValidationError("start date must be strictly before end date")
     period = _find_period(session, key)
+    # v1.0: intentionally replaces ALL date_ranges with the single range from the
+    # request body.  ExamPeriod supports multiple ranges internally, but the v1.0
+    # UI exposes only one range per period, so a full replacement is correct here.
+    # When multi-range editing is added (v2+), change this to a targeted update.
     period.date_ranges = [(body.start, body.end)]
     return ExamPeriodDTO.from_domain(period, excluded=key in session.excluded_periods)
 
