@@ -250,3 +250,6 @@ frontend/node_modules/
 Phase2_Engineering_Blueprint*.md
 SDD-foundation.md
 *.pdf
+
+.devcontainer/
+.devcontainer/devcontainer.json
