@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends
 
@@ -65,6 +66,7 @@ async def _run_generation(session: SessionData, programs: list[str]) -> None:
             timeout=settings.generation_timeout_seconds,
         )
         session.generation_status = "completed"
+        session.last_run = datetime.now(tz=timezone.utc)
         logger.info("Generation completed — %d schedules", session.exporter.total())
     except asyncio.TimeoutError:
         session.generation_status = "failed"

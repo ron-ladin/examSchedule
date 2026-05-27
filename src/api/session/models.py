@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal
 
 from src.api.adapters.paginated_exporter import PaginatedExporter
@@ -34,6 +35,9 @@ class SessionData:
     # Generation job state — read by GET /api/generate/status (SCRUM-76)
     generation_status: GenerationStatus = "idle"
     generation_error: str | None = None
+
+    # Set on successful generation completion; surfaced by GET /api/data/status
+    last_run: datetime | None = None
 
     # Period keys excluded from generation; managed by PATCH /api/periods/{key}/exclusions
     excluded_periods: set[str] = field(default_factory=set)
