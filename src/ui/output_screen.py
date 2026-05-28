@@ -118,7 +118,7 @@ class OutputScreen(QWidget):
                     if course:
                         prog_ids = [o.program_id for o in course.offerings]
                         prog_id = prog_ids[0] if prog_ids else ""
-                        req = "Mandatory" if any(o.requirement == "mandatory" for o in course.offerings) else "Elective"
+                        req = "Mandatory" if any(o.requirement.lower() == "obligatory" for o in course.offerings) else "Elective"
                         text = f"{course_id}\n{course.name[:20]}\n{prog_id} | {req}"
                     else:
                         prog_id = ""
@@ -155,9 +155,10 @@ class OutputScreen(QWidget):
         try:
             from src.adapters.text_file_exporter import TextFileExporter
             from pathlib import Path
-            exporter = TextFileExporter(Path(path))
             schedule = self._schedules[self._current_index]
-            exporter.export({"schedule": iter([schedule])})
+            courses_by_id = {c.id: c for c in schedule.courses} if hasattr(schedule, "courses") else {}
+            exporter = TextFileExporter(Path(path))
+            exporter.export_schedules({"Exported": [schedule]}, courses_by_id)
             QMessageBox.information(self, "Saved", f"Schedule saved to {path}")
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", str(exc))

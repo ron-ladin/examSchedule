@@ -86,7 +86,7 @@ class InputScreen(QWidget):
         try:
             from src.adapters.readers.course_file_reader import CourseFileReader
             mode = self._mode_group.checkedButton().text().lower()
-            new_courses = list(CourseFileReader().read(self._courses_path))
+            new_courses = list(CourseFileReader(self._courses_path).read())
             if mode == "replace":
                 self._courses = new_courses
             elif mode == "append":
@@ -108,7 +108,7 @@ class InputScreen(QWidget):
         try:
             from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
             mode = self._mode_group.checkedButton().text().lower()
-            new_periods = list(ExamPeriodFileReader().read(self._dates_path))
+            new_periods = list(ExamPeriodFileReader(self._dates_path).read())
             if mode == "replace":
                 self._periods = new_periods
             else:
