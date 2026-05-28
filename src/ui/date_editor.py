@@ -33,13 +33,17 @@ from PyQt6.QtWidgets import (
 )
 
 from src.domain.exam_period import ExamPeriod
+from src.ui.tokens import (
+    COLOR_CAL_ACTIVE_BG   as _ACTIVE_BG,
+    COLOR_CAL_ACTIVE_FG   as _ACTIVE_FG,
+    COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG,
+    COLOR_CAL_EXCLUDED_FG as _EXCLUDED_FG,
+)
 
 
 # ── Colour palette ────────────────────────────────────────────────────────────
-_ACTIVE_BG,   _ACTIVE_FG   = "#dbeafe", "#1d4ed8"   # in-range, not excluded
-_EXCLUDED_BG, _EXCLUDED_FG = "#fee2e2", "#dc2626"   # manually excluded
-_SAT_BG,      _SAT_FG      = "#f3f4f6", "#9ca3af"   # Saturday (auto-excluded)
-_OUT_BG,      _OUT_FG      = "transparent", "#d1d5db"  # outside range
+_SAT_BG, _SAT_FG = "#f3f4f6", "#9ca3af"       # Saturday (auto-excluded)
+_OUT_BG, _OUT_FG = "transparent", "#d1d5db"   # outside range
 
 
 # ── Day button ────────────────────────────────────────────────────────────────
@@ -325,7 +329,14 @@ class DateEditorWidget(QWidget):
         new_end   = date(eq.year(), eq.month(), eq.day())
 
         if new_start > new_end:
-            return  # silently ignore invalid range
+            # Reset controls to the model's current valid range so UI stays in sync
+            if self._period.date_ranges:
+                s, e = self._period.date_ranges[0]
+                self._building = True
+                self._start_edit.setDate(QDate(s.year, s.month, s.day))
+                self._end_edit.setDate(QDate(e.year, e.month, e.day))
+                self._building = False
+            return
 
         # Trim excluded dates that fall outside the new range
         self._period.excluded_dates = {

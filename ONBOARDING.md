@@ -9,25 +9,34 @@ PyQt6 standalone desktop application. No server, no frontend build step.
 
 ```
 src/
-  ui/               # PyQt6 screens (InputScreen, OutputScreen)
+  controller.py     # DesktopController — bridge between UI and engine
+  ui/               # PyQt6 desktop application
+    app.py          # QMainWindow, sets up the window
+    input_screen.py # Main widget: file loading, generation, results tabs
+    date_editor.py  # Inline date-range editor widget
+    style.py        # QSS stylesheet loader (lazy-cached)
+    stylesheet.qss  # Organic Noir design tokens
+    tokens.py       # Colour and spacing constants
   adapters/         # File readers and exporters
   domain/           # Core domain models (Course, ExamPeriod, Schedule, ...)
-  use_cases/        # Scheduling logic
-  interfaces/       # Abstract base classes
-main.py             # Entry point — launches QApplication
+  engine/           # Scheduling logic (AppController, ScheduleGenerator)
+  interfaces/       # Abstract base classes (ports)
+main.py             # Entry point — launches QApplication (or --cli for headless)
 ```
 
 ---
 
 ## Screen Flow
 
+The app is a single `QMainWindow` with one `InputScreen` widget and three tabs:
+
 ```
-InputScreen  →  OutputScreen
-(load files,     (paginated calendar view,
- select           per-schedule save)
- programmes,
- generate)
+InputScreen (tab: Input)      — load files, select programmes
+InputScreen (tab: Generate)   — configure periods, run generation
+InputScreen (tab: Results)    — paginated calendar view, per-schedule save
 ```
+
+All tabs live inside one window; there is no `OutputScreen` or screen-switching.
 
 ---
 

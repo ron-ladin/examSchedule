@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Dict, Iterator, List, Set
+from collections.abc import Iterator
 
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
@@ -17,7 +17,7 @@ class ScheduleGenerator(IScheduleGenerator):
 
     def generate_schedules(
         self,
-        courses: List[Course],
+        courses: list[Course],
         exam_period: ExamPeriod,
     ) -> Iterator[Schedule]:
         """Yield every valid conflict-free schedule for the given exam period.
@@ -41,7 +41,7 @@ class ScheduleGenerator(IScheduleGenerator):
         # Hand off to the recursive backtracker with an empty initial assignment
         yield from self._backtrack({}, ordered, valid_dates, conflict_graph, exam_period)
 
-    def _build_conflict_graph(self, courses: List[Course]) -> Dict[Course, Set[Course]]:
+    def _build_conflict_graph(self, courses: list[Course]) -> dict[Course, set[Course]]:
         """Return an adjacency map: course → set of courses it conflicts with.
 
         Iterates every pair exactly once (i, j where j > i) to avoid double-work.
@@ -50,7 +50,7 @@ class ScheduleGenerator(IScheduleGenerator):
         This O(n²) pass is done once so the backtracker can do O(1) neighbor lookups
         instead of re-running the strategy on every step.
         """
-        graph: Dict[Course, Set[Course]] = {c: set() for c in courses}
+        graph: dict[Course, set[Course]] = {c: set() for c in courses}
         for i, a in enumerate(courses):
             for b in courses[i + 1:]:
                 if self._strategy.is_conflict(a, b):
@@ -60,10 +60,10 @@ class ScheduleGenerator(IScheduleGenerator):
 
     def _backtrack(
         self,
-        assignment: Dict[Course, date],
-        remaining: List[Course],
-        valid_dates: List[date],
-        conflict_graph: Dict[Course, Set[Course]],
+        assignment: dict[Course, date],
+        remaining: list[Course],
+        valid_dates: list[date],
+        conflict_graph: dict[Course, set[Course]],
         exam_period: ExamPeriod,
     ) -> Iterator[Schedule]:
         """Recursively assign dates to courses, yielding a Schedule when all are placed.

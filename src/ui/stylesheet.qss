@@ -4,7 +4,6 @@
 
 /* ──────────────────────────────────────────────────────────────────────────
    GROUP 1: THE CORE APP BACKGROUND
-   This section sets the main dark background and default font for the entire app.
    ────────────────────────────────────────────────────────────────────────── */
 QMainWindow, QDialog, QWidget, QTabWidget::pane {
     background-color: @COLOR_BACKGROUND@;
@@ -15,7 +14,6 @@ QMainWindow, QDialog, QWidget, QTabWidget::pane {
 
 /* ──────────────────────────────────────────────────────────────────────────
    GROUP 2: DEEP SIDEBAR & VIEWPORTS
-   These components use the deepest dark tone (the sidebar and lists background).
    ────────────────────────────────────────────────────────────────────────── */
 QWidget#sidebar, QListWidget, QTableWidget, QScrollBar, QTabBar::tab {
     background-color: @COLOR_SIDEBAR@;
@@ -23,43 +21,151 @@ QWidget#sidebar, QListWidget, QTableWidget, QScrollBar, QTabBar::tab {
 
 /* ──────────────────────────────────────────────────────────────────────────
    GROUP 3: CARDS, CONTAINERS & PAPERS
-   These elements sit on top of the background like cards (inputs, panels, alerts).
    ────────────────────────────────────────────────────────────────────────── */
-QGroupBox, QPushButton, QTableWidget::alternate-background-color, 
+QGroupBox, QPushButton,
 QHeaderView, QHeaderView::section, QDateEdit, QCalendarWidget, QMessageBox {
     background-color: @COLOR_CARD_BG@;
 }
 
+/* alternate-background-color is a property on the widget, not a subcontrol selector */
+QTableWidget {
+    alternate-background-color: @COLOR_CARD_BG@;
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
    GROUP 4: INTERACTION STATES (HOVER & SELECTION)
-   What happens when a user hovers or clicks on buttons, rows, and items.
    ────────────────────────────────────────────────────────────────────────── */
-QPushButton:hover, QPushButton#generateBtn, QListWidget::item:hover, 
+QPushButton:hover, QPushButton#generateBtn, QListWidget::item:hover,
 QTableWidget::item:selected, QHeaderView::section:hover, QTabBar::tab:hover:!selected {
     background-color: @COLOR_HOVER@;
 }
 
 QListWidget::item:selected, QTableWidget::item:selected, QTabBar::tab:selected {
-    color: @COLOR_SECONDARY@; /* Highlights selected items with the Lavender color */
+    color: @COLOR_SECONDARY@;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   GROUP 5: SPECIAL COMPONENT TWEAKS
-   A few tiny functional rules to make specific buttons or borders look polished.
+   GROUP 5: BUTTON STATES
    ────────────────────────────────────────────────────────────────────────── */
+QPushButton:pressed {
+    background-color: @COLOR_SIDEBAR@;
+}
 
-/* Gives the main left sidebar a nice separation line on the right */
+QPushButton:disabled {
+    color: rgba(173, 198, 255, 0.35);
+    background-color: @COLOR_CARD_BG@;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   GROUP 6: SCROLLBAR
+   ────────────────────────────────────────────────────────────────────────── */
+QScrollBar:vertical {
+    width: 8px;
+    background: @COLOR_SIDEBAR@;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical {
+    background: @COLOR_HOVER@;
+    min-height: 24px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: @COLOR_PRIMARY@;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+    background: none;
+}
+
+QScrollBar:horizontal {
+    height: 8px;
+    background: @COLOR_SIDEBAR@;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:horizontal {
+    background: @COLOR_HOVER@;
+    min-width: 24px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: @COLOR_PRIMARY@;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+    background: none;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   GROUP 7: RADIO BUTTONS & CHECKBOXES
+   ────────────────────────────────────────────────────────────────────────── */
+QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: @COLOR_SIDEBAR@;
+}
+
+QRadioButton::indicator:checked {
+    background: @COLOR_SECONDARY@;
+    border-color: @COLOR_SECONDARY@;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   GROUP 8: GROUP BOX TITLE
+   ────────────────────────────────────────────────────────────────────────── */
+QGroupBox::title {
+    color: @COLOR_SECONDARY@;
+    subcontrol-origin: margin;
+    left: 8px;
+    padding: 0 4px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   GROUP 9: TAB WIDGET PANE BORDER
+   ────────────────────────────────────────────────────────────────────────── */
+QTabWidget::pane {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   GROUP 10: TABLE HEADER SEPARATOR
+   ────────────────────────────────────────────────────────────────────────── */
+QHeaderView::section {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 4px 8px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   GROUP 11: SPLITTER HANDLE
+   ────────────────────────────────────────────────────────────────────────── */
+QSplitter::handle {
+    background: rgba(255, 255, 255, 0.07);
+}
+
+QSplitter::handle:hover {
+    background: @COLOR_HOVER@;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   GROUP 12: SPECIAL COMPONENT TWEAKS
+   ────────────────────────────────────────────────────────────────────────── */
 QWidget#sidebar { border-right: 1px solid rgba(255, 255, 255, 0.1); }
 
-/* The big high-priority "Generate" action button */
 QPushButton#generateBtn {
     border: 1px solid @COLOR_PRIMARY@;
     font-size: 13px;
     font-weight: bold;
 }
 
-/* Containers and scrolls that should remain completely invisible/transparent */
 QLabel, QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }
 
-/* Custom design borders for container boxes and date inputs */
 QGroupBox, QListWidget, QDateEdit { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; }

@@ -20,7 +20,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -49,12 +49,11 @@ from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
 from src.domain.schedule import Schedule
 from src.ui.date_editor import DateEditorWidget
+from src.ui.tokens import PROGRAMME_COLOURS
 
 logger = logging.getLogger(__name__)
 
-_MAX_PROGS   = 5
-# Up to 5 programme colours (used for calendar cell highlights)
-_PROG_COLORS = ["#AED6F1", "#A9DFBF", "#F9E79F", "#F5CBA7", "#D2B4DE"]
+_MAX_PROGS = 5
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -87,6 +86,29 @@ def _file_header(title: str, desc: str) -> tuple:
     d = QLabel(desc)
     d.setStyleSheet("font-size: 10px; color: rgba(173,198,255,0.55);")
     return t, d
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Background worker
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _GenerateWorker(QThread):
+    """Runs DesktopController.generate() off the Qt main thread."""
+
+    finished = pyqtSignal(dict, dict)  # (schedules_by_period, courses_by_id)
+    failed   = pyqtSignal(str)         # error message
+
+    def __init__(self, controller: "DesktopController", parent=None):
+        super().__init__(parent)
+        self._controller = controller
+
+    def run(self) -> None:
+        try:
+            sbp, cbi = self._controller.generate()
+            self.finished.emit(sbp, cbi)
+        except Exception as exc:
+            logger.exception("Worker: generation failed")
+            self.failed.emit(str(exc))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,9 +343,6 @@ class InputScreen(QWidget):
             ├── Sidebar  (controls, min 250 / max 320 px)
             └── Workspace  (QTabWidget with 3 tabs)
     """
-
-    # Kept for backward compatibility with app.py
-    schedule_ready = pyqtSignal(dict, dict)
 
     def __init__(self, controller: DesktopController, parent=None):
         super().__init__(parent)
@@ -609,10 +628,13 @@ class InputScreen(QWidget):
         self._prog_placeholder.setVisible(not has_items)
         self._prog_list.setVisible(has_items)
         self._update_prog_label()
+        self._refresh_course_table()
 
     def _on_programme_toggled(self, item: QListWidgetItem) -> None:
         if self._count_checked() > _MAX_PROGS:
+            self._prog_list.blockSignals(True)
             item.setCheckState(Qt.CheckState.Unchecked)
+            self._prog_list.blockSignals(False)
             QMessageBox.information(
                 self, "Limit Reached",
                 f"You can select at most {_MAX_PROGS} programmes.",
@@ -701,25 +723,36 @@ class InputScreen(QWidget):
 
         self._gen_btn.setEnabled(False)
         self._gen_btn.setText("⏳  Generating…")
-        try:
-            schedules_by_period, courses_by_id = self._controller.generate()
-            prog_color_map = {
-                pid: _PROG_COLORS[i % len(_PROG_COLORS)]
-                for i, pid in enumerate(selected)
-            }
-            # Populate Tab 3 and switch to it
-            self._results_panel.load(schedules_by_period, courses_by_id, prog_color_map)
-            self._workspace.setCurrentIndex(2)
 
-            total = sum(len(v) for v in schedules_by_period.values())
-            self._status_label.setText(f"✓ {total} schedule(s) ready.")
-            self.schedule_ready.emit(schedules_by_period, courses_by_id)
-        except Exception as exc:
-            QMessageBox.critical(self, "Generation Error", str(exc))
-            logger.exception("Generation failed")
-        finally:
-            self._gen_btn.setEnabled(True)
-            self._gen_btn.setText("▶  Generate Schedule")
+        self._worker = _GenerateWorker(self._controller, parent=self)
+        self._worker.finished.connect(
+            lambda sbp, cbi: self._on_generate_done(selected, sbp, cbi)
+        )
+        self._worker.failed.connect(self._on_generate_failed)
+        self._worker.start()
+
+    def _on_generate_done(
+        self,
+        selected: List[str],
+        schedules_by_period: dict,
+        courses_by_id: dict,
+    ) -> None:
+        prog_color_map = {
+            pid: PROGRAMME_COLOURS[i % len(PROGRAMME_COLOURS)]
+            for i, pid in enumerate(selected)
+        }
+        self._results_panel.load(schedules_by_period, courses_by_id, prog_color_map)
+        self._workspace.setCurrentIndex(2)
+        total = sum(len(v) for v in schedules_by_period.values())
+        self._status_label.setText(f"✓ {total} schedule(s) ready.")
+        self._gen_btn.setEnabled(True)
+        self._gen_btn.setText("▶  Generate Schedule")
+
+    def _on_generate_failed(self, error_msg: str) -> None:
+        QMessageBox.critical(self, "Generation Error", error_msg)
+        logger.error("Generation failed: %s", error_msg)
+        self._gen_btn.setEnabled(True)
+        self._gen_btn.setText("▶  Generate Schedule")
 
     def _update_gen_btn(self) -> None:
         self._gen_btn.setEnabled(

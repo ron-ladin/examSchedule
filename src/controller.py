@@ -18,8 +18,9 @@ Notes:
 
 import logging
 from collections.abc import Iterator
+from itertools import islice
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from src.adapters.exact_conflict_strategy import ExactConflictStrategy
 from src.adapters.in_memory_data_provider import InMemoryDataProvider
@@ -46,6 +47,8 @@ class _MemoryExporter(IOutputExporter):
         self.schedules_by_period: Dict[str, List[Schedule]] = {}
         self.courses_by_id: Dict[str, Course] = {}
 
+    _MAX_RESULTS = 200
+
     def export_schedules(
         self,
         schedules_by_period: Dict[str, Iterator[Schedule]],
@@ -53,7 +56,7 @@ class _MemoryExporter(IOutputExporter):
     ) -> None:
         self.courses_by_id = dict(courses_by_id)
         for key, schedule_iter in schedules_by_period.items():
-            self.schedules_by_period[key] = list(schedule_iter)
+            self.schedules_by_period[key] = list(islice(schedule_iter, self._MAX_RESULTS))
 
 
 # ── Public class ──────────────────────────────────────────────────────────────
@@ -94,7 +97,11 @@ class DesktopController:
         """
         reader = ProgramSelectorReader(Path(path))
         self._loaded_program_ids = reader.read()
-        logger.info("load_programs: loaded=%d ids=%s", len(self._loaded_program_ids), self._loaded_program_ids)
+        logger.info(
+            "load_programs: loaded=%d ids=%s",
+            len(self._loaded_program_ids),
+            self._loaded_program_ids,
+        )
         return len(self._loaded_program_ids)
 
     def load_periods(self, path: Path, mode: str = "replace") -> int:
