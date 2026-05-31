@@ -44,7 +44,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.controller import DesktopController
+from src.controller import RESULT_CAP, DesktopController
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
 from src.domain.schedule import Schedule
@@ -95,8 +95,8 @@ def _file_header(title: str, desc: str) -> tuple:
 class _GenerateWorker(QThread):
     """Runs DesktopController.generate() off the Qt main thread."""
 
-    finished = pyqtSignal(dict, dict)  # (schedules_by_period, courses_by_id)
-    failed   = pyqtSignal(str)         # error message
+    finished = pyqtSignal(dict, dict, object)  # (schedules_by_period, courses_by_id, truncated_periods: set[str])
+    failed   = pyqtSignal(str)               # error message
 
     def __init__(self, controller: "DesktopController", parent=None):
         super().__init__(parent)
@@ -104,8 +104,8 @@ class _GenerateWorker(QThread):
 
     def run(self) -> None:
         try:
-            sbp, cbi = self._controller.generate()
-            self.finished.emit(sbp, cbi)
+            sbp, cbi, trunc = self._controller.generate()
+            self.finished.emit(sbp, cbi, trunc)
         except Exception as exc:
             logger.exception("Worker: generation failed")
             self.failed.emit(str(exc))
@@ -140,24 +140,32 @@ class _ResultsPanel(QWidget):
         schedules_by_period: Dict[str, List[Schedule]],
         courses_by_id: Dict[str, Course],
         prog_color_map: Dict[str, str],
+        truncated_periods: set | None = None,
     ) -> None:
         """Populate the panel after a successful generation."""
         self._schedules_by_period = schedules_by_period
         self._courses_by_id       = courses_by_id
         self._prog_color_map      = prog_color_map
         self._current_index       = {k: 0 for k in schedules_by_period}
+        truncated = truncated_periods or set()
 
         self._placeholder.setVisible(False)
         self._content.setVisible(True)
 
         total = sum(len(v) for v in schedules_by_period.values())
-        self._summary_lbl.setText(
-            f"✓   {total} schedule(s) across {len(schedules_by_period)} period(s)"
-        )
+        if total == 0:
+            self._summary_lbl.setStyleSheet("color: #e05c5c; font-weight: bold;")
+            self._summary_lbl.setText("⚠   No valid schedules found for any period.")
+        else:
+            self._summary_lbl.setStyleSheet("color: #a9dfbf; font-weight: bold;")
+            summary = f"✓   {total} schedule(s) across {len(schedules_by_period)} period(s)"
+            if truncated:
+                summary += f"  ·  ⚠ showing first {RESULT_CAP} per period"
+            self._summary_lbl.setText(summary)
 
         self._period_tabs.clear()
         for period_key, schedules in schedules_by_period.items():
-            tab = self._build_period_tab(period_key, schedules)
+            tab = self._build_period_tab(period_key, schedules, period_key in truncated)
             self._period_tabs.addTab(tab, period_key)
 
     # ── UI setup ───────────────────────────────────────────────────────────────
@@ -201,7 +209,7 @@ class _ResultsPanel(QWidget):
 
     # ── Per-period tab (§3.2 – §3.3) ──────────────────────────────────────────
 
-    def _build_period_tab(self, period_key: str, schedules: List[Schedule]) -> QWidget:
+    def _build_period_tab(self, period_key: str, schedules: List[Schedule], is_capped: bool = False) -> QWidget:
         outer = QWidget()
         layout = QVBoxLayout(outer)
         layout.setContentsMargins(4, 6, 4, 4)
@@ -213,11 +221,12 @@ class _ResultsPanel(QWidget):
 
         # Navigation bar
         nav = QHBoxLayout()
-        prev_btn = QPushButton("◀  Prev")
-        counter  = QLabel(f"Schedule 1 of {len(schedules)}")   # §3.3
+        prev_btn  = QPushButton("◀  Prev")
+        count_str = f"{len(schedules)}+" if is_capped else str(len(schedules))
+        counter   = QLabel(f"Schedule 1 of {count_str}")   # §3.3
         counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
         counter.setStyleSheet("font-weight: bold; min-width: 160px;")
-        next_btn = QPushButton("Next  ▶")
+        next_btn  = QPushButton("Next  ▶")
         nav.addWidget(prev_btn)
         nav.addStretch()
         nav.addWidget(counter)
@@ -234,7 +243,7 @@ class _ResultsPanel(QWidget):
 
         def refresh() -> None:
             idx = self._current_index[period_key]
-            counter.setText(f"Schedule {idx + 1} of {len(schedules)}")
+            counter.setText(f"Schedule {idx + 1} of {count_str}")
             prev_btn.setEnabled(idx > 0)
             next_btn.setEnabled(idx < len(schedules) - 1)
             self._populate_calendar(table, schedules[idx])
@@ -724,9 +733,16 @@ class InputScreen(QWidget):
         self._gen_btn.setEnabled(False)
         self._gen_btn.setText("⏳  Generating…")
 
+        if getattr(self, "_worker", None) is not None:
+            try:
+                self._worker.finished.disconnect()
+                self._worker.failed.disconnect()
+            except RuntimeError:
+                pass
+
         self._worker = _GenerateWorker(self._controller, parent=self)
         self._worker.finished.connect(
-            lambda sbp, cbi: self._on_generate_done(selected, sbp, cbi)
+            lambda sbp, cbi, trunc: self._on_generate_done(selected, sbp, cbi, trunc)
         )
         self._worker.failed.connect(self._on_generate_failed)
         self._worker.start()
@@ -736,12 +752,15 @@ class InputScreen(QWidget):
         selected: List[str],
         schedules_by_period: dict,
         courses_by_id: dict,
+        truncated_periods: set,
     ) -> None:
         prog_color_map = {
             pid: PROGRAMME_COLOURS[i % len(PROGRAMME_COLOURS)]
             for i, pid in enumerate(selected)
         }
-        self._results_panel.load(schedules_by_period, courses_by_id, prog_color_map)
+        self._results_panel.load(
+            schedules_by_period, courses_by_id, prog_color_map, truncated_periods
+        )
         self._workspace.setCurrentIndex(2)
         total = sum(len(v) for v in schedules_by_period.values())
         self._status_label.setText(f"✓ {total} schedule(s) ready.")
@@ -755,8 +774,13 @@ class InputScreen(QWidget):
         self._gen_btn.setText("▶  Generate Schedule")
 
     def _update_gen_btn(self) -> None:
+        worker_running = (
+            getattr(self, "_worker", None) is not None
+            and self._worker.isRunning()
+        )
         self._gen_btn.setEnabled(
-            self._controller.has_courses
+            not worker_running
+            and self._controller.has_courses
             and self._controller.has_periods
             and self._count_checked() >= 1
         )
