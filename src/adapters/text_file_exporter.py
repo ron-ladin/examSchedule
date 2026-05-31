@@ -96,6 +96,10 @@ logger = logging.getLogger(__name__)
 
 class TextFileExporter(IOutputExporter):
 
+    # Cap on the number of cross-period schedule combinations written to file.
+    # Without this, N periods × M schedules/period = N^M combinations can OOM.
+    _MAX_COMBINATIONS: int = 200
+
     def __init__(self, output_path: Path):
         self.output_path = Path(output_path)
 
@@ -117,7 +121,11 @@ class TextFileExporter(IOutputExporter):
             schedule_lists = [schedules_by_period[k] for k in period_keys]
 
             count = 0
+            truncated = False
             for combo in cartesian_product(*schedule_lists):
+                if count >= self._MAX_COMBINATIONS:
+                    truncated = True
+                    break
                 count += 1
                 file.write(f"Schedule #{count}:\n")
                 for period_key, schedule in zip(period_keys, combo):
@@ -128,6 +136,16 @@ class TextFileExporter(IOutputExporter):
 
             if count == 0:
                 file.write("No valid schedules found.\n")
+            elif truncated:
+                logger.warning(
+                    "Output capped at %d combinations — re-run with fewer "
+                    "periods or programmes to see all results.",
+                    self._MAX_COMBINATIONS,
+                )
+                file.write(
+                    f"\n[Output capped at {self._MAX_COMBINATIONS} schedule combinations. "
+                    "There may be more — re-run with fewer periods or programmes.]\n"
+                )
 
     def _write_schedule(
         self,

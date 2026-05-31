@@ -266,10 +266,12 @@ def test_generate_returns_schedules_and_courses(tmp_path):
     ctrl.load_courses(cp)
     ctrl.load_periods(dp)
     ctrl.set_selected_programs(["83101"])
-    schedules_by_period, courses_by_id = ctrl.generate()
+    schedules_by_period, courses_by_id, truncated = ctrl.generate()
     assert isinstance(schedules_by_period, dict)
     assert isinstance(courses_by_id, dict)
+    assert isinstance(truncated, set)
     assert "11111" in courses_by_id
+    assert not truncated
 
 
 # ── export ────────────────────────────────────────────────────────────────────
@@ -284,7 +286,7 @@ def test_export_writes_output_file(tmp_path):
     ctrl.load_courses(cp)
     ctrl.load_periods(dp)
     ctrl.set_selected_programs(["83101"])
-    schedules_by_period, _ = ctrl.generate()
+    schedules_by_period, _, _trunc = ctrl.generate()
     ctrl.export(schedules_by_period, out)
     assert out.exists()
     assert out.stat().st_size > 0

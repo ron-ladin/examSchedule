@@ -18,8 +18,8 @@ Notes:
 
 import logging
 from collections.abc import Iterator
+from itertools import islice
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from src.adapters.exact_conflict_strategy import ExactConflictStrategy
 from src.adapters.in_memory_data_provider import InMemoryDataProvider
@@ -37,23 +37,33 @@ from src.interfaces.i_output_exporter import IOutputExporter
 logger = logging.getLogger(__name__)
 
 
+# Maximum schedules captured per period in the desktop UI.
+# Exported so the UI can reference it without hard-coding the literal.
+RESULT_CAP: int = 200
+
+
 # ── Private helper ────────────────────────────────────────────────────────────
 
 class _MemoryExporter(IOutputExporter):
     """Captures generated schedules in memory instead of writing to disk."""
 
     def __init__(self):
-        self.schedules_by_period: Dict[str, List[Schedule]] = {}
-        self.courses_by_id: Dict[str, Course] = {}
+        self.schedules_by_period: dict[str, list[Schedule]] = {}
+        self.courses_by_id: dict[str, Course] = {}
+        self.truncated_periods: set[str] = set()
 
     def export_schedules(
         self,
-        schedules_by_period: Dict[str, Iterator[Schedule]],
-        courses_by_id: Dict[str, Course],
+        schedules_by_period: dict[str, Iterator[Schedule]],
+        courses_by_id: dict[str, Course],
     ) -> None:
         self.courses_by_id = dict(courses_by_id)
+        self.truncated_periods = set()
         for key, schedule_iter in schedules_by_period.items():
-            self.schedules_by_period[key] = list(schedule_iter)
+            results = list(islice(schedule_iter, RESULT_CAP))
+            if next(schedule_iter, None) is not None:
+                self.truncated_periods.add(key)
+            self.schedules_by_period[key] = results
 
 
 # ── Public class ──────────────────────────────────────────────────────────────
@@ -65,10 +75,10 @@ class DesktopController:
     """
 
     def __init__(self) -> None:
-        self._courses: List[Course] = []
-        self._exam_periods: List[ExamPeriod] = []
-        self._selected_programs: List[str] = []
-        self._loaded_program_ids: List[str] = []  # populated by load_programs()
+        self._courses: list[Course] = []
+        self._exam_periods: list[ExamPeriod] = []
+        self._selected_programs: list[str] = []
+        self._loaded_program_ids: list[str] = []  # populated by load_programs()
 
     # ── Data loading ──────────────────────────────────────────────────────────
 
@@ -94,7 +104,11 @@ class DesktopController:
         """
         reader = ProgramSelectorReader(Path(path))
         self._loaded_program_ids = reader.read()
-        logger.info("load_programs: loaded=%d ids=%s", len(self._loaded_program_ids), self._loaded_program_ids)
+        logger.info(
+            "load_programs: loaded=%d ids=%s",
+            len(self._loaded_program_ids),
+            self._loaded_program_ids,
+        )
         return len(self._loaded_program_ids)
 
     def load_periods(self, path: Path, mode: str = "replace") -> int:
@@ -124,7 +138,7 @@ class DesktopController:
         elif mode == "append":
             existing.extend(new_items)
         elif mode == "update":
-            key_to_idx: Dict[str, int] = {
+            key_to_idx: dict[str, int] = {
                 key_fn(item): i for i, item in enumerate(existing)
             }
             for item in new_items:
@@ -140,7 +154,7 @@ class DesktopController:
     # ── State queries ─────────────────────────────────────────────────────────
 
     @property
-    def courses(self) -> List[Course]:
+    def courses(self) -> list[Course]:
         return list(self._courses)
 
     @property
@@ -151,7 +165,7 @@ class DesktopController:
     def has_periods(self) -> bool:
         return bool(self._exam_periods)
 
-    def get_programme_ids(self) -> List[str]:
+    def get_programme_ids(self) -> list[str]:
         """
         Return programme IDs to display in the sidebar list.
         Prefers the explicitly loaded programs file; falls back to IDs
@@ -165,10 +179,10 @@ class DesktopController:
                 ids.add(offering.program_id)
         return sorted(ids)
 
-    def get_exam_periods(self) -> List[ExamPeriod]:
+    def get_exam_periods(self) -> list[ExamPeriod]:
         return list(self._exam_periods)
 
-    def get_courses_by_programme(self, program_id: str) -> List[Course]:
+    def get_courses_by_programme(self, program_id: str) -> list[Course]:
         """Return all courses that have at least one offering for the given programme."""
         return [
             c for c in self._courses
@@ -177,21 +191,26 @@ class DesktopController:
 
     # ── State mutation ────────────────────────────────────────────────────────
 
-    def set_selected_programs(self, program_ids: List[str]) -> None:
+    def set_selected_programs(self, program_ids: list[str]) -> None:
         """Set which programmes to schedule (max 5)."""
         if len(program_ids) > 5:
             raise ValueError("Maximum 5 programmes may be selected.")
         self._selected_programs = list(program_ids)
 
-    def update_exam_periods(self, periods: List[ExamPeriod]) -> None:
+    def update_exam_periods(self, periods: list[ExamPeriod]) -> None:
         """Replace in-memory periods with edited versions from the UI."""
         self._exam_periods = list(periods)
 
     # ── Generation ────────────────────────────────────────────────────────────
 
-    def generate(self) -> Tuple[Dict[str, List[Schedule]], Dict[str, Course]]:
+    def generate(self) -> tuple[dict[str, list[Schedule]], dict[str, Course], set[str]]:
         """
-        Run the CSP engine and return (schedules_by_period, courses_by_id).
+        Run the CSP engine and return
+        (schedules_by_period, courses_by_id, truncated_periods).
+
+        schedules_by_period  — dict mapping period key → list of Schedule (capped at RESULT_CAP)
+        courses_by_id        — dict mapping course ID → Course
+        truncated_periods    — set of period keys where results were capped at RESULT_CAP
 
         Raises ValueError if preconditions are not met (no programmes selected,
         no courses loaded, or no exam periods loaded).
@@ -220,13 +239,17 @@ class DesktopController:
         )
         engine.run()
 
-        return memory_exporter.schedules_by_period, memory_exporter.courses_by_id
+        return (
+            memory_exporter.schedules_by_period,
+            memory_exporter.courses_by_id,
+            memory_exporter.truncated_periods,
+        )
 
     # ── Export ────────────────────────────────────────────────────────────────
 
     def export(
         self,
-        schedules_by_period: Dict[str, List[Schedule]],
+        schedules_by_period: dict[str, list[Schedule]],
         output_path: Path,
     ) -> None:
         """Write selected schedules to a text file using TextFileExporter."""

@@ -13,9 +13,10 @@ Abstract methods to implement:
 
         The schedules are received as Iterator[Schedule] so the exporter can
         consume generated schedules one by one, without requiring all schedules
-        to be loaded into memory at once.  Implementations MUST NOT call
-        list() on the iterator — the generator's O(1) laziness must be
-        preserved through to the exporter boundary.
+        to be loaded into memory at once.  Implementations MUST NOT materialise
+        the full unbounded iterator (i.e. must not call list() without a cap);
+        a bounded slice (e.g. list(islice(iter, N))) is acceptable provided
+        the cap is documented and the caller is informed when results are truncated.
 
         Must group results by Semester → Moed → Schedule number.
         Output format:

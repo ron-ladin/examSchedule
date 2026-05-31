@@ -378,12 +378,20 @@ Only offerings from **selected programs** are evaluated — courses taken exclus
 
 ```
 examSchedule/
-├── main.py                          # CLI entry point — argparse + dependency wiring
+├── main.py                          # Entry point — desktop app (or --cli for headless)
 ├── data/
 │   ├── courses.txt                  # Course catalog with per-program offerings
 │   ├── dates.txt                    # Exam periods, date ranges, and exclusions
 │   └── programs.txt                 # Selected program IDs for this run
 ├── src/
+│   ├── controller.py                # DesktopController — bridge between UI and engine
+│   ├── ui/                          # PyQt6 desktop application
+│   │   ├── app.py                   # QMainWindow entry point
+│   │   ├── input_screen.py          # Main widget: file loading, generation, results tabs
+│   │   ├── date_editor.py           # Inline date-range editor widget
+│   │   ├── style.py                 # QSS stylesheet loader (lazy-cached)
+│   │   ├── stylesheet.qss           # Organic Noir design tokens
+│   │   └── tokens.py               # Colour and spacing constants
 │   ├── domain/                      # Pure data containers — zero I/O
 │   │   ├── course.py
 │   │   ├── course_offering.py
@@ -416,8 +424,6 @@ examSchedule/
 
 ## Setup
 
-### Backend
-
 ```bash
 cd examSchedule
 python -m venv venv
@@ -426,23 +432,30 @@ source venv/bin/activate
 # Windows:
 .\venv\Scripts\activate
 pip install -r requirements.txt
-pytest
-
+python main.py
 ```
-### Frontend
+
+For development (tests + linting):
 
 ```bash
-cd examSchedule/frontend
-npm install
-npm run dev
+pip install -r requirements-dev.txt
+pytest
 ```
 
 ---
 
 ## Usage
 
+**Desktop (default):**
+
 ```bash
-python main.py \
+python main.py
+```
+
+**Headless CLI:**
+
+```bash
+python main.py --cli \
   --programs data/programs.txt \
   --courses  data/courses.txt \
   --periods  data/dates.txt \
