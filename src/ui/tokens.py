@@ -4,7 +4,6 @@ Design Tokens for Syncademic UI
 Based on Niv's Organic Noir Palette.
 Provides centralized colors, spacing, and application-wide constants.
 """
-from typing import Tuple
 
 # ── 1. Brand States & Theme Colors (Derived from Niv's style.py) ───────────
 COLOR_BACKGROUND = "#0b1326"       # Main window dark background
@@ -27,7 +26,7 @@ CALENDAR_CELL_SIZE = 30            # Fixed size for day buttons
 # ── 4. Programme Slots Colors (Strict Readonly Tuple - Max 5) ───────────────
 # Fixed set of 5 distinct colors that complement the Organic Noir theme.
 # Used for color-coding courses and schedule grids by major/programme.
-PROGRAMME_COLOURS: Tuple[str, str, str, str, str] = (
+PROGRAMME_COLOURS: tuple[str, str, str, str, str] = (
     "#d0bcff",  # Slot 1: Lavender accent
     "#adc6ff",  # Slot 2: Crystal Blue accent
     "#34d399",  # Slot 3: Mint Green (Success/Valid)

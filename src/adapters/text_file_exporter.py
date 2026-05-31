@@ -2,88 +2,12 @@
 Infrastructure Adapter: TextFileExporter
 -----------------------------------------
 Implements IOutputExporter by writing schedules to a human-readable text file.
-
-Constructor args:
-    - output_path (Path) : path to the output file (e.g. schedules.txt)
-
-Methods to implement:
-
-    export_schedules(
-        schedules_by_period: Dict[str, Iterable[Schedule]],
-        courses_by_id: Dict[str, Course]
-    ) -> None
-        Writes generated schedules to output_path.
-
-        Input contract:
-            - schedules_by_period: keys are period keys in the format
-              "<SEMESTER> - <Moed>" (e.g. "FALL - Aleph", "SPRI - Bet").
-              Values are Iterable[Schedule] that must be consumed one at a time
-              — do NOT convert to list.
-            - courses_by_id: maps course_id (str) → Course. Use this to look up
-              the course name and instructor for each assignment.
-
-        Output structure (written to output_path):
-            === SEMESTER: FALL ===
-            --- Moed: Aleph ---
-
-            Schedule #1:
-              - <Course Name> | Course ID: <id> | Date: DD-MM-YYYY | Instructor: <Name>
-              - ...
-
-            Schedule #2:
-              - ...
-
-            --- Moed: Bet ---
-            ...
-
-            === SEMESTER: SPRING ===
-            ...
-
-        Rules:
-            - Group by Semester first, then by Moed (one header pair per period key).
-            - Within each period, number schedules starting from 1.
-            - Within each schedule, sort course lines chronologically by exam date.
-            - If a period produces zero schedules, write "No valid schedules found."
-            - If schedules_by_period is empty, write "No exam periods found."
-            - "SPRI" from period keys must appear as "SPRING" in output
-              (use display_semester from src.domain.semester).
-            - Use f-strings for all line formatting.
-            - Use pathlib.Path.open() for file writing — never hardcoded paths.
-            - Use logging (logger.info / logger.warning) — no print() calls.
-            - Log a warning and skip the line if a course_id is not in courses_by_id.
-
-    _write_period_header(file, semester: str, moed: str) -> None
-        Writes the two header lines for one exam period block:
-            === SEMESTER: <display_semester(semester)> ===
-            --- Moed: <moed> ---
-
-        Followed by a blank line.
-
-    _write_schedule(file, schedule_number: int, schedule: Schedule,
-                    courses_by_id: Dict[str, Course]) -> None
-        Writes one numbered schedule block:
-            Schedule #<n>:
-              - <name> | Course ID: <id> | Date: DD-MM-YYYY | Instructor: <name>
-              ...
-        Courses must be sorted chronologically (earliest exam date first).
-        Ends with a blank line.
-        Logs a warning (and skips the line) for any course_id not in courses_by_id.
-
-    _split_period_key(period_key: str) -> tuple[str, str]
-        Splits a period key string of the form "<SEMESTER> - <Moed>"
-        into (semester, moed).
-        If the separator " - " is missing, return (period_key, "Unknown").
-
-Notes:
-    - Use logging — no print() calls.
-    - This exporter receives schedules grouped by period as iterables, so schedules
-      can be consumed one by one without loading all schedules into memory at once.
 """
 
 import logging
 from itertools import product as cartesian_product
 from pathlib import Path
-from typing import Dict, List
+from typing import Iterable
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule
@@ -95,18 +19,26 @@ logger = logging.getLogger(__name__)
 
 
 class TextFileExporter(IOutputExporter):
+    """
+    Writes generated schedules to a text file.
 
-    # Cap on the number of cross-period schedule combinations written to file.
-    # Without this, N periods × M schedules/period = N^M combinations can OOM.
-    _MAX_COMBINATIONS: int = 200
+    Multiple periods are exported as a Cartesian product:
+        period A option 1 + period B option 1
+        period A option 1 + period B option 2
+        ...
 
-    def __init__(self, output_path: Path):
+    By default, export is not capped. A cap may be supplied through
+    max_combinations if a caller wants to limit very large output files.
+    """
+
+    def __init__(self, output_path: Path, max_combinations: int | None = None):
         self.output_path = Path(output_path)
+        self.max_combinations = max_combinations
 
     def export_schedules(
         self,
-        schedules_by_period: Dict[str, List[Schedule]],
-        courses_by_id: Dict[str, Course],
+        schedules_by_period: dict[str, Iterable[Schedule]],
+        courses_by_id: dict[str, Course],
     ) -> None:
         logger.info("Writing schedules to %s", self.output_path)
 
@@ -118,42 +50,55 @@ class TextFileExporter(IOutputExporter):
                 return
 
             period_keys = list(schedules_by_period.keys())
-            schedule_lists = [schedules_by_period[k] for k in period_keys]
+            schedule_lists = [list(schedules_by_period[key]) for key in period_keys]
+
+            if any(not schedules for schedules in schedule_lists):
+                file.write("No valid schedules found.\n")
+                return
 
             count = 0
             truncated = False
+
             for combo in cartesian_product(*schedule_lists):
-                if count >= self._MAX_COMBINATIONS:
+                if (
+                    self.max_combinations is not None
+                    and count >= self.max_combinations
+                ):
                     truncated = True
                     break
+
                 count += 1
                 file.write(f"Schedule #{count}:\n")
+
                 for period_key, schedule in zip(period_keys, combo):
                     semester, moed = self._split_period_key(period_key)
                     file.write(f"  [{display_semester(semester)} - {moed}]\n")
                     self._write_schedule(file, schedule, courses_by_id)
+
                 file.write("\n")
 
             if count == 0:
                 file.write("No valid schedules found.\n")
             elif truncated:
                 logger.warning(
-                    "Output capped at %d combinations — re-run with fewer "
-                    "periods or programmes to see all results.",
-                    self._MAX_COMBINATIONS,
+                    "Output capped at %d combinations.",
+                    self.max_combinations,
                 )
                 file.write(
-                    f"\n[Output capped at {self._MAX_COMBINATIONS} schedule combinations. "
-                    "There may be more — re-run with fewer periods or programmes.]\n"
+                    f"\n[Output capped at {self.max_combinations} "
+                    "schedule combinations. There may be more.]\n"
                 )
 
     def _write_schedule(
         self,
         file,
         schedule: Schedule,
-        courses_by_id: Dict[str, Course],
+        courses_by_id: dict[str, Course],
     ) -> None:
-        sorted_assignments = sorted(schedule.assignments.items(), key=lambda item: item[1])
+        sorted_assignments = sorted(
+            schedule.assignments.items(),
+            key=lambda item: item[1],
+        )
 
         for course_id, exam_date in sorted_assignments:
             course = courses_by_id.get(course_id)
