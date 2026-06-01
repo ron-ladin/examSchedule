@@ -44,8 +44,6 @@ logger = logging.getLogger(__name__)
 RESULT_CAP: int = 200
 
 
-# ── Private helper ────────────────────────────────────────────────────────────
-
 class _MemoryExporter(IOutputExporter):
     """
     Captures generated schedules in memory instead of writing to disk.
@@ -89,8 +87,6 @@ class _MemoryExporter(IOutputExporter):
                 self.has_more_by_period[key] = False
 
 
-# ── Public class ──────────────────────────────────────────────────────────────
-
 class DesktopController:
     """
     Manages application state and orchestrates the scheduling pipeline
@@ -105,8 +101,6 @@ class DesktopController:
         self._truncated_periods: set[str] = set()
         self._remaining_schedule_iterators: dict[str, Iterator[Schedule]] = {}
         self._has_more_schedules: dict[str, bool] = {}
-
-    # ── Data loading ──────────────────────────────────────────────────────────
 
     def load_courses(self, path: Path, mode: str = "replace") -> int:
         """
@@ -196,8 +190,6 @@ class DesktopController:
                 f"Unknown merge mode: '{mode}'. Use replace, append, or update."
             )
 
-    # ── State queries ─────────────────────────────────────────────────────────
-
     @property
     def courses(self) -> list[Course]:
         return list(self._courses)
@@ -209,16 +201,6 @@ class DesktopController:
     @property
     def has_periods(self) -> bool:
         return bool(self._exam_periods)
-
-    @property
-    def results_truncated(self) -> bool:
-        """Return True if at least one period still has more schedules available."""
-        return bool(self._truncated_periods)
-
-    @property
-    def max_ui_preview_results(self) -> int:
-        """Return the maximum number of schedules loaded per UI batch."""
-        return RESULT_CAP
 
     def has_more_schedules(self, period_key: str) -> bool:
         """Return True if more schedules can be loaded for the given period."""
@@ -255,8 +237,6 @@ class DesktopController:
             if any(offering.program_id == program_id for offering in course.offerings)
         ]
 
-    # ── State mutation ────────────────────────────────────────────────────────
-
     def set_selected_programs(self, program_ids: list[str]) -> None:
         """Set which programmes to schedule, up to 5 programmes."""
         if len(program_ids) > 5:
@@ -267,16 +247,13 @@ class DesktopController:
         """Replace in-memory periods with edited versions from the UI."""
         self._exam_periods = list(periods)
 
-    # ── Generation ────────────────────────────────────────────────────────────
-
     def generate(self) -> tuple[dict[str, list[Schedule]], dict[str, Course], set[str]]:
         """
         Run the CSP engine and return
         (schedules_by_period, courses_by_id, truncated_periods).
 
-        This method intentionally keeps returning 3 values for compatibility
-        with the existing tests and UI flow. In addition, it stores the remaining
-        schedule iterators internally so the UI can call load_more_schedules().
+        truncated_periods is used by the desktop UI to tell the user when
+        additional schedules exist beyond the first loaded batch.
         """
         if not self._selected_programs:
             raise ValueError("No programmes selected. Select at least one programme.")
@@ -328,7 +305,13 @@ class DesktopController:
 
         Returns an empty list if no more schedules are available.
         """
-        batch_size = limit or RESULT_CAP
+        batch_size = limit if limit is not None else RESULT_CAP
+
+        if batch_size < 0:
+            raise ValueError("limit must be non-negative.")
+
+        if batch_size == 0:
+            return []
 
         if not self._has_more_schedules.get(period_key, False):
             return []
@@ -353,8 +336,6 @@ class DesktopController:
         self._remaining_schedule_iterators.pop(period_key, None)
         self._truncated_periods.discard(period_key)
         return batch
-
-    # ── Cartesian-product helpers for desktop UI ──────────────────────────────
 
     def get_combined_schedule_count(
         self,
@@ -408,8 +389,6 @@ class DesktopController:
             for period_key in period_keys
         }
 
-    # ── Export ────────────────────────────────────────────────────────────────
-
     def export(
         self,
         schedules_by_period: dict[str, list[Schedule]],
@@ -417,6 +396,9 @@ class DesktopController:
     ) -> None:
         """Write selected schedules to a text file using TextFileExporter."""
         courses_by_id = {course.id: course for course in self._courses}
-        exporter = TextFileExporter(output_path=Path(output_path))
+        exporter = TextFileExporter(
+            output_path=Path(output_path),
+            max_combinations=RESULT_CAP,
+        )
         exporter.export_schedules(schedules_by_period, courses_by_id)
         logger.info("Exported schedules to %s", output_path)

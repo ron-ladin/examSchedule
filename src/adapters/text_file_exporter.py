@@ -5,9 +5,9 @@ Implements IOutputExporter by writing schedules to a human-readable text file.
 """
 
 import logging
-from itertools import product as cartesian_product
+from collections.abc import Iterable
+from itertools import islice, product as cartesian_product
 from pathlib import Path
-from typing import Iterable
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule
@@ -16,6 +16,8 @@ from src.interfaces.i_output_exporter import IOutputExporter
 
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_COMBINATIONS: int = 200
 
 
 class TextFileExporter(IOutputExporter):
@@ -27,11 +29,16 @@ class TextFileExporter(IOutputExporter):
         period A option 1 + period B option 2
         ...
 
-    By default, export is not capped. A cap may be supplied through
-    max_combinations if a caller wants to limit very large output files.
+    The default export is capped to prevent accidental huge files or OOM when
+    callers pass all generated schedules.
+    Pass max_combinations=None only when an uncapped export is intentional.
     """
 
-    def __init__(self, output_path: Path, max_combinations: int | None = None):
+    def __init__(
+        self,
+        output_path: Path,
+        max_combinations: int | None = DEFAULT_MAX_COMBINATIONS,
+    ):
         self.output_path = Path(output_path)
         self.max_combinations = max_combinations
 
@@ -50,21 +57,24 @@ class TextFileExporter(IOutputExporter):
                 return
 
             period_keys = list(schedules_by_period.keys())
-            schedule_lists = [list(schedules_by_period[key]) for key in period_keys]
+            schedule_lists, input_truncated = self._collect_schedule_lists(
+                schedules_by_period,
+                period_keys,
+            )
 
             if any(not schedules for schedules in schedule_lists):
                 file.write("No valid schedules found.\n")
                 return
 
             count = 0
-            truncated = False
+            output_truncated = False
 
             for combo in cartesian_product(*schedule_lists):
                 if (
                     self.max_combinations is not None
                     and count >= self.max_combinations
                 ):
-                    truncated = True
+                    output_truncated = True
                     break
 
                 count += 1
@@ -79,15 +89,51 @@ class TextFileExporter(IOutputExporter):
 
             if count == 0:
                 file.write("No valid schedules found.\n")
-            elif truncated:
-                logger.warning(
-                    "Output capped at %d combinations.",
-                    self.max_combinations,
-                )
-                file.write(
-                    f"\n[Output capped at {self.max_combinations} "
-                    "schedule combinations. There may be more.]\n"
-                )
+            elif input_truncated or output_truncated:
+                self._write_truncation_notice(file)
+
+    def _collect_schedule_lists(
+        self,
+        schedules_by_period: dict[str, Iterable[Schedule]],
+        period_keys: list[str],
+    ) -> tuple[list[list[Schedule]], bool]:
+        """
+        Collect schedules into bounded lists.
+
+        itertools.product stores input pools internally, so each period iterable
+        must be bounded when max_combinations is set. Otherwise a lazy generator
+        could still be fully materialised before the output cap is applied.
+        """
+        schedule_lists: list[list[Schedule]] = []
+        input_truncated = False
+
+        for period_key in period_keys:
+            schedules_iter = iter(schedules_by_period[period_key])
+
+            if self.max_combinations is None:
+                schedules = list(schedules_iter)
+            else:
+                schedules = list(islice(schedules_iter, self.max_combinations + 1))
+                if len(schedules) > self.max_combinations:
+                    input_truncated = True
+                    schedules = schedules[: self.max_combinations]
+
+            schedule_lists.append(schedules)
+
+        return schedule_lists, input_truncated
+
+    def _write_truncation_notice(self, file) -> None:
+        if self.max_combinations is None:
+            return
+
+        logger.warning(
+            "Output capped at %d combinations.",
+            self.max_combinations,
+        )
+        file.write(
+            f"\n[Output capped at {self.max_combinations} "
+            "schedule combinations. There may be more.]\n"
+        )
 
     def _write_schedule(
         self,

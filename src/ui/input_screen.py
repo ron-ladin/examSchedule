@@ -112,13 +112,6 @@ class _ResultsPanel(QWidget):
 
     Shows full combined schedules using a Cartesian product of schedules
     across all exam periods. It does not materialise product(...) in memory.
-
-    Navigation:
-        Prev / Next   — move by 1 combined schedule
-        Back 200      — move back by RESULT_CAP combined schedules
-        Forward 200   — move forward by RESULT_CAP combined schedules.
-                        If the current loaded boundary is reached and more
-                        schedules exist, it loads more automatically.
     """
 
     def __init__(self, controller: DesktopController, parent=None):
@@ -135,7 +128,6 @@ class _ResultsPanel(QWidget):
         schedules_by_period: dict[str, list[Schedule]],
         courses_by_id: dict[str, Course],
         prog_color_map: dict[str, str],
-        truncated_periods: set[str] | None = None,
     ) -> None:
         """Populate the panel after a successful generation."""
         self._schedules_by_period = schedules_by_period
@@ -249,7 +241,9 @@ class _ResultsPanel(QWidget):
 
         self._back_200_btn.setEnabled(self._combined_index > 0)
         self._prev_btn.setEnabled(self._combined_index > 0)
-        self._next_btn.setEnabled(has_more_loaded_results)
+        self._next_btn.setEnabled(
+            has_more_loaded_results or has_more_unloaded_results
+        )
         self._forward_200_btn.setEnabled(
             has_more_loaded_results or has_more_unloaded_results
         )
@@ -273,13 +267,16 @@ class _ResultsPanel(QWidget):
             self._refresh_combined_view()
 
     def _go_next(self) -> None:
-        """Move forward by one combined schedule."""
+        """Move forward by one combined schedule, loading more if needed."""
+        target_index = self._combined_index + 1
+        self._ensure_loaded_until(target_index)
+
         total = self._controller.get_combined_schedule_count(
             self._schedules_by_period
         )
 
-        if self._combined_index < total - 1:
-            self._combined_index += 1
+        if target_index < total:
+            self._combined_index = target_index
             self._refresh_combined_view()
 
     def _go_back_page(self) -> None:
@@ -295,7 +292,6 @@ class _ResultsPanel(QWidget):
         load more schedules automatically and then continue.
         """
         target_index = self._combined_index + RESULT_CAP
-
         self._ensure_loaded_until(target_index)
 
         total = self._controller.get_combined_schedule_count(
@@ -431,6 +427,7 @@ class _ResultsPanel(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", str(exc))
             logger.exception("Save failed")
+
 
 class InputScreen(QWidget):
     """
@@ -874,7 +871,6 @@ class InputScreen(QWidget):
             schedules_by_period,
             courses_by_id,
             prog_color_map,
-            truncated_periods,
         )
 
         self._workspace.setCurrentIndex(2)
@@ -886,7 +882,7 @@ class InputScreen(QWidget):
         if truncated_periods:
             self._status_label.setText(
                 f"✓ Showing {combined_total} loaded combined schedule option(s). "
-                f"Use Load More Results to load another {RESULT_CAP} per period."
+                f"Forward {RESULT_CAP} will load more automatically if needed."
             )
         else:
             self._status_label.setText(
