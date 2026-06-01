@@ -1,115 +1,233 @@
-/* ==========================================================================
-   SYNCADEMIC APPLICATION STYLE (QSS)
-   ========================================================================== */
+/* Hallmark · component: desktop-app · genre: atmospheric · theme: Organic Noir (custom)
+ * states: default · hover · focus · active · disabled · loading
+ * contrast: pass
+ * P4 H4 E4 S4 R5 V4
+ * ==========================================================================
+ *   SYNCADEMIC APPLICATION STYLE (QSS)
+ * ========================================================================== */
 
 /* ──────────────────────────────────────────────────────────────────────────
-   GROUP 1: THE CORE APP BACKGROUND
+   BASE: APP BACKGROUND & TEXT
    ────────────────────────────────────────────────────────────────────────── */
 QMainWindow, QDialog, QWidget, QTabWidget::pane {
     background-color: @COLOR_BACKGROUND@;
     color: @COLOR_PRIMARY@;
-    font-family: 'Segoe UI', Arial, sans-serif;
+    font-family: 'Segoe UI', 'SF Pro Text', Arial, sans-serif;
     font-size: 12px;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   GROUP 2: DEEP SIDEBAR & VIEWPORTS
+   SIDEBAR & DEEP SURFACES
    ────────────────────────────────────────────────────────────────────────── */
-QWidget#sidebar, QListWidget, QTableWidget, QScrollBar, QTabBar::tab {
+QWidget#sidebar {
+    background-color: @COLOR_SIDEBAR@;
+    border-right: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+QListWidget, QScrollBar, QTabBar::tab {
     background-color: @COLOR_SIDEBAR@;
 }
 
+QTableWidget {
+    background-color: @COLOR_SIDEBAR@;
+    alternate-background-color: @COLOR_CARD_BG@;
+    gridline-color: rgba(255, 255, 255, 0.05);
+    selection-background-color: rgba(173, 198, 255, 0.12);
+}
+
+QTableWidget::item {
+    padding: 5px 8px;
+    border: none;
+}
+
+QTableWidget::item:selected {
+    background-color: rgba(173, 198, 255, 0.12);
+    color: @COLOR_PRIMARY@;
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
-   GROUP 3: CARDS, CONTAINERS & PAPERS
+   CARDS & CONTAINERS
    ────────────────────────────────────────────────────────────────────────── */
-QGroupBox, QPushButton,
-QHeaderView, QHeaderView::section, QDateEdit, QCalendarWidget, QMessageBox {
+QGroupBox {
+    background-color: @COLOR_CARD_BG@;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    margin-top: 8px;
+    padding-top: 10px;
+}
+
+QGroupBox::title {
+    color: @COLOR_SECONDARY@;
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    top: -1px;
+    padding: 0 6px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QHeaderView {
     background-color: @COLOR_CARD_BG@;
 }
 
-/* alternate-background-color is a property on the widget, not a subcontrol selector */
-QTableWidget {
-    alternate-background-color: @COLOR_CARD_BG@;
+QHeaderView::section {
+    background-color: @COLOR_CARD_BG@;
+    color: rgba(173, 198, 255, 0.70);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+    padding: 5px 8px;
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
-   GROUP 4: INTERACTION STATES (HOVER & SELECTION)
-   ────────────────────────────────────────────────────────────────────────── */
-QPushButton:hover, QPushButton#generateBtn, QListWidget::item:hover,
-QTableWidget::item:selected, QHeaderView::section:hover, QTabBar::tab:hover:!selected {
+QHeaderView::section:hover {
     background-color: @COLOR_HOVER@;
+    color: @COLOR_PRIMARY@;
 }
 
-QListWidget::item:selected, QTableWidget::item:selected, QTabBar::tab:selected {
-    color: @COLOR_SECONDARY@;
+QDateEdit, QCalendarWidget, QMessageBox {
+    background-color: @COLOR_CARD_BG@;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 4px;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   GROUP 5: BUTTON STATES
+   BUTTONS — three visual tiers
    ────────────────────────────────────────────────────────────────────────── */
+
+/* Tier 1 — default action */
+QPushButton {
+    background-color: @COLOR_CARD_BG@;
+    color: @COLOR_PRIMARY@;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 5px;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+QPushButton:hover {
+    background-color: @COLOR_HOVER@;
+    border-color: rgba(173, 198, 255, 0.30);
+    color: @COLOR_PRIMARY@;
+}
+
 QPushButton:pressed {
     background-color: @COLOR_SIDEBAR@;
+    border-color: @COLOR_PRIMARY@;
+}
+
+QPushButton:focus {
+    border-color: rgba(173, 198, 255, 0.50);
+    outline: none;
 }
 
 QPushButton:disabled {
-    color: rgba(173, 198, 255, 0.35);
+    color: rgba(173, 198, 255, 0.28);
     background-color: @COLOR_CARD_BG@;
     border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
+/* Tier 2 — Generate CTA */
+QPushButton#generateBtn {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(173, 198, 255, 0.12),
+        stop:1 rgba(173, 198, 255, 0.04)
+    );
+    border: 1.5px solid @COLOR_PRIMARY@;
+    border-radius: 6px;
+    color: @COLOR_PRIMARY@;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+QPushButton#generateBtn:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(173, 198, 255, 0.20),
+        stop:1 rgba(173, 198, 255, 0.08)
+    );
+    border-color: @COLOR_PRIMARY@;
+}
+
+QPushButton#generateBtn:pressed {
+    background: rgba(173, 198, 255, 0.06);
+}
+
+QPushButton#generateBtn:disabled {
+    border-color: rgba(173, 198, 255, 0.18);
+    color: rgba(173, 198, 255, 0.28);
+    background: @COLOR_CARD_BG@;
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
-   GROUP 6: SCROLLBAR
+   TABS — underline indicator style
    ────────────────────────────────────────────────────────────────────────── */
-QScrollBar:vertical {
-    width: 8px;
+QTabWidget::pane {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    background-color: @COLOR_BACKGROUND@;
+}
+
+QTabBar::tab {
     background: @COLOR_SIDEBAR@;
-    border-radius: 4px;
+    color: rgba(173, 198, 255, 0.55);
+    padding: 7px 18px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-right: 1px;
+    font-size: 11px;
+    font-weight: 500;
 }
 
-QScrollBar::handle:vertical {
-    background: @COLOR_HOVER@;
-    min-height: 24px;
-    border-radius: 4px;
+QTabBar::tab:selected {
+    background: @COLOR_CARD_BG@;
+    color: @COLOR_SECONDARY@;
+    border-bottom: 2px solid @COLOR_SECONDARY@;
 }
 
-QScrollBar::handle:vertical:hover {
-    background: @COLOR_PRIMARY@;
-}
-
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0;
-    background: none;
-}
-
-QScrollBar:horizontal {
-    height: 8px;
-    background: @COLOR_SIDEBAR@;
-    border-radius: 4px;
-}
-
-QScrollBar::handle:horizontal {
-    background: @COLOR_HOVER@;
-    min-width: 24px;
-    border-radius: 4px;
-}
-
-QScrollBar::handle:horizontal:hover {
-    background: @COLOR_PRIMARY@;
-}
-
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-    width: 0;
-    background: none;
+QTabBar::tab:hover:!selected {
+    background: rgba(255, 255, 255, 0.03);
+    color: @COLOR_PRIMARY@;
+    border-bottom: 2px solid rgba(173, 198, 255, 0.20);
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   GROUP 7: RADIO BUTTONS & CHECKBOXES
+   LIST WIDGET
+   ────────────────────────────────────────────────────────────────────────── */
+QListWidget {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    outline: none;
+}
+
+QListWidget::item {
+    padding: 5px 8px;
+    border-radius: 3px;
+    margin: 1px 2px;
+}
+
+QListWidget::item:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+QListWidget::item:selected {
+    background-color: rgba(173, 198, 255, 0.10);
+    color: @COLOR_PRIMARY@;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   RADIO BUTTONS & CHECKBOXES
    ────────────────────────────────────────────────────────────────────────── */
 QRadioButton::indicator {
-    width: 14px;
-    height: 14px;
+    width: 13px;
+    height: 13px;
     border-radius: 7px;
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    border: 1.5px solid rgba(255, 255, 255, 0.22);
     background: @COLOR_SIDEBAR@;
 }
 
@@ -118,37 +236,56 @@ QRadioButton::indicator:checked {
     border-color: @COLOR_SECONDARY@;
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
-   GROUP 8: GROUP BOX TITLE
-   ────────────────────────────────────────────────────────────────────────── */
-QGroupBox::title {
-    color: @COLOR_SECONDARY@;
-    subcontrol-origin: margin;
-    left: 8px;
-    padding: 0 4px;
+QRadioButton::indicator:hover {
+    border-color: rgba(173, 198, 255, 0.50);
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   GROUP 9: TAB WIDGET PANE BORDER
+   SCROLLBARS — thin, unobtrusive
    ────────────────────────────────────────────────────────────────────────── */
-QTabWidget::pane {
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 4px;
+QScrollBar:vertical {
+    width: 7px;
+    background: @COLOR_SIDEBAR@;
+    border-radius: 3px;
+    margin: 0;
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
-   GROUP 10: TABLE HEADER SEPARATOR
-   ────────────────────────────────────────────────────────────────────────── */
-QHeaderView::section {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-    padding: 4px 8px;
+QScrollBar::handle:vertical {
+    background: rgba(173, 198, 255, 0.20);
+    min-height: 24px;
+    border-radius: 3px;
 }
 
+QScrollBar::handle:vertical:hover {
+    background: rgba(173, 198, 255, 0.40);
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+
+QScrollBar:horizontal {
+    height: 7px;
+    background: @COLOR_SIDEBAR@;
+    border-radius: 3px;
+    margin: 0;
+}
+
+QScrollBar::handle:horizontal {
+    background: rgba(173, 198, 255, 0.20);
+    min-width: 24px;
+    border-radius: 3px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: rgba(173, 198, 255, 0.40);
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+
 /* ──────────────────────────────────────────────────────────────────────────
-   GROUP 11: SPLITTER HANDLE
+   SPLITTER
    ────────────────────────────────────────────────────────────────────────── */
 QSplitter::handle {
-    background: rgba(255, 255, 255, 0.07);
+    background: rgba(255, 255, 255, 0.06);
 }
 
 QSplitter::handle:hover {
@@ -156,16 +293,8 @@ QSplitter::handle:hover {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   GROUP 12: SPECIAL COMPONENT TWEAKS
+   MISC — transparent backgrounds for labels / scroll areas
    ────────────────────────────────────────────────────────────────────────── */
-QWidget#sidebar { border-right: 1px solid rgba(255, 255, 255, 0.1); }
-
-QPushButton#generateBtn {
-    border: 1px solid @COLOR_PRIMARY@;
-    font-size: 13px;
-    font-weight: bold;
+QLabel, QScrollArea, QScrollArea > QWidget > QWidget {
+    background: transparent;
 }
-
-QLabel, QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }
-
-QGroupBox, QListWidget, QDateEdit { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; }

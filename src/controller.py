@@ -53,7 +53,8 @@ class _MemoryExporter(IOutputExporter):
     load the next batch later using DesktopController.load_more_schedules().
     """
 
-    def __init__(self) -> None:
+    def __init__(self, cap: int | None = RESULT_CAP) -> None:
+        self._cap = cap
         self.schedules_by_period: dict[str, list[Schedule]] = {}
         self.courses_by_id: dict[str, Course] = {}
         self.truncated_periods: set[str] = set()
@@ -72,19 +73,65 @@ class _MemoryExporter(IOutputExporter):
         self.has_more_by_period.clear()
 
         for key, schedule_iter in schedules_by_period.items():
-            preview = list(islice(schedule_iter, RESULT_CAP + 1))
+            if self._cap is None:
+                self.schedules_by_period[key] = list(schedule_iter)
+                self.has_more_by_period[key] = False
+                continue
 
-            if len(preview) > RESULT_CAP:
-                self.schedules_by_period[key] = preview[:RESULT_CAP]
+            preview = list(islice(schedule_iter, self._cap + 1))
+
+            if len(preview) > self._cap:
+                self.schedules_by_period[key] = preview[:self._cap]
                 self.truncated_periods.add(key)
                 self.has_more_by_period[key] = True
                 self.remaining_iterators[key] = chain(
-                    [preview[RESULT_CAP]],
+                    [preview[self._cap]],
                     schedule_iter,
                 )
             else:
                 self.schedules_by_period[key] = preview
                 self.has_more_by_period[key] = False
+
+
+def _run_generation_process(
+    result_queue,
+    courses: "list[Course]",
+    exam_periods: "list[ExamPeriod]",
+    selected_programs: "list[str]",
+) -> None:
+    """
+    Entry point for multiprocessing.Process-based schedule generation.
+
+    Puts (True, schedules_by_period, courses_by_id, truncated_periods) on success
+    or (False, error_message) on failure into result_queue.
+
+    Must be module-level (not a method or closure) to be picklable on platforms
+    that use the 'spawn' start method (macOS, Windows).
+    """
+    try:
+        data_provider = InMemoryDataProvider(
+            courses=courses,
+            exam_periods=exam_periods,
+            selected_programs=selected_programs,
+        )
+        conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
+        generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
+        memory_exporter = _MemoryExporter(cap=None)
+        engine = _EngineController(
+            data_provider=data_provider,
+            exporter=memory_exporter,
+            generator=generator,
+            selected_programs=selected_programs,
+        )
+        engine.run()
+        result_queue.put((
+            True,
+            dict(memory_exporter.schedules_by_period),
+            dict(memory_exporter.courses_by_id),
+            set(),  # no truncation — all schedules returned
+        ))
+    except Exception as exc:
+        result_queue.put((False, str(exc)))
 
 
 class DesktopController:
@@ -98,9 +145,9 @@ class DesktopController:
         self._exam_periods: list[ExamPeriod] = []
         self._selected_programs: list[str] = []
         self._loaded_program_ids: list[str] = []
-        self._truncated_periods: set[str] = set()
         self._remaining_schedule_iterators: dict[str, Iterator[Schedule]] = {}
         self._has_more_schedules: dict[str, bool] = {}
+        self._iterator_overflows: dict[str, Schedule] = {}
 
     def load_courses(self, path: Path, mode: str = "replace") -> int:
         """
@@ -262,9 +309,9 @@ class DesktopController:
         if not self._exam_periods:
             raise ValueError("No exam periods loaded. Load a periods file first.")
 
-        self._truncated_periods.clear()
         self._remaining_schedule_iterators.clear()
         self._has_more_schedules.clear()
+        self._iterator_overflows.clear()
 
         data_provider = InMemoryDataProvider(
             courses=self._courses,
@@ -275,7 +322,7 @@ class DesktopController:
             selected_programs=self._selected_programs
         )
         generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
-        memory_exporter = _MemoryExporter()
+        memory_exporter = _MemoryExporter(cap=None)
 
         engine = _EngineController(
             data_provider=data_provider,
@@ -285,15 +332,20 @@ class DesktopController:
         )
         engine.run()
 
-        self._truncated_periods = set(memory_exporter.truncated_periods)
         self._remaining_schedule_iterators = dict(memory_exporter.remaining_iterators)
         self._has_more_schedules = dict(memory_exporter.has_more_by_period)
 
         return (
             memory_exporter.schedules_by_period,
             memory_exporter.courses_by_id,
-            set(memory_exporter.truncated_periods),
+            set(),  # no truncation — all schedules returned
         )
+
+    def reset_generation_state(self) -> None:
+        """Clear all iterator state after subprocess-based generation completes."""
+        self._remaining_schedule_iterators.clear()
+        self._iterator_overflows.clear()
+        self._has_more_schedules.clear()
 
     def load_more_schedules(
         self,
@@ -319,22 +371,23 @@ class DesktopController:
         schedule_iter = self._remaining_schedule_iterators.get(period_key)
         if schedule_iter is None:
             self._has_more_schedules[period_key] = False
-            self._truncated_periods.discard(period_key)
             return []
 
-        batch = list(islice(schedule_iter, batch_size + 1))
+        # Prepend any overflow item from the previous call without wrapping
+        # schedule_iter in a new chain each time, which would accumulate O(N)
+        # chain levels after N calls and slow down every subsequent __next__.
+        overflow = self._iterator_overflows.pop(period_key, None)
+        it = chain([overflow], schedule_iter) if overflow is not None else schedule_iter
+
+        batch = list(islice(it, batch_size + 1))
 
         if len(batch) > batch_size:
             self._has_more_schedules[period_key] = True
-            self._remaining_schedule_iterators[period_key] = chain(
-                [batch[batch_size]],
-                schedule_iter,
-            )
+            self._iterator_overflows[period_key] = batch[batch_size]
             return batch[:batch_size]
 
         self._has_more_schedules[period_key] = False
         self._remaining_schedule_iterators.pop(period_key, None)
-        self._truncated_periods.discard(period_key)
         return batch
 
     def get_combined_schedule_count(
