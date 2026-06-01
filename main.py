@@ -49,7 +49,7 @@ def _run_cli() -> None:
         programs_path=args.programs,
     )
     selected_programs = data_provider.get_selected_programs()
-    exporter          = TextFileExporter(output_path=args.output)
+    exporter          = TextFileExporter(output_path=args.output, max_combinations=None)
     conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
     generator         = ScheduleGenerator(conflict_strategy=conflict_strategy)
 
