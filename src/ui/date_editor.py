@@ -16,8 +16,7 @@ Usage:
 
 import calendar
 import copy
-from datetime import date, timedelta
-from typing import Dict
+from datetime import date
 
 from PyQt6.QtCore import QDate, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -34,8 +33,8 @@ from PyQt6.QtWidgets import (
 
 from src.domain.exam_period import ExamPeriod
 from src.ui.tokens import (
-    COLOR_CAL_ACTIVE_BG   as _ACTIVE_BG,
-    COLOR_CAL_ACTIVE_FG   as _ACTIVE_FG,
+    COLOR_CAL_ACTIVE_BG as _ACTIVE_BG,
+    COLOR_CAL_ACTIVE_FG as _ACTIVE_FG,
     COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG,
     COLOR_CAL_EXCLUDED_FG as _EXCLUDED_FG,
 )
@@ -49,11 +48,18 @@ _OUT_BG, _OUT_FG = "transparent", "#d1d5db"   # outside range
 # ── Day button ────────────────────────────────────────────────────────────────
 
 class _DayButton(QPushButton):
-    """One day cell inside the calendar.  Emits toggled_date when clicked."""
+    """One day cell inside the calendar. Emits toggled_date when clicked."""
 
     toggled_date = pyqtSignal(date)
 
-    def __init__(self, d: date, in_range: bool, is_saturday: bool, excluded: bool, parent=None):
+    def __init__(
+        self,
+        d: date,
+        in_range: bool,
+        is_saturday: bool,
+        excluded: bool,
+        parent=None,
+    ):
         super().__init__(str(d.day), parent)
         self._date = d
         self._in_range = in_range
@@ -112,7 +118,7 @@ class _MonthWidget(QFrame):
         month: int,
         range_start: date,
         range_end: date,
-        excluded_dates: set,
+        excluded_dates: set[date],
         parent=None,
     ):
         super().__init__(parent)
@@ -121,14 +127,14 @@ class _MonthWidget(QFrame):
         self._range_start = range_start
         self._range_end = range_end
         self._excluded_dates = excluded_dates
-        self._day_buttons: Dict[date, _DayButton] = {}
+        self._day_buttons: dict[date, _DayButton] = {}
 
         self.setFrameShape(QFrame.Shape.Box)
         self.setFrameShadow(QFrame.Shadow.Sunken)
         self._build()
         self.setFixedWidth(7 * 32 + 16)
 
-    def day_buttons(self) -> Dict[date, "_DayButton"]:
+    def day_buttons(self) -> dict[date, "_DayButton"]:
         return self._day_buttons
 
     def _build(self) -> None:
@@ -144,11 +150,13 @@ class _MonthWidget(QFrame):
 
         # Day-of-week headers
         for col, name in enumerate(self._HEADERS):
-            hdr = QLabel(name)
-            hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hdr.setStyleSheet("font-size: 10px; color: #6b7280; font-weight: bold;")
-            hdr.setFixedSize(30, 20)
-            grid.addWidget(hdr, 1, col)
+            header = QLabel(name)
+            header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            header.setStyleSheet(
+                "font-size: 10px; color: #6b7280; font-weight: bold;"
+            )
+            header.setFixedSize(30, 20)
+            grid.addWidget(header, 1, col)
 
         # Day cells
         first_weekday = date(self._year, self._month, 1).weekday()  # 0 = Monday
@@ -193,14 +201,14 @@ class DateEditorWidget(QWidget):
     def __init__(self, exam_period: ExamPeriod, parent=None):
         super().__init__(parent)
         self._period = copy.deepcopy(exam_period)
-        self._day_buttons: Dict[date, _DayButton] = {}
+        self._day_buttons: dict[date, _DayButton] = {}
         self._building = False  # guard: suppress spurious range-changed callbacks
         self._setup_ui()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def get_exam_period(self) -> ExamPeriod:
-        """Return a deep copy of the current (edited) exam period."""
+        """Return a deep copy of the current edited exam period."""
         return copy.deepcopy(self._period)
 
     # ── UI construction ────────────────────────────────────────────────────────
@@ -212,10 +220,10 @@ class DateEditorWidget(QWidget):
 
         # §2.4.3 — Start / End date editors ─────────────────────────────────
         range_row = QWidget()
-        rl = QHBoxLayout(range_row)
-        rl.setContentsMargins(0, 0, 0, 0)
+        range_layout = QHBoxLayout(range_row)
+        range_layout.setContentsMargins(0, 0, 0, 0)
 
-        rl.addWidget(QLabel("Exam window:"))
+        range_layout.addWidget(QLabel("Exam window:"))
 
         self._start_edit = QDateEdit()
         self._start_edit.setCalendarPopup(True)
@@ -226,19 +234,23 @@ class DateEditorWidget(QWidget):
         self._end_edit.setDisplayFormat("dd/MM/yyyy")
 
         if self._period.date_ranges:
-            s, e = self._period.date_ranges[0]
-            self._start_edit.setDate(QDate(s.year, s.month, s.day))
-            self._end_edit.setDate(QDate(e.year, e.month, e.day))
+            start_date, end_date = self._period.date_ranges[0]
+            self._start_edit.setDate(
+                QDate(start_date.year, start_date.month, start_date.day)
+            )
+            self._end_edit.setDate(
+                QDate(end_date.year, end_date.month, end_date.day)
+            )
 
-        rl.addWidget(QLabel("Start:"))
-        rl.addWidget(self._start_edit)
-        rl.addWidget(QLabel("End:"))
-        rl.addWidget(self._end_edit)
-        rl.addStretch()
+        range_layout.addWidget(QLabel("Start:"))
+        range_layout.addWidget(self._start_edit)
+        range_layout.addWidget(QLabel("End:"))
+        range_layout.addWidget(self._end_edit)
+        range_layout.addStretch()
 
         legend = QLabel("  🟦 Active   🟥 Excluded   ⬜ Saturday (auto-excluded)")
         legend.setStyleSheet("color: #6b7280; font-size: 11px;")
-        rl.addWidget(legend)
+        range_layout.addWidget(legend)
 
         self._start_edit.dateChanged.connect(self._on_range_changed)
         self._end_edit.dateChanged.connect(self._on_range_changed)
@@ -255,7 +267,9 @@ class DateEditorWidget(QWidget):
         self._cal_container = QWidget()
         self._cal_layout = QHBoxLayout(self._cal_container)
         self._cal_layout.setSpacing(8)
-        self._cal_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._cal_layout.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
 
         scroll.setWidget(self._cal_container)
         outer.addWidget(scroll)
@@ -280,25 +294,33 @@ class DateEditorWidget(QWidget):
         range_start, range_end = self._period.date_ranges[0]
 
         # Enumerate all calendar months covered by [range_start, range_end]
-        cur = date(range_start.year, range_start.month, 1)
+        current_month = date(range_start.year, range_start.month, 1)
         end_month = date(range_end.year, range_end.month, 1)
-        while cur <= end_month:
-            mw = _MonthWidget(
-                cur.year, cur.month,
-                range_start, range_end,
+
+        while current_month <= end_month:
+            month_widget = _MonthWidget(
+                current_month.year,
+                current_month.month,
+                range_start,
+                range_end,
                 excluded_dates=self._period.excluded_dates,
             )
-            for d, btn in mw.day_buttons().items():
+            for d, btn in month_widget.day_buttons().items():
                 if btn.isEnabled():
                     btn.toggled_date.connect(self._on_day_toggled)
                 self._day_buttons[d] = btn
-            self._cal_layout.addWidget(mw)
+
+            self._cal_layout.addWidget(month_widget)
 
             # Advance to next month
-            if cur.month == 12:
-                cur = date(cur.year + 1, 1, 1)
+            if current_month.month == 12:
+                current_month = date(current_month.year + 1, 1, 1)
             else:
-                cur = date(cur.year, cur.month + 1, 1)
+                current_month = date(
+                    current_month.year,
+                    current_month.month + 1,
+                    1,
+                )
 
         self._building = False
 
@@ -319,28 +341,41 @@ class DateEditorWidget(QWidget):
             self.period_changed.emit()
 
     def _on_range_changed(self) -> None:
-        """§2.4.3 — Sync the period's date range with the QDateEdit values."""
+        """§2.4.3 — Sync the period date range with the QDateEdit values."""
         if self._building:
             return
 
-        sq = self._start_edit.date()
-        eq = self._end_edit.date()
-        new_start = date(sq.year(), sq.month(), sq.day())
-        new_end   = date(eq.year(), eq.month(), eq.day())
+        start_qdate = self._start_edit.date()
+        end_qdate = self._end_edit.date()
+        new_start = date(
+            start_qdate.year(),
+            start_qdate.month(),
+            start_qdate.day(),
+        )
+        new_end = date(
+            end_qdate.year(),
+            end_qdate.month(),
+            end_qdate.day(),
+        )
 
         if new_start > new_end:
             # Reset controls to the model's current valid range so UI stays in sync
             if self._period.date_ranges:
-                s, e = self._period.date_ranges[0]
+                start_date, end_date = self._period.date_ranges[0]
                 self._building = True
-                self._start_edit.setDate(QDate(s.year, s.month, s.day))
-                self._end_edit.setDate(QDate(e.year, e.month, e.day))
+                self._start_edit.setDate(
+                    QDate(start_date.year, start_date.month, start_date.day)
+                )
+                self._end_edit.setDate(
+                    QDate(end_date.year, end_date.month, end_date.day)
+                )
                 self._building = False
             return
 
         # Trim excluded dates that fall outside the new range
         self._period.excluded_dates = {
-            d for d in self._period.excluded_dates
+            d
+            for d in self._period.excluded_dates
             if new_start <= d <= new_end
         }
         self._period.date_ranges = [(new_start, new_end)]
