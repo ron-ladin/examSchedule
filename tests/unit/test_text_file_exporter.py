@@ -8,6 +8,7 @@ Test cases:
     2. SPRI semester → "SPRING" displayed in sub-header.
     3. Courses within a schedule are sorted chronologically.
     4. Multiple schedules in one period are numbered from #1.
+    8. Multi-period where one period is empty → warning logged per empty period.
     5. Empty schedules list → "No valid schedules found." written.
     6. Unknown course_id in assignment → line is skipped (warning logged).
     7. Multiple periods → cross-product, all sub-headers present.
@@ -167,3 +168,30 @@ def test_multiple_periods_cross_product(tmp_path):
     assert "[FALL - Aleph]" in content
     assert "[SPRING - Bet]" in content
     assert "Schedule #2:" not in content
+
+
+def test_empty_period_in_multi_period_run_logs_warning(tmp_path, caplog):
+    """When one period has schedules and another has none, the exporter must
+    write 'No valid schedules found.' AND log a per-period warning identifying
+    the empty period by key."""
+    exporter = TextFileExporter(tmp_path / "schedules.txt")
+    period_fall = _make_period("FALL", "Aleph")
+    period_spri = _make_period("SPRI", "Bet")
+    course = _make_course("11111", "Calculus", "Dr. Cohen")
+    schedule = _make_schedule(period_fall, {"11111": date(2025, 1, 5)})
+
+    with caplog.at_level(logging.WARNING):
+        exporter.export_schedules(
+            schedules_by_period={
+                "FALL - Aleph": [schedule],  # has schedules
+                "SPRI - Bet": [],            # empty
+            },
+            courses_by_id={"11111": course},
+        )
+
+    content = (tmp_path / "schedules.txt").read_text(encoding="utf-8")
+    assert "No valid schedules found." in content
+    assert any(
+        "SPRI - Bet" in r.message and "no valid schedules" in r.message.lower()
+        for r in caplog.records
+    )

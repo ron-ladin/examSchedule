@@ -4,11 +4,12 @@ Unit Tests: DesktopController
 Tests for the desktop UI orchestration layer.
 All file I/O uses tmp_path; no PyQt6 imports.
 """
+import logging
 from pathlib import Path
 
 import pytest
 
-from src.controller import DesktopController
+from src.controller import RESULT_CAP, DesktopController
 
 
 # ── File-writing helpers (mirror test_file_data_provider.py patterns) ─────────
@@ -290,3 +291,51 @@ def test_export_writes_output_file(tmp_path):
     ctrl.export(schedules_by_period, out)
     assert out.exists()
     assert out.stat().st_size > 0
+
+
+# ── truncation cap ────────────────────────────────────────────────────────────
+
+def test_generate_returns_truncated_periods_when_exceeds_cap(tmp_path):
+    """Two obligatory courses in same programme + 4-week window = 380 valid
+    schedules (20 weekdays × 19 remaining for second course), which exceeds
+    RESULT_CAP=200.  generate() must return a non-empty truncated_periods set
+    and exactly RESULT_CAP schedules for that period."""
+    cp = tmp_path / "courses.txt"
+    dp = tmp_path / "dates.txt"
+    cp.write_text(
+        "Calculus\n11111\nDr. Cohen\n83101, 1, FALL, Obligatory\nExam\n$$$$\n"
+        "Algorithms\n22222\nDr. Levi\n83101, 1, FALL, Obligatory\nExam\n",
+        encoding="utf-8",
+    )
+    # 4-week window → 20 weekdays → 20×19 = 380 conflict-free assignments
+    dp.write_text("FALL, Aleph\n05-01-2026, 31-01-2026\n", encoding="utf-8")
+    ctrl = DesktopController()
+    ctrl.load_courses(cp)
+    ctrl.load_periods(dp)
+    ctrl.set_selected_programs(["83101"])
+    schedules_by_period, _, truncated = ctrl.generate()
+    assert len(truncated) > 0, "expected truncated_periods to be non-empty"
+    assert len(schedules_by_period["FALL - Aleph"]) == RESULT_CAP
+
+
+# ── duplicate-key warning ─────────────────────────────────────────────────────
+
+def test_merge_by_key_update_warns_on_duplicate_key(caplog):
+    """_merge_by_key 'update' mode must log a WARNING when new_items contains
+    two entries with the same key, and keep only the last occurrence."""
+    from src.domain.course import Course
+
+    ctrl = DesktopController()
+    item1 = Course(id="11111", name="Calculus", instructor="Dr. Cohen", evaluation_type="Exam")
+    item2 = Course(id="11111", name="Calculus v2", instructor="Dr. Smith", evaluation_type="Exam")
+    existing: list = []
+
+    with caplog.at_level(logging.WARNING, logger="src.controller"):
+        ctrl._merge_by_key(existing, [item1, item2], mode="update", key_fn=lambda c: c.id)
+
+    assert any(
+        "duplicate key" in r.message.lower() and "11111" in r.message
+        for r in caplog.records
+    )
+    assert len(existing) == 1
+    assert existing[0].name == "Calculus v2"  # last occurrence wins

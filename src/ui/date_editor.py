@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -43,6 +44,30 @@ from src.ui.tokens import (
 # ── Colour palette ────────────────────────────────────────────────────────────
 _SAT_BG, _SAT_FG = "#f3f4f6", "#9ca3af"       # Saturday (auto-excluded)
 _OUT_BG, _OUT_FG = "transparent", "#d1d5db"   # outside range
+
+
+def _build_legend() -> QWidget:
+    """Colour-swatch legend row replacing the emoji squares."""
+    w = QWidget()
+    row = QHBoxLayout(w)
+    row.setContentsMargins(8, 0, 0, 0)
+    row.setSpacing(6)
+    for bg_color, label_text in (
+        (_ACTIVE_BG, "Active"),
+        (_EXCLUDED_BG, "Excluded"),
+        (_SAT_BG, "Saturday"),
+    ):
+        swatch = QFrame()
+        swatch.setFixedSize(12, 12)
+        swatch.setStyleSheet(
+            f"background: {bg_color}; border-radius: 3px; border: 1px solid #D1D5DB;"
+        )
+        lbl = QLabel(label_text)
+        lbl.setStyleSheet("color: #6b7280; font-size: 11px;")
+        row.addWidget(swatch)
+        row.addWidget(lbl)
+    row.addStretch()
+    return w
 
 
 # ── Day button ────────────────────────────────────────────────────────────────
@@ -66,8 +91,9 @@ class _DayButton(QPushButton):
         self._is_saturday = is_saturday
         self._excluded = excluded
 
-        self.setFixedSize(30, 30)
+        self.setFixedSize(44, 44)
         self.setFlat(True)
+        self.setToolTip(d.strftime("%A %d %B"))
         self._refresh_style()
 
         if in_range and not is_saturday:
@@ -99,9 +125,9 @@ class _DayButton(QPushButton):
         self.setStyleSheet(
             f"QPushButton {{"
             f"  background: {bg}; color: {fg};"
-            f"  border: none; border-radius: 4px; font-size: 11px;"
+            f"  border: none; border-radius: 6px; font-size: 13px; font-weight: bold;"
             f"}}"
-            f"QPushButton:hover:enabled {{ border: 1px solid {fg}; }}"
+            f"QPushButton:hover:enabled {{ border: 2px solid {fg}; }}"
         )
 
 
@@ -132,7 +158,7 @@ class _MonthWidget(QFrame):
         self.setFrameShape(QFrame.Shape.Box)
         self.setFrameShadow(QFrame.Shadow.Sunken)
         self._build()
-        self.setFixedWidth(7 * 32 + 16)
+        self.setMinimumWidth(7 * 46 + 16)
 
     def day_buttons(self) -> dict[date, "_DayButton"]:
         return self._day_buttons
@@ -155,7 +181,7 @@ class _MonthWidget(QFrame):
             header.setStyleSheet(
                 "font-size: 10px; color: #6b7280; font-weight: bold;"
             )
-            header.setFixedSize(30, 20)
+            header.setFixedSize(44, 26)
             grid.addWidget(header, 1, col)
 
         # Day cells
@@ -225,13 +251,31 @@ class DateEditorWidget(QWidget):
 
         range_layout.addWidget(QLabel("Exam window:"))
 
+        _date_edit_style = (
+            "QDateEdit { background:#FFFFFF; color:#0F172A; border:1px solid #D1D5DB;"
+            " border-radius:6px; padding:3px 8px; }"
+            "QDateEdit::drop-down {"
+            "  subcontrol-origin: padding; subcontrol-position: top right;"
+            "  width: 24px; background: #EFF6FF; border-left: 1px solid #BFDBFE;"
+            "  border-radius: 0 6px 6px 0;"
+            "}"
+            "QDateEdit::drop-down:hover { background: #DBEAFE; }"
+            "QDateEdit::down-arrow { width: 10px; height: 10px; }"
+            "QCalendarWidget { background:#FFFFFF; }"
+            "QCalendarWidget QAbstractItemView { background:#FFFFFF; color:#0F172A; }"
+            "QCalendarWidget QWidget#qt_calendar_navigationbar { background:#F8FAFC; }"
+            "QCalendarWidget QToolButton { color:#374151; background:transparent; }"
+        )
+
         self._start_edit = QDateEdit()
         self._start_edit.setCalendarPopup(True)
         self._start_edit.setDisplayFormat("dd/MM/yyyy")
+        self._start_edit.setStyleSheet(_date_edit_style)
 
         self._end_edit = QDateEdit()
         self._end_edit.setCalendarPopup(True)
         self._end_edit.setDisplayFormat("dd/MM/yyyy")
+        self._end_edit.setStyleSheet(_date_edit_style)
 
         if self._period.date_ranges:
             start_date, end_date = self._period.date_ranges[0]
@@ -248,9 +292,7 @@ class DateEditorWidget(QWidget):
         range_layout.addWidget(self._end_edit)
         range_layout.addStretch()
 
-        legend = QLabel("  🟦 Active   🟥 Excluded   ⬜ Saturday (auto-excluded)")
-        legend.setStyleSheet("color: #6b7280; font-size: 11px;")
-        range_layout.addWidget(legend)
+        range_layout.addWidget(_build_legend())
 
         self._start_edit.dateChanged.connect(self._on_range_changed)
         self._end_edit.dateChanged.connect(self._on_range_changed)
@@ -262,14 +304,12 @@ class DateEditorWidget(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setMinimumHeight(260)
+        scroll.setMinimumHeight(340)
 
         self._cal_container = QWidget()
         self._cal_layout = QHBoxLayout(self._cal_container)
         self._cal_layout.setSpacing(8)
-        self._cal_layout.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-        )
+        self._cal_layout.setContentsMargins(0, 0, 0, 0)
 
         scroll.setWidget(self._cal_container)
         outer.addWidget(scroll)
@@ -310,7 +350,7 @@ class DateEditorWidget(QWidget):
                     btn.toggled_date.connect(self._on_day_toggled)
                 self._day_buttons[d] = btn
 
-            self._cal_layout.addWidget(month_widget)
+            self._cal_layout.addWidget(month_widget, 1)
 
             # Advance to next month
             if current_month.month == 12:
@@ -359,6 +399,12 @@ class DateEditorWidget(QWidget):
         )
 
         if new_start > new_end:
+            QMessageBox.warning(
+                self,
+                "Invalid Date Range",
+                "The <b>Start Date</b> must be before the <b>End Date</b>.<br><br>"
+                "Please select a valid date range.",
+            )
             # Reset controls to the model's current valid range so UI stays in sync
             if self._period.date_ranges:
                 start_date, end_date = self._period.date_ranges[0]

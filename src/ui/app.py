@@ -27,7 +27,7 @@ class ExamSchedulerApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Syncademic — Exam Schedule Generator")
+        self.setWindowTitle("Syncacademic — Exam Schedule Portal")
         self.setMinimumSize(1100, 720)
         self.setStyleSheet(QSS())
         controller = DesktopController()

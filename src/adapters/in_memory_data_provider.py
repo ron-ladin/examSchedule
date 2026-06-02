@@ -13,8 +13,6 @@ Constructor args:
       (defaults to [] for backward compatibility)
 """
 
-from typing import List
-
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
 from src.interfaces.i_data_provider import IDataProvider
@@ -24,19 +22,19 @@ class InMemoryDataProvider(IDataProvider):
 
     def __init__(
         self,
-        courses: List[Course],
-        exam_periods: List[ExamPeriod],
-        selected_programs: List[str] = None,
+        courses: list[Course],
+        exam_periods: list[ExamPeriod],
+        selected_programs: list[str] | None = None,
     ) -> None:
         self._courses = list(courses)
         self._exam_periods = list(exam_periods)
-        self._selected_programs = list(selected_programs) if selected_programs else []
+        self._selected_programs = list(selected_programs) if selected_programs is not None else []
 
-    def get_courses(self) -> List[Course]:
+    def get_courses(self) -> list[Course]:
         return self._courses
 
-    def get_exam_periods(self) -> List[ExamPeriod]:
+    def get_exam_periods(self) -> list[ExamPeriod]:
         return self._exam_periods
 
-    def get_selected_programs(self) -> List[str]:
+    def get_selected_programs(self) -> list[str]:
         return self._selected_programs
