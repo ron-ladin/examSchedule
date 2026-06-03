@@ -194,9 +194,25 @@ class _ResultsPanel(QWidget):
         self._total_by_period: dict[str, int] = {}
         # Maps period_key → {(row, col): (date, [course_id, ...])}
         self._cell_data: dict[str, dict[tuple[int, int], tuple]] = {}
+        # Stale-results state: True when exam periods were edited after last generation
+        self._has_stale_results: bool = False
+        self._stale_banner: QLabel = QLabel()        # overwritten by _setup_ui
+        self._save_btn: QPushButton = QPushButton()  # overwritten by _setup_ui
         self._setup_ui()
 
     # ── Public API ────────────────────────────────────────────────────────────
+
+    def mark_stale(self) -> None:
+        """Show the stale-data warning and disable Export."""
+        self._has_stale_results = True
+        self._stale_banner.setVisible(True)
+        self._save_btn.setEnabled(False)
+
+    def clear_stale(self) -> None:
+        """Hide the stale-data warning and re-enable Export."""
+        self._has_stale_results = False
+        self._stale_banner.setVisible(False)
+        self._save_btn.setEnabled(True)
 
     def load(
         self,
@@ -205,6 +221,7 @@ class _ResultsPanel(QWidget):
         prog_color_map: dict[str, str],
         truncated_periods: set[str] | None = None,
     ) -> None:
+        self.clear_stale()
         self._schedules_by_period = schedules_by_period
         self._courses_by_id = courses_by_id
         self._prog_color_map = prog_color_map
@@ -282,10 +299,24 @@ class _ResultsPanel(QWidget):
         )
         action_row.addWidget(self._summary_lbl)
         action_row.addStretch()
-        save_btn = QPushButton("⬇  Export Schedule")
-        save_btn.clicked.connect(self._on_save)
-        action_row.addWidget(save_btn)
+        self._save_btn = QPushButton("⬇  Export Schedule")
+        self._save_btn.clicked.connect(self._on_save)
+        action_row.addWidget(self._save_btn)
         cl.addLayout(action_row)
+
+        self._stale_banner = QLabel(
+            "⚠  Exam period dates were changed after generation. "
+            "The displayed schedules may contain now-excluded dates. "
+            "Click  ▶  Generate again to update."
+        )
+        self._stale_banner.setWordWrap(True)
+        self._stale_banner.setStyleSheet(
+            "background: #FEF3C7; color: #92400E;"
+            " border: 1px solid #F59E0B; border-radius: 8px;"
+            " padding: 8px 14px; font-size: 12px; font-weight: 500;"
+        )
+        self._stale_banner.setVisible(False)
+        cl.addWidget(self._stale_banner)
 
         tip_lbl = QLabel("💡  Tip: Click on any scheduled exam date to view full details.")
         tip_lbl.setStyleSheet(
@@ -694,6 +725,14 @@ class _ResultsPanel(QWidget):
     # ── Export ────────────────────────────────────────────────────────────────
 
     def _on_save(self) -> None:
+        if self._has_stale_results:
+            QMessageBox.warning(
+                self,
+                "Stale Schedules",
+                "Exam period dates have changed since the last generation.\n\n"
+                "Please click  ▶  Generate again before exporting.",
+            )
+            return
         if not self._schedules_by_period:
             QMessageBox.warning(self, "Nothing to Save", "No schedules have been generated.")
             return

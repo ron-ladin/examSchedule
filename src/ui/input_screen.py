@@ -93,6 +93,7 @@ class ResultsScreen(QWidget):
         self._spin_tick = 0
         self._spin_timer = QTimer(self)
         self._spin_timer.timeout.connect(self._tick_spinner)
+        self._results_loaded: bool = False
         self._setup_ui()
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -117,6 +118,7 @@ class ResultsScreen(QWidget):
             schedules_by_period, courses_by_id, prog_color_map, truncated_periods
         )
         self._workspace.setCurrentIndex(2)
+        self._results_loaded = True
 
     def refresh_courses(self, selected_ids: list[str]) -> None:
         self._course_table.setRowCount(0)
@@ -333,10 +335,17 @@ class ResultsScreen(QWidget):
         for i, btn in enumerate(self._tab_btns):
             btn.setStyleSheet(_TAB_ACTIVE_STYLE if i == active_idx else _TAB_INACTIVE_STYLE)
 
+    def reset_results_state(self) -> None:
+        """Reset loaded flag and clear stale banner when a new generation starts."""
+        self._results_loaded = False
+        self._results_panel.clear_stale()
+
     def _sync_periods(self) -> None:
         self._controller.update_exam_periods(
             [e.get_exam_period() for e in self._date_editors.values()]
         )
+        if self._results_loaded:
+            self._results_panel.mark_stale()
 
     def _tick_spinner(self) -> None:
         self._spinner_lbl.setText(_SPINNER[self._spin_tick % len(_SPINNER)])
@@ -366,11 +375,15 @@ class InputScreen(QWidget):
         self._config.schedule_generated.connect(self._on_generated)
         self._config.generation_failed.connect(self._on_generation_failed)
         self._config.courses_changed.connect(self._results.refresh_courses)
+        # periods_changed fires from ConfigScreen when a new file is loaded (pre-generation).
+        # period_changed (singular) fires from DateEditorWidget inside ResultsScreen after
+        # generation — that path goes through _sync_periods and may call mark_stale().
         self._config.periods_changed.connect(self._results.refresh_periods)
         self._results.back_requested.connect(lambda: self._stacked.setCurrentIndex(0))
 
     def _on_generation_started(self, data: tuple) -> None:
         selected, _ = data
+        self._results.reset_results_state()
         self._results.refresh_courses(selected)
         self._results.refresh_periods()
         self._results.show_loading()
