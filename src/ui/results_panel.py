@@ -211,11 +211,19 @@ class _ResultsPanel(QWidget):
         self._truncated_periods = truncated_periods or set()
         self._period_indices = {k: 0 for k in schedules_by_period}
         self._total_by_period = {}
-        # Pre-populate totals for all periods immediately so the summary always
-        # shows a denominator from the start. Truncated periods get their loaded
-        # count as a provisional value; it updates when "Load More" finishes.
+        # Only record true totals for non-truncated periods; truncated periods
+        # get their real total only after Load More completes.
         for key, scheds in schedules_by_period.items():
-            self._total_by_period[key] = len(scheds)
+            if key not in self._truncated_periods:
+                self._total_by_period[key] = len(scheds)
+
+        # Merge in empty entries for exam periods that have no schedules so
+        # their calendars are always rendered (showing "0 / 0").
+        all_period_keys = [p.get_key() for p in self._controller.get_exam_periods()]
+        merged: dict[str, list] = {k: [] for k in all_period_keys}
+        merged.update(schedules_by_period)
+        self._schedules_by_period = merged
+        self._period_indices = {k: 0 for k in merged}
 
         # Clear existing cards
         while self._cards_splitter.count():
@@ -231,7 +239,7 @@ class _ResultsPanel(QWidget):
         self._load_more_chunk_btns.clear()
         self._cell_data.clear()
 
-        for period_key in schedules_by_period:
+        for period_key in merged:
             self._cards_splitter.addWidget(self._build_period_card(period_key))
 
         self._update_summary()
@@ -559,17 +567,17 @@ class _ResultsPanel(QWidget):
         if not self._schedules_by_period:
             return
 
-        combined = self._controller.get_combined_schedule_count(self._schedules_by_period)
+        # Exclude empty (0-schedule) periods from the combination count
+        non_empty = {k: v for k, v in self._schedules_by_period.items() if v}
+        combined = self._controller.get_combined_schedule_count(non_empty)
         all_known = bool(self._total_by_period) and all(
-            k in self._total_by_period for k in self._schedules_by_period
+            k in self._total_by_period for k in non_empty
         )
         if all_known:
             total_combined = 1
-            for k in self._schedules_by_period:
+            for k in non_empty:
                 total_combined *= self._total_by_period[k]
-            # Append '+' when some periods are still truncated (denominator is provisional)
-            suffix = "+" if self._truncated_periods else ""
-            combined_str = f"{combined:,} / {total_combined:,}{suffix}"
+            combined_str = f"{combined:,} / {total_combined:,}"
         else:
             combined_str = f"{combined:,}"
 

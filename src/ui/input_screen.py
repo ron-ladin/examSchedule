@@ -13,7 +13,9 @@ import logging
 
 from PyQt6.QtCore import Qt, QEasingCurve, QPropertyAnimation, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QFrame,
     QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -105,24 +107,52 @@ class ResultsScreen(QWidget):
         self._course_table.setVisible(has_rows)
 
     def refresh_periods(self) -> None:
-        self._period_tabs.clear()
+        # Clear existing grid items
+        while self._periods_grid_layout.count():
+            item = self._periods_grid_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
         self._date_editors.clear()
+
         periods = self._controller.get_exam_periods()
         if not periods:
             self._no_periods_hint.setVisible(True)
-            self._period_tabs.setVisible(False)
+            self._periods_scroll.setVisible(False)
             return
+
         self._no_periods_hint.setVisible(False)
-        self._period_tabs.setVisible(True)
-        for period in periods:
+        self._periods_scroll.setVisible(True)
+
+        n = len(periods)
+        cols = n if n <= 3 else 2  # 1–3 → single row; 4+ → 2-column grid
+
+        for i, period in enumerate(periods):
             key = period.get_key()
             editor = DateEditorWidget(period)
             editor.period_changed.connect(self._sync_periods)
             self._date_editors[key] = editor
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setWidget(editor)
-            self._period_tabs.addTab(scroll, key)
+
+            card = QFrame()
+            card.setStyleSheet(
+                "QFrame { border:1px solid #E2E8F0; border-radius:10px;"
+                " background:#FAFAFA; }"
+            )
+            vl = QVBoxLayout(card)
+            vl.setContentsMargins(8, 8, 8, 8)
+            vl.setSpacing(4)
+            title = QLabel(key)
+            title.setStyleSheet(
+                "font-weight:700; font-size:12px; color:#1D4ED8;"
+                " background:transparent; border:none;"
+            )
+            vl.addWidget(title)
+            vl.addWidget(editor)
+
+            row, col = divmod(i, cols)
+            self._periods_grid_layout.addWidget(card, row, col)
+
+        for c in range(cols):
+            self._periods_grid_layout.setColumnStretch(c, 1)
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -197,17 +227,18 @@ class ResultsScreen(QWidget):
         self._courses_placeholder.setStyleSheet("font-size:13px; color:#94A3B8;")
         ctl.addWidget(self._courses_placeholder)
         self._course_table = _make_data_table(_COURSE_TABLE_HEADERS)
-        self._course_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self._course_table.horizontalHeader().setSectionResizeMode(
-            7, QHeaderView.ResizeMode.Stretch
-        )
+        hh = self._course_table.horizontalHeader()
+        # Col 0 (Course Name) and 7 (Program Name) stretch to fill available space
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        # Compact columns fit their content
+        for col in (1, 2, 3, 4, 5, 6):
+            hh.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self._course_table.setVisible(False)
         ctl.addWidget(self._course_table)
         self._workspace.addTab(course_tab, "Course Details")
 
-        # Exam Periods tab
+        # Exam Periods tab — responsive grid, one editor per period
         periods_ctr = QWidget()
         periods_ctr.setStyleSheet("background:transparent;")
         ptl = QVBoxLayout(periods_ctr)
@@ -215,9 +246,17 @@ class ResultsScreen(QWidget):
         self._no_periods_hint = QLabel("Load an exam-periods file to edit dates here.")
         self._no_periods_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ptl.addWidget(self._no_periods_hint)
-        self._period_tabs = QTabWidget()
-        self._period_tabs.setVisible(False)
-        ptl.addWidget(self._period_tabs)
+
+        self._periods_scroll = QScrollArea()
+        self._periods_scroll.setWidgetResizable(True)
+        self._periods_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self._periods_grid_ctr = QWidget()
+        self._periods_grid_layout = QGridLayout(self._periods_grid_ctr)
+        self._periods_grid_layout.setSpacing(12)
+        self._periods_grid_layout.setContentsMargins(4, 4, 4, 4)
+        self._periods_scroll.setWidget(self._periods_grid_ctr)
+        self._periods_scroll.setVisible(False)
+        ptl.addWidget(self._periods_scroll)
         self._workspace.addTab(periods_ctr, "Exam Periods")
 
         # Schedule Results tab

@@ -43,7 +43,7 @@ from src.ui.tokens import (
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 _SAT_BG, _SAT_FG = "#f3f4f6", "#9ca3af"       # Saturday (auto-excluded)
-_OUT_BG, _OUT_FG = "transparent", "#d1d5db"   # outside range
+_OUT_BG, _OUT_FG = "#FEF2F2", "#EF4444"       # outside range — red to signal unavailability
 
 
 def _build_legend() -> QWidget:
@@ -228,7 +228,8 @@ class DateEditorWidget(QWidget):
         super().__init__(parent)
         self._period = copy.deepcopy(exam_period)
         self._day_buttons: dict[date, _DayButton] = {}
-        self._building = False  # guard: suppress spurious range-changed callbacks
+        self._building = False       # guard: suppress spurious range-changed callbacks
+        self._showing_error = False  # guard: prevent re-entrant validation popup
         self._setup_ui()
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -256,11 +257,16 @@ class DateEditorWidget(QWidget):
             " border-radius:6px; padding:3px 8px; }"
             "QDateEdit::drop-down {"
             "  subcontrol-origin: padding; subcontrol-position: top right;"
-            "  width: 24px; background: #EFF6FF; border-left: 1px solid #BFDBFE;"
+            "  width: 28px; background: #2563EB; border-left: 1px solid #1D4ED8;"
             "  border-radius: 0 6px 6px 0;"
             "}"
-            "QDateEdit::drop-down:hover { background: #DBEAFE; }"
-            "QDateEdit::down-arrow { width: 10px; height: 10px; }"
+            "QDateEdit::drop-down:hover { background: #1D4ED8; }"
+            "QDateEdit::down-arrow {"
+            "  width: 0px; height: 0px;"
+            "  border-left: 4px solid transparent;"
+            "  border-right: 4px solid transparent;"
+            "  border-top: 6px solid white;"
+            "}"
             "QCalendarWidget { background:#FFFFFF; }"
             "QCalendarWidget QAbstractItemView { background:#FFFFFF; color:#0F172A; }"
             "QCalendarWidget QWidget#qt_calendar_navigationbar { background:#F8FAFC; }"
@@ -382,7 +388,7 @@ class DateEditorWidget(QWidget):
 
     def _on_range_changed(self) -> None:
         """§2.4.3 — Sync the period date range with the QDateEdit values."""
-        if self._building:
+        if self._building or self._showing_error:
             return
 
         start_qdate = self._start_edit.date()
@@ -399,23 +405,27 @@ class DateEditorWidget(QWidget):
         )
 
         if new_start > new_end:
+            self._showing_error = True
             QMessageBox.warning(
                 self,
                 "Invalid Date Range",
                 "The <b>Start Date</b> must be before the <b>End Date</b>.<br><br>"
                 "Please select a valid date range.",
             )
+            self._showing_error = False
             # Reset controls to the model's current valid range so UI stays in sync
             if self._period.date_ranges:
                 start_date, end_date = self._period.date_ranges[0]
-                self._building = True
+                self._start_edit.blockSignals(True)
+                self._end_edit.blockSignals(True)
                 self._start_edit.setDate(
                     QDate(start_date.year, start_date.month, start_date.day)
                 )
                 self._end_edit.setDate(
                     QDate(end_date.year, end_date.month, end_date.day)
                 )
-                self._building = False
+                self._start_edit.blockSignals(False)
+                self._end_edit.blockSignals(False)
             return
 
         # Trim excluded dates that fall outside the new range

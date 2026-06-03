@@ -143,14 +143,14 @@ class ConfigScreen(QWidget):
         outer = QWidget()
         outer.setStyleSheet("background:transparent;")
         ol = QHBoxLayout(outer)
-        ol.setContentsMargins(24, 32, 24, 24)
+        ol.setContentsMargins(32, 32, 32, 32)
 
         content = QWidget()
-        content.setMaximumWidth(780)
+        content.setMaximumWidth(820)
         content.setStyleSheet("background:transparent;")
         cl = QVBoxLayout(content)
         cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(16)
+        cl.setSpacing(24)
 
         # Steps pill
         steps = QLabel("①  Load files   ·   ②  Select programmes   ·   ③  Generate")
