@@ -63,6 +63,12 @@ class TextFileExporter(IOutputExporter):
             )
 
             if any(not schedules for schedules in schedule_lists):
+                for key, schedules in zip(period_keys, schedule_lists):
+                    if not schedules:
+                        logger.warning(
+                            "Period '%s' produced no valid schedules; combined output suppressed.",
+                            key,
+                        )
                 file.write("No valid schedules found.\n")
                 return
 

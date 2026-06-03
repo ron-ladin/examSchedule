@@ -32,6 +32,7 @@ from src.adapters.text_file_exporter import TextFileExporter
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
 from src.domain.schedule import Schedule
+from src.domain.semester import normalize_semester
 from src.engine.app_controller import AppController as _EngineController
 from src.engine.schedule_generator import ScheduleGenerator
 from src.interfaces.i_output_exporter import IOutputExporter
@@ -98,15 +99,13 @@ def _run_generation_process(
     courses: "list[Course]",
     exam_periods: "list[ExamPeriod]",
     selected_programs: "list[str]",
+    cap: "int | None" = RESULT_CAP,
 ) -> None:
     """
     Entry point for multiprocessing.Process-based schedule generation.
 
     Puts (True, schedules_by_period, courses_by_id, truncated_periods) on success
-    or (False, error_message) on failure into result_queue.
-
-    Must be module-level (not a method or closure) to be picklable on platforms
-    that use the 'spawn' start method (macOS, Windows).
+    or (False, error_message) on failure.  Pass cap=None to load all schedules.
     """
     try:
         data_provider = InMemoryDataProvider(
@@ -116,7 +115,7 @@ def _run_generation_process(
         )
         conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
         generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
-        memory_exporter = _MemoryExporter(cap=None)
+        memory_exporter = _MemoryExporter(cap=cap)
         engine = _EngineController(
             data_provider=data_provider,
             exporter=memory_exporter,
@@ -128,7 +127,7 @@ def _run_generation_process(
             True,
             dict(memory_exporter.schedules_by_period),
             dict(memory_exporter.courses_by_id),
-            set(),  # no truncation — all schedules returned
+            memory_exporter.truncated_periods,
         ))
     except Exception as exc:
         result_queue.put((False, str(exc)))
@@ -153,12 +152,15 @@ class DesktopController:
         """
         Load courses from a file into memory.
 
-        mode: "replace" | "append" | "update"
+        mode: "replace" | "update"
         Returns the total number of courses now in memory.
         """
         reader = CourseFileReader(Path(path))
         new_courses = reader.read()
-        self._merge_by_key(self._courses, new_courses, mode, key_fn=lambda c: c.id)
+        if mode == "update":
+            self._update_merge_courses(new_courses)
+        else:
+            self._merge_by_key(self._courses, new_courses, mode, key_fn=lambda c: c.id)
 
         logger.info(
             "load_courses: mode=%s, loaded=%d, total=%d",
@@ -167,6 +169,25 @@ class DesktopController:
             len(self._courses),
         )
         return len(self._courses)
+
+    def _update_merge_courses(self, new_courses: list[Course]) -> None:
+        """Update mode: merge offerings into existing courses; add unknown courses."""
+        existing_by_id: dict[str, Course] = {c.id: c for c in self._courses}
+        for new_course in new_courses:
+            if new_course.id in existing_by_id:
+                existing = existing_by_id[new_course.id]
+                existing_keys = {
+                    (o.program_id, o.year, normalize_semester(o.semester))
+                    for o in existing.offerings
+                }
+                for offering in new_course.offerings:
+                    key = (offering.program_id, offering.year, normalize_semester(offering.semester))
+                    if key not in existing_keys:
+                        existing.add_offering(offering)
+                        existing_keys.add(key)
+            else:
+                self._courses.append(new_course)
+                existing_by_id[new_course.id] = new_course
 
     def load_programs(self, path: Path) -> int:
         """
@@ -225,8 +246,15 @@ class DesktopController:
             key_to_idx: dict[str, int] = {
                 key_fn(item): i for i, item in enumerate(existing)
             }
+            seen_new: set[str] = set()
             for item in new_items:
                 key = key_fn(item)
+                if key in seen_new:
+                    logger.warning(
+                        "_merge_by_key: duplicate key '%s' in new items — last occurrence kept",
+                        key,
+                    )
+                seen_new.add(key)
                 if key in key_to_idx:
                     existing[key_to_idx[key]] = item
                 else:
@@ -322,7 +350,7 @@ class DesktopController:
             selected_programs=self._selected_programs
         )
         generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
-        memory_exporter = _MemoryExporter(cap=None)
+        memory_exporter = _MemoryExporter(cap=RESULT_CAP)
 
         engine = _EngineController(
             data_provider=data_provider,
@@ -338,7 +366,7 @@ class DesktopController:
         return (
             memory_exporter.schedules_by_period,
             memory_exporter.courses_by_id,
-            set(),  # no truncation — all schedules returned
+            memory_exporter.truncated_periods,
         )
 
     def reset_generation_state(self) -> None:
@@ -346,6 +374,38 @@ class DesktopController:
         self._remaining_schedule_iterators.clear()
         self._iterator_overflows.clear()
         self._has_more_schedules.clear()
+
+    def set_has_more_from_truncated(self, truncated_periods: set[str]) -> None:
+        """After subprocess generation, preserve which periods have more schedules.
+
+        Unlike reset_generation_state(), this keeps has_more True for truncated
+        periods so the UI can offer a 'Load More' action.
+        """
+        self._remaining_schedule_iterators.clear()
+        self._iterator_overflows.clear()
+        self._has_more_schedules = {key: True for key in truncated_periods}
+
+    def start_load_more_for_period(
+        self,
+        period_key: str,
+        already_loaded: int,
+    ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
+        """Spawn a subprocess that re-runs generation with cap=None for one period.
+
+        The caller slices result[period_key][already_loaded:] to get only the new
+        schedules beyond what was already loaded.
+        """
+        import multiprocessing as _mp
+        q: _mp.Queue = _mp.Queue()
+        proc = _mp.Process(
+            target=_run_generation_process,
+            args=(q, list(self._courses), list(self._exam_periods),
+                  list(self._selected_programs)),
+            kwargs={"cap": None},
+            daemon=True,
+        )
+        proc.start()
+        return q, proc
 
     def load_more_schedules(
         self,
