@@ -62,5 +62,14 @@ class ExamPeriod:
     def _is_saturday(self, exam_date: date) -> bool:
         return exam_date.weekday() == 5
 
+    def get_overall_date_boundaries(self) -> tuple[date, date]:
+        """Return the earliest start and latest end across all date ranges."""
+        if not self.date_ranges:
+            raise ValueError("ExamPeriod has no date ranges.")
+        return (
+            min(s for s, _ in self.date_ranges),
+            max(e for _, e in self.date_ranges),
+        )
+
     def get_key(self) -> str:
         return f"{normalize_semester(self.semester)} - {self.moed}"

@@ -304,8 +304,7 @@ class DateEditorWidget(QWidget):
         self._end_edit.setStyleSheet(_date_edit_style)
 
         if self._period.date_ranges:
-            start_date = min(s for s, _ in self._period.date_ranges)
-            end_date   = max(e for _, e in self._period.date_ranges)
+            start_date, end_date = self._period.get_overall_date_boundaries()
             self._start_edit.setDate(
                 QDate(start_date.year, start_date.month, start_date.day)
             )
@@ -363,8 +362,7 @@ class DateEditorWidget(QWidget):
             self._building = False
             return
 
-        range_start = min(s for s, _ in self._period.date_ranges)
-        range_end   = max(e for _, e in self._period.date_ranges)
+        range_start, range_end = self._period.get_overall_date_boundaries()
 
         # Enumerate all calendar months covered by [range_start, range_end]
         current_month = date(range_start.year, range_start.month, 1)
@@ -449,8 +447,7 @@ class DateEditorWidget(QWidget):
             self._showing_error = False
             # Reset controls to the model's current valid range so UI stays in sync
             if self._period.date_ranges:
-                start_date = min(s for s, _ in self._period.date_ranges)
-                end_date   = max(e for _, e in self._period.date_ranges)
+                start_date, end_date = self._period.get_overall_date_boundaries()
                 self._start_edit.blockSignals(True)
                 self._end_edit.blockSignals(True)
                 self._start_edit.setDate(
