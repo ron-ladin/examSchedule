@@ -287,6 +287,15 @@ class _ResultsPanel(QWidget):
         action_row.addWidget(save_btn)
         cl.addLayout(action_row)
 
+        tip_lbl = QLabel("💡  Tip: Click on any scheduled exam date to view full details.")
+        tip_lbl.setStyleSheet(
+            "background: rgba(0,90,194,0.06); color: #004394;"
+            " border: 1px solid rgba(0,90,194,0.12); border-radius: 8px;"
+            " padding: 8px 14px; font-size: 12px; font-weight: 500;"
+        )
+        tip_lbl.setWordWrap(True)
+        cl.addWidget(tip_lbl)
+
         self._cards_splitter = QSplitter(Qt.Orientation.Vertical)
         self._cards_splitter.setChildrenCollapsible(False)
         self._cards_splitter.setHandleWidth(8)
@@ -304,8 +313,8 @@ class _ResultsPanel(QWidget):
         card = QGroupBox(_display_period_key(period_key))
         card.setStyleSheet("""
             QGroupBox {
-                background: #FAFCFF;
-                border: 1px solid #DBEAFE;
+                background: rgba(255, 255, 255, 0.7);
+                border: 1px solid rgba(255, 255, 255, 0.9);
                 border-radius: 12px;
                 margin-top: 22px;
                 padding: 8px;
@@ -315,14 +324,14 @@ class _ResultsPanel(QWidget):
                 subcontrol-position: top left;
                 left: 12px;
                 padding: 4px 16px;
-                background: #2563EB;
+                background: #005ac2;
                 color: white;
                 border-radius: 8px;
                 font-weight: 700;
                 font-size: 12px;
             }
         """)
-        card.setMinimumHeight(220)
+        card.setMinimumHeight(320)
         layout = QVBoxLayout(card)
         layout.setSpacing(8)
 
@@ -335,8 +344,8 @@ class _ResultsPanel(QWidget):
         counter = QLabel("Loading…")
         counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
         counter.setStyleSheet(
-            "font-weight: 700; color: #1D4ED8; font-size: 13px;"
-            "background: #EFF6FF; border: 1px solid #BFDBFE;"
+            "font-weight: 700; color: #005ac2; font-size: 13px;"
+            "background: rgba(0, 90, 194, 0.06); border: 1px solid rgba(0, 90, 194, 0.15);"
             "border-radius: 10px; padding: 6px 20px;"
         )
 
@@ -358,8 +367,9 @@ class _ResultsPanel(QWidget):
 
         chunk_btn = QPushButton("⟳  +200 more options")
         chunk_btn.setStyleSheet(
-            "color: #2563EB; border: 2px solid #2563EB; border-radius: 8px;"
-            "padding: 6px 12px; font-size: 11px; font-weight: 600; background: #EFF6FF;"
+            "color: #005ac2; border: 2px solid #005ac2; border-radius: 8px;"
+            "padding: 6px 12px; font-size: 11px; font-weight: 600;"
+            "background: rgba(0, 90, 194, 0.06);"
         )
         chunk_btn.setVisible(has_more)
         chunk_btn.clicked.connect(
@@ -383,6 +393,7 @@ class _ResultsPanel(QWidget):
 
         # Calendar table
         table = _make_data_table(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+        table.setMinimumHeight(220)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         table.setItemDelegate(_CalendarCellDelegate(table))
@@ -390,17 +401,17 @@ class _ResultsPanel(QWidget):
             QTableWidget {
                 border: none;
                 border-radius: 8px;
-                background: white;
-                gridline-color: #E8F0FE;
+                background: rgba(255, 255, 255, 0.85);
+                gridline-color: rgba(194, 198, 214, 0.25);
             }
             QHeaderView::section {
-                background: #2563EB;
+                background: #005ac2;
                 color: white;
                 font-weight: 700;
                 font-size: 11px;
                 padding: 6px 4px;
                 border: none;
-                border-right: 1px solid #1D4ED8;
+                border-right: 1px solid #004494;
             }
             QHeaderView::section:last-child { border-right: none; }
         """)

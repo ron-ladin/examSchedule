@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -155,8 +156,11 @@ class _MonthWidget(QFrame):
         self._excluded_dates = excluded_dates
         self._day_buttons: dict[date, _DayButton] = {}
 
-        self.setFrameShape(QFrame.Shape.Box)
-        self.setFrameShadow(QFrame.Shadow.Sunken)
+        self.setStyleSheet(
+            "QFrame { background: rgba(255,255,255,0.8);"
+            " border: 1px solid rgba(194,198,214,0.4); border-radius: 8px; }"
+        )
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self._build()
         self.setMinimumWidth(7 * 46 + 16)
 
@@ -166,12 +170,16 @@ class _MonthWidget(QFrame):
     def _build(self) -> None:
         grid = QGridLayout(self)
         grid.setSpacing(2)
-        grid.setContentsMargins(6, 6, 6, 6)
+        grid.setContentsMargins(6, 4, 6, 6)
 
         # Month title
         title = QLabel(date(self._year, self._month, 1).strftime("%B %Y"))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-weight: bold; font-size: 12px; padding: 2px;")
+        title.setFixedHeight(26)
+        title.setStyleSheet(
+            "font-weight: 700; font-size: 12px; color: #004394;"
+            " background: transparent; border: none; padding: 0;"
+        )
         grid.addWidget(title, 0, 0, 1, 7)
 
         # Day-of-week headers
@@ -308,12 +316,12 @@ class DateEditorWidget(QWidget):
         # §2.4.1 — Year calendar ────────────────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setMinimumHeight(340)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setMinimumHeight(260)
 
         self._cal_container = QWidget()
-        self._cal_layout = QHBoxLayout(self._cal_container)
+        self._cal_layout = QGridLayout(self._cal_container)
         self._cal_layout.setSpacing(8)
         self._cal_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -343,6 +351,9 @@ class DateEditorWidget(QWidget):
         current_month = date(range_start.year, range_start.month, 1)
         end_month = date(range_end.year, range_end.month, 1)
 
+        _GRID_COLS = 2
+        month_index = 0
+
         while current_month <= end_month:
             month_widget = _MonthWidget(
                 current_month.year,
@@ -356,7 +367,9 @@ class DateEditorWidget(QWidget):
                     btn.toggled_date.connect(self._on_day_toggled)
                 self._day_buttons[d] = btn
 
-            self._cal_layout.addWidget(month_widget, 1)
+            grid_row, grid_col = divmod(month_index, _GRID_COLS)
+            self._cal_layout.addWidget(month_widget, grid_row, grid_col)
+            month_index += 1
 
             # Advance to next month
             if current_month.month == 12:
@@ -367,6 +380,9 @@ class DateEditorWidget(QWidget):
                     current_month.month + 1,
                     1,
                 )
+
+        for c in range(_GRID_COLS):
+            self._cal_layout.setColumnStretch(c, 1)
 
         self._building = False
 

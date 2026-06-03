@@ -3,12 +3,12 @@ Design Tokens — Syncacademic Portal (Light Theme)
 """
 
 # ── 1. Brand / Theme Colors ──────────────────────────────────────────────────
-COLOR_BACKGROUND = "#F1F5F9"       # Slate-100 page background
-COLOR_SIDEBAR    = "#FFFFFF"       # White sidebar
-COLOR_CARD_BG    = "#FFFFFF"       # White cards / containers
-COLOR_HOVER      = "#EFF6FF"       # Blue-50 hover state
-COLOR_PRIMARY    = "#2563EB"       # Blue-600 primary accent
-COLOR_SECONDARY  = "#1D4ED8"       # Blue-700 active / selected
+COLOR_BACKGROUND = "#f6faff"                   # Soft blue-white base
+COLOR_SIDEBAR    = "rgba(255, 255, 255, 0.85)" # Glass header / footer
+COLOR_CARD_BG    = "#FFFFFF"                   # White cards
+COLOR_HOVER      = "rgba(0, 90, 194, 0.06)"   # Subtle primary hover
+COLOR_PRIMARY    = "#005ac2"                   # Brand blue (design system)
+COLOR_SECONDARY  = "#004494"                   # Darker brand blue
 
 # ── 2. Exam Calendar Indicators ──────────────────────────────────────────────
 COLOR_CAL_ACTIVE_BG   = "#DBEAFE"  # Blue-100 active days

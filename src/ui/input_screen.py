@@ -11,7 +11,10 @@ Failure          : generation_failed   → hide spinner + back to Config + error
 
 import logging
 
+from pathlib import Path
+
 from PyQt6.QtCore import Qt, QEasingCurve, QPropertyAnimation, QTimer, pyqtSignal
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
@@ -32,7 +35,6 @@ from PyQt6.QtWidgets import (
 from src.controller import DesktopController
 from src.domain.course import Course
 from src.domain.schedule import Schedule
-from src.ui.assets.logo_widget import LogoWidget
 from src.ui.config_screen import ConfigScreen
 from src.ui.date_editor import DateEditorWidget
 from src.ui.results_panel import _ResultsPanel, _make_data_table
@@ -45,6 +47,36 @@ _COURSE_TABLE_HEADERS = [
     "Requirement", "Evaluation", "Program ID", "Program Name",
 ]
 _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+_LOGO_PNG = str(Path(__file__).parent / "assets" / "logo.png")
+
+_TAB_ACTIVE_STYLE = (
+    "QPushButton {"
+    " background: rgba(0, 90, 194, 0.06);"
+    " color: #005ac2;"
+    " border-top: none; border-left: none; border-right: none;"
+    " border-bottom: 3px solid #005ac2;"
+    " border-radius: 0;"
+    " padding: 4px 22px;"
+    " font-size: 13px;"
+    " font-weight: 700;"
+    "}"
+)
+
+_TAB_INACTIVE_STYLE = (
+    "QPushButton {"
+    " background: transparent;"
+    " color: #42474e;"
+    " border: none;"
+    " border-radius: 0;"
+    " padding: 4px 22px;"
+    " font-size: 13px;"
+    " font-weight: 500;"
+    "}"
+    "QPushButton:hover {"
+    " background: rgba(0, 90, 194, 0.04);"
+    " color: #005ac2;"
+    "}"
+)
 
 
 # ── Results Screen (Screen 1) ─────────────────────────────────────────────────
@@ -101,7 +133,9 @@ class ResultsScreen(QWidget):
                         offering.semester, offering.requirement,
                         course.evaluation_type, prog_id, prog_name,
                     ]):
-                        self._course_table.setItem(row, col, QTableWidgetItem(value))
+                        item = QTableWidgetItem(value)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        self._course_table.setItem(row, col, item)
         has_rows = self._course_table.rowCount() > 0
         self._courses_placeholder.setVisible(not has_rows)
         self._course_table.setVisible(has_rows)
@@ -142,7 +176,7 @@ class ResultsScreen(QWidget):
             vl.setSpacing(4)
             title = QLabel(key)
             title.setStyleSheet(
-                "font-weight:700; font-size:12px; color:#1D4ED8;"
+                "font-weight:700; font-size:12px; color:#005ac2;"
                 " background:transparent; border:none;"
             )
             vl.addWidget(title)
@@ -171,49 +205,76 @@ class ResultsScreen(QWidget):
     def _build_header(self) -> QWidget:
         hdr = QWidget()
         hdr.setObjectName("appHeader")
-        hdr.setFixedHeight(56)
+        hdr.setFixedHeight(80)
         hl = QHBoxLayout(hdr)
-        hl.setContentsMargins(16, 0, 20, 0)
-        hl.setSpacing(10)
+        hl.setContentsMargins(20, 0, 0, 0)
+        hl.setSpacing(12)
+
         back_btn = QPushButton("← Back")
-        back_btn.setFixedWidth(80)
-        back_btn.setFixedHeight(32)
+        back_btn.setFixedSize(90, 36)
         back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         back_btn.setStyleSheet(
-            "background:#F1F5F9; color:#374151; border:1px solid #D1D5DB;"
-            "border-radius:8px; font-size:11px; font-weight:600;"
+            "QPushButton { background: #dee3eb; color: #42474e;"
+            " border: 1px solid rgba(194,198,214,0.6); border-radius: 8px;"
+            " font-size: 12px; font-weight: 600; }"
+            "QPushButton:hover { background: rgba(0,90,194,0.08); color: #005ac2;"
+            " border-color: #005ac2; }"
         )
         back_btn.clicked.connect(self.back_requested.emit)
         hl.addWidget(back_btn)
-        hl.addWidget(LogoWidget(size=28))
+        hl.addSpacing(8)
+
+        _logo = QLabel()
+        _logo.setStyleSheet("background: transparent; border: none;")
+        _logo.setFixedSize(32, 32)
+        _pix = QPixmap(_LOGO_PNG)
+        if not _pix.isNull():
+            _logo.setPixmap(_pix.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.SmoothTransformation))
+        hl.addWidget(_logo)
         brand = QLabel("Syncacademic")
         brand.setStyleSheet(
-            "font-size:15px; font-weight:800; color:#2563EB; background:transparent;"
+            "font-size: 22px; font-weight: 800; color: #005ac2;"
+            " letter-spacing: -0.5px; background: transparent;"
         )
         hl.addWidget(brand)
         hl.addStretch()
+
+        self._tab_btns: list[QPushButton] = []
+        for i, name in enumerate(["Course Details", "Exam Periods", "Schedule Results"]):
+            btn = QPushButton(name)
+            btn.setFixedHeight(80)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _, idx=i: self._switch_tab(idx))
+            self._tab_btns.append(btn)
+            hl.addWidget(btn)
+
+        self._update_tab_buttons(0)
         return hdr
 
     def _build_loading_pane(self) -> QWidget:
         pane = QWidget()
-        pane.setStyleSheet("background:#F8FAFC;")
+        pane.setStyleSheet("background: #f6faff;")
         vl = QVBoxLayout(pane)
         vl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         vl.setSpacing(14)
         self._spinner_lbl = QLabel("⠋")
         self._spinner_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._spinner_lbl.setStyleSheet(
-            "font-size:52px; color:#2563EB; background:transparent;"
+            "font-size: 52px; color: #005ac2; background: transparent;"
         )
         vl.addWidget(self._spinner_lbl)
         msg = QLabel("Generating schedules…\nThis may take a few seconds.")
         msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        msg.setStyleSheet("font-size:14px; color:#64748B; background:transparent;")
+        msg.setStyleSheet("font-size: 14px; color: #42474e; background: transparent;")
         vl.addWidget(msg)
         return pane
 
     def _build_workspace(self) -> QTabWidget:
         self._workspace = QTabWidget()
+        self._workspace.tabBar().hide()
+        self._workspace.tabBar().setFixedHeight(0)
+        self._workspace.currentChanged.connect(self._update_tab_buttons)
 
         # Course Details tab
         course_tab = QWidget()
@@ -224,7 +285,7 @@ class ResultsScreen(QWidget):
             "No courses loaded yet.\n\nLoad a courses file and select a programme."
         )
         self._courses_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._courses_placeholder.setStyleSheet("font-size:13px; color:#94A3B8;")
+        self._courses_placeholder.setStyleSheet("font-size:13px; color:#72778c;")
         ctl.addWidget(self._courses_placeholder)
         self._course_table = _make_data_table(_COURSE_TABLE_HEADERS)
         hh = self._course_table.horizontalHeader()
@@ -263,6 +324,14 @@ class ResultsScreen(QWidget):
         self._results_panel = _ResultsPanel(self._controller)
         self._workspace.addTab(self._results_panel, "Schedule Results")
         return self._workspace
+
+    def _switch_tab(self, idx: int) -> None:
+        self._workspace.setCurrentIndex(idx)
+        self._update_tab_buttons(idx)
+
+    def _update_tab_buttons(self, active_idx: int) -> None:
+        for i, btn in enumerate(self._tab_btns):
+            btn.setStyleSheet(_TAB_ACTIVE_STYLE if i == active_idx else _TAB_INACTIVE_STYLE)
 
     def _sync_periods(self) -> None:
         self._controller.update_exam_periods(

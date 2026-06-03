@@ -27,7 +27,7 @@ from pathlib import Path
 from queue import Empty as _QueueEmpty
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -48,7 +48,7 @@ from PyQt6.QtWidgets import (
 
 from src.controller import DesktopController, _run_generation_process
 from src.ui.assets.icons import BookIcon, CalendarIcon, GraduationIcon
-from src.ui.assets.logo_widget import LogoWidget
+_LOGO_PNG = str(Path(__file__).parent / "assets" / "logo.png")
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ _MAX_GEN_SECS = 30
 def _section_lbl(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet(
-        "font-size:10px; font-weight:700; color:#94A3B8;"
+        "font-size:10px; font-weight:700; color:#72778c;"
         " letter-spacing:0.6px; background:transparent;"
     )
     return lbl
@@ -70,11 +70,17 @@ def _section_lbl(text: str) -> QLabel:
 
 def _card() -> QFrame:
     f = QFrame()
-    f.setStyleSheet("QFrame { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:12px; }")
+    f.setStyleSheet(
+        "QFrame {"
+        " background: rgba(255, 255, 255, 0.75);"
+        " border: 1px solid rgba(255, 255, 255, 0.9);"
+        " border-radius: 12px;"
+        "}"
+    )
     eff = QGraphicsDropShadowEffect()
-    eff.setBlurRadius(14)
-    eff.setColor(QColor(0, 0, 0, 14))
-    eff.setOffset(0, 2)
+    eff.setBlurRadius(18)
+    eff.setColor(QColor(0, 67, 148, 13))
+    eff.setOffset(0, 4)
     f.setGraphicsEffect(eff)
     return f
 
@@ -115,19 +121,26 @@ class ConfigScreen(QWidget):
     def _build_header(self) -> QWidget:
         hdr = QWidget()
         hdr.setObjectName("appHeader")
-        hdr.setFixedHeight(64)
+        hdr.setFixedHeight(80)
         hl = QHBoxLayout(hdr)
-        hl.setContentsMargins(32, 0, 32, 0)
+        hl.setContentsMargins(20, 0, 20, 0)
         hl.setSpacing(12)
-        hl.addWidget(LogoWidget(size=36))
+        _logo = QLabel()
+        _logo.setStyleSheet("background: transparent; border: none;")
+        _logo.setFixedSize(32, 32)
+        _pix = QPixmap(_LOGO_PNG)
+        if not _pix.isNull():
+            _logo.setPixmap(_pix.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.SmoothTransformation))
+        hl.addWidget(_logo)
         brand = QLabel("Syncacademic")
         brand.setStyleSheet(
-            "font-size:20px; font-weight:800; color:#2563EB;"
-            " letter-spacing:-0.5px; background:transparent;"
+            "font-size: 22px; font-weight: 800; color: #005ac2;"
+            " letter-spacing: -0.5px; background: transparent;"
         )
         tagline = QLabel("Academic Command Center")
         tagline.setStyleSheet(
-            "font-size:12px; color:#94A3B8; font-weight:500; background:transparent;"
+            "font-size: 12px; color: #42474e; font-weight: 500; background: transparent;"
         )
         hl.addWidget(brand)
         hl.addWidget(tagline)
@@ -146,24 +159,41 @@ class ConfigScreen(QWidget):
         ol.setContentsMargins(32, 32, 32, 32)
 
         content = QWidget()
-        content.setMaximumWidth(820)
+        content.setMaximumWidth(900)
         content.setStyleSheet("background:transparent;")
         cl = QVBoxLayout(content)
         cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(24)
+        cl.setSpacing(20)
 
-        # Steps pill
-        steps = QLabel("①  Load files   ·   ②  Select programmes   ·   ③  Generate")
-        steps.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        steps.setStyleSheet(
-            "font-size:11px; color:#64748B; background:#F1F5F9;"
-            " border-radius:20px; padding:8px 20px; border:1px solid #E2E8F0;"
-        )
-        cl.addWidget(steps)
+        # Steps tracker row
+        steps_row = QWidget()
+        steps_row.setStyleSheet("background: transparent;")
+        sl = QHBoxLayout(steps_row)
+        sl.setContentsMargins(0, 4, 0, 4)
+        sl.setSpacing(0)
+        sl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        for i, (icon, text, active) in enumerate([
+            ("①", "Load files", True),
+            ("②", "Select programmes", False),
+            ("③", "Generate", False),
+        ]):
+            if i > 0:
+                div = QLabel("  ——  ")
+                div.setStyleSheet(
+                    "color: rgba(194, 198, 214, 0.9); background: transparent; font-size: 11px;"
+                )
+                sl.addWidget(div)
+            step = QLabel(f"{icon}  {text}")
+            step.setStyleSheet(
+                f"font-size: 13px; font-weight: {'700' if active else '500'};"
+                f" color: {'#004394' if active else '#42474e'}; background: transparent;"
+            )
+            sl.addWidget(step)
+        cl.addWidget(steps_row)
 
         top = QHBoxLayout()
         top.setSpacing(16)
-        top.addWidget(self._build_mode_card(), 0)
+        top.addWidget(self._build_mode_card(), 1)
         top.addWidget(self._build_files_card(), 1)
         cl.addLayout(top)
 
@@ -178,30 +208,74 @@ class ConfigScreen(QWidget):
 
     def _build_mode_card(self) -> QFrame:
         c = _card()
-        c.setFixedWidth(210)
         vl = QVBoxLayout(c)
         vl.setContentsMargins(20, 18, 20, 18)
-        vl.setSpacing(8)
+        vl.setSpacing(10)
         vl.addWidget(_section_lbl("LOAD MODE"))
+
         self._mode_group = QButtonGroup(self)
+        self._mode_frames: list[QFrame] = []
+
+        _rb_style = (
+            "QRadioButton { font-size:14px; font-weight:600; color:#171c20;"
+            " spacing:10px; background:transparent; }"
+            "QRadioButton::indicator { width:18px; height:18px; border-radius:9px;"
+            " border:2px solid rgba(194,198,214,0.9); background:white; }"
+            "QRadioButton::indicator:hover { border-color:#004394; }"
+            "QRadioButton::indicator:checked { border:5px solid #004394;"
+            " background:white; border-radius:9px; }"
+        )
+
         for label, hint_text in (
             ("Replace", "Clear all existing data"),
             ("Update",  "Merge with existing data"),
         ):
+            option_frame = QFrame()
+            option_frame.setCursor(Qt.CursorShape.PointingHandCursor)
+            fl = QVBoxLayout(option_frame)
+            fl.setContentsMargins(0, 0, 0, 0)
+            fl.setSpacing(0)
+
+            rb_row = QWidget()
+            rb_row.setStyleSheet("background:transparent;")
+            rl = QHBoxLayout(rb_row)
+            rl.setContentsMargins(14, 12, 14, 4)
+            rl.setSpacing(10)
             rb = QRadioButton(label)
-            rb.setStyleSheet("font-size:13px; color:#1F2937; font-weight:500; spacing:8px;")
             rb.setCursor(Qt.CursorShape.PointingHandCursor)
+            rb.setStyleSheet(_rb_style)
             self._mode_group.addButton(rb)
-            vl.addWidget(rb)
-            h = QLabel(hint_text)
-            h.setStyleSheet(
-                "font-size:9px; color:#94A3B8; margin-left:24px;"
-                " margin-bottom:2px; background:transparent;"
-            )
-            vl.addWidget(h)
+            rl.addWidget(rb)
+            rl.addStretch()
+
+            hint = QLabel(hint_text)
+            hint.setContentsMargins(42, 0, 14, 10)
+            hint.setStyleSheet("font-size:12px; color:#42474e; background:transparent;")
+
+            fl.addWidget(rb_row)
+            fl.addWidget(hint)
+            rb.toggled.connect(lambda _: self._update_mode_card_styles())
+            self._mode_frames.append(option_frame)
+            vl.addWidget(option_frame)
+
         self._mode_group.buttons()[0].setChecked(True)
+        self._update_mode_card_styles()
         vl.addStretch()
         return c
+
+    def _update_mode_card_styles(self) -> None:
+        checked = self._mode_group.checkedButton()
+        for btn, frame in zip(self._mode_group.buttons(), self._mode_frames):
+            if btn is checked:
+                frame.setStyleSheet(
+                    "QFrame { background:rgba(0,67,148,0.05);"
+                    " border:1.5px solid #004394; border-radius:10px; }"
+                )
+            else:
+                frame.setStyleSheet(
+                    "QFrame { background:rgba(255,255,255,0.6);"
+                    " border:1px solid rgba(194,198,214,0.5); border-radius:10px; }"
+                )
 
     def _build_files_card(self) -> QFrame:
         c = _card()
@@ -211,29 +285,43 @@ class ConfigScreen(QWidget):
         vl.addWidget(_section_lbl("FILES"))
 
         specs = [
-            (BookIcon(13, "#2563EB"),       "Courses",      "Load Courses",
+            (BookIcon(14, "#004394"),       "Courses",      "Load Courses",
              "_load_courses_btn", "_courses_label",   self._load_courses),
-            (CalendarIcon(13, "#2563EB"),   "Exam Periods", "Load Periods",
+            (CalendarIcon(14, "#004394"),   "Exam Periods", "Load Periods",
              "_load_periods_btn", "_dates_label",     self._load_dates),
-            (GraduationIcon(13, "#2563EB"), "Programmes",   "Load Programs",
+            (GraduationIcon(14, "#004394"), "Programmes",   "Load Programs",
              "_load_programs_btn", "_programs_label", self._load_programs),
         ]
+        _file_btn_style = (
+            "QPushButton { background:rgba(222,227,235,0.9);"
+            " border:1px solid rgba(194,198,214,0.5); border-radius:8px;"
+            " padding:5px 12px; font-size:12px; font-weight:600; color:#171c20; }"
+            "QPushButton:hover { background:rgba(0,67,148,0.08);"
+            " border-color:#004394; color:#004394; }"
+        )
         for icon, title, btn_text, btn_attr, lbl_attr, slot in specs:
             btn = QPushButton(btn_text)
-            btn.setFixedWidth(106)
+            btn.setFixedWidth(110)
+            btn.setStyleSheet(_file_btn_style)
             btn.clicked.connect(slot)
             lbl = QLabel("No file loaded")
-            lbl.setStyleSheet("font-size:10px; color:#94A3B8;")
+            lbl.setStyleSheet("font-size:11px; color:#72778c; background:transparent;")
             setattr(self, btn_attr, btn)
             setattr(self, lbl_attr, lbl)
 
-            row = QWidget()
+            row = QFrame()
+            row.setStyleSheet(
+                "QFrame { background:transparent; border-radius:8px; border:none; }"
+                "QFrame:hover { background:rgba(0,67,148,0.04); }"
+            )
             hl = QHBoxLayout(row)
-            hl.setContentsMargins(0, 0, 0, 0)
-            hl.setSpacing(8)
+            hl.setContentsMargins(10, 8, 10, 8)
+            hl.setSpacing(10)
             hl.addWidget(icon)
             t = QLabel(title)
-            t.setStyleSheet("font-size:12px; font-weight:600; color:#374151;")
+            t.setStyleSheet(
+                "font-size:14px; font-weight:600; color:#171c20; background:transparent;"
+            )
             hl.addWidget(t)
             hl.addStretch()
             hl.addWidget(btn)
@@ -265,25 +353,26 @@ class ConfigScreen(QWidget):
         vl.addWidget(self._prog_placeholder)
 
         self._prog_list = QListWidget()
-        self._prog_list.setFixedHeight(124)
+        self._prog_list.setFixedHeight(160)
         self._prog_list.setVisible(False)
         self._prog_list.setStyleSheet("""
             QListWidget {
-                border: 1px solid #E2E8F0; border-radius: 8px;
-                background: #F8FAFC; outline: none; padding: 4px;
+                border: 1px solid rgba(194,198,214,0.4); border-radius: 10px;
+                background: rgba(255,255,255,0.75); outline: none; padding: 4px;
             }
             QListWidget::item {
-                padding: 7px 10px; border-radius: 6px; margin: 1px 0;
-                font-size: 12px; color: #374151; font-weight: 500;
+                padding: 9px 12px; border-radius: 8px; margin: 2px 2px;
+                font-size: 13px; color: #171c20; font-weight: 500;
             }
-            QListWidget::item:hover    { background: #EFF6FF; }
+            QListWidget::item:hover    { background: rgba(0,67,148,0.05); }
             QListWidget::item:selected { background: transparent; }
             QListWidget::indicator {
-                width: 16px; height: 16px; border-radius: 4px;
-                border: 2px solid #CBD5E1; background: white; margin-right: 4px;
+                width: 18px; height: 18px; border-radius: 5px;
+                border: 2px solid rgba(194,198,214,0.9); background: white;
+                margin-right: 6px;
             }
-            QListWidget::indicator:hover   { border-color: #2563EB; }
-            QListWidget::indicator:checked { background: #2563EB; border-color: #2563EB; }
+            QListWidget::indicator:hover   { border-color: #004394; }
+            QListWidget::indicator:checked { background: #004394; border-color: #004394; }
         """)
         self._prog_list.itemChanged.connect(self._on_programme_toggled)
         vl.addWidget(self._prog_list)
@@ -295,7 +384,10 @@ class ConfigScreen(QWidget):
         footer.setObjectName("configFooter")
         footer.setFixedHeight(76)
         footer.setStyleSheet(
-            "QWidget#configFooter { background:#FFFFFF; border-top:1px solid #E2E8F0; }"
+            "QWidget#configFooter {"
+            " background: rgba(255, 255, 255, 0.85);"
+            " border-top: 1px solid rgba(194, 198, 214, 0.6);"
+            "}"
         )
         vl = QVBoxLayout(footer)
         vl.setContentsMargins(32, 8, 32, 12)
@@ -342,7 +434,10 @@ class ConfigScreen(QWidget):
         try:
             count = self._controller.load_courses(Path(path), mode=mode)
             self._courses_label.setText(f"{Path(path).name}  ({count})")
-            self._courses_label.setStyleSheet("font-size:10px; color:#059669;")
+            self._courses_label.setStyleSheet(
+                "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
+                " border-radius:4px; padding:2px 7px;"
+            )
             self._refresh_programme_list()
             self._set_status(f"✓  {count} courses loaded.")
             self._update_gen_btn()
@@ -360,7 +455,10 @@ class ConfigScreen(QWidget):
         try:
             count = self._controller.load_periods(Path(path), mode=mode)
             self._dates_label.setText(f"{Path(path).name}  ({count})")
-            self._dates_label.setStyleSheet("font-size:10px; color:#059669;")
+            self._dates_label.setStyleSheet(
+                "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
+                " border-radius:4px; padding:2px 7px;"
+            )
             self._set_status(f"✓  {count} exam period(s) loaded.")
             self._update_gen_btn()
             self.periods_changed.emit()
@@ -377,7 +475,10 @@ class ConfigScreen(QWidget):
         try:
             count = self._controller.load_programs(Path(path))
             self._programs_label.setText(f"{Path(path).name}  ({count})")
-            self._programs_label.setStyleSheet("font-size:10px; color:#059669;")
+            self._programs_label.setStyleSheet(
+                "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
+                " border-radius:4px; padding:2px 7px;"
+            )
             self._refresh_programme_list()
             self._set_status(f"✓  {count} programme(s) loaded.")
             self._update_gen_btn()
