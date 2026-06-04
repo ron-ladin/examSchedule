@@ -589,3 +589,163 @@ def test_export_allowed_when_results_are_not_stale(tmp_path):
 
     assert out.exists()
     assert out.stat().st_size > 0
+
+
+# ── edge cases / boundaries / error handling ───────────────────────
+
+def test_empty_courses_file_is_rejected_and_controller_remains_usable(tmp_path):
+    """
+    Loading an empty courses file should fail safely and must not leave the
+    controller in a corrupted state. After the failure, the user should still be
+    able to load a valid courses file normally.
+    """
+    cp = tmp_path / "courses.txt"
+    cp.write_text("", encoding="utf-8")
+
+    ctrl = DesktopController()
+
+    with pytest.raises(ValueError):
+        ctrl.load_courses(cp)
+
+    assert ctrl.has_courses is False
+    assert ctrl.get_programme_ids() == []
+
+    _write_courses(cp)
+
+    count = ctrl.load_courses(cp)
+
+    assert count == 2
+    assert ctrl.has_courses is True
+    assert "83101" in ctrl.get_programme_ids()
+
+
+def test_empty_exam_periods_file_is_rejected_and_controller_remains_usable(tmp_path):
+    """
+    Loading an empty exam-periods file should fail safely and must not leave the
+    controller in a corrupted state. After the failure, a valid periods file can
+    still be loaded.
+    """
+    dp = tmp_path / "dates.txt"
+    dp.write_text("", encoding="utf-8")
+
+    ctrl = DesktopController()
+
+    with pytest.raises(ValueError):
+        ctrl.load_periods(dp)
+
+    assert ctrl.has_periods is False
+    assert ctrl.get_exam_periods() == []
+
+    _write_periods(dp)
+
+    count = ctrl.load_periods(dp)
+
+    assert count == 1
+    assert ctrl.has_periods is True
+
+
+def test_empty_programs_file_is_rejected_and_controller_remains_usable(tmp_path):
+    """
+    Empty selected-programs input should be rejected, but the controller should
+    still allow loading a valid programs file afterwards.
+    """
+    pp = tmp_path / "programs.txt"
+    pp.write_text("", encoding="utf-8")
+
+    ctrl = DesktopController()
+
+    with pytest.raises(ValueError):
+        ctrl.load_programs(pp)
+
+    assert ctrl.get_programme_ids() == []
+
+    _write_programs(pp, content="83101,83102")
+
+    count = ctrl.load_programs(pp)
+
+    assert count == 2
+    assert ctrl.get_programme_ids() == ["83101", "83102"]
+
+
+def test_rapid_generate_back_generate_again_does_not_corrupt_state(tmp_path):
+    """
+    Simulates the important state flow without PyQt UI tests:
+
+    1. User loads data and generates schedules.
+    2. User goes back and changes exam-period data.
+    3. Old schedules become stale and export is blocked.
+    4. User generates again.
+    5. New schedules are fresh and export works.
+
+    This protects the Config -> Generate -> Results -> Back -> Generate again
+    scenario from stale-state corruption.
+    """
+    cp = tmp_path / "courses.txt"
+    dp = tmp_path / "dates.txt"
+    out_old = tmp_path / "old.txt"
+    out_new = tmp_path / "new.txt"
+
+    _write_courses(cp)
+    _write_periods(dp)
+
+    ctrl = DesktopController()
+    ctrl.load_courses(cp)
+    ctrl.load_periods(dp)
+    ctrl.set_selected_programs(["83101"])
+
+    first_schedules, _, first_truncated = ctrl.generate()
+
+    assert first_schedules
+    assert first_truncated == set()
+    assert ctrl.results_stale is False
+
+    # Simulate user going back to the exam-period editor and changing dates.
+    current_periods = ctrl.get_exam_periods()
+    ctrl.update_exam_periods(current_periods)
+
+    assert ctrl.results_stale is True
+
+    with pytest.raises(ValueError, match="Cannot export stale schedules"):
+        ctrl.export(first_schedules, out_old)
+
+    assert not out_old.exists()
+
+    # User generates again after returning from the results screen.
+    second_schedules, _, second_truncated = ctrl.generate()
+
+    assert second_schedules
+    assert second_truncated == set()
+    assert ctrl.results_stale is False
+
+    ctrl.export(second_schedules, out_new)
+
+    assert out_new.exists()
+    assert out_new.stat().st_size > 0
+
+
+def test_selecting_more_than_five_programmes_is_rejected_and_previous_selection_kept():
+    """
+    The 5-programme boundary must reject invalid input without corrupting the
+    last valid programme selection.
+    """
+    ctrl = DesktopController()
+
+    ctrl.set_selected_programs(["83101", "83102", "83103", "83104", "83105"])
+
+    with pytest.raises(ValueError, match="Maximum 5"):
+        ctrl.set_selected_programs([
+            "83101",
+            "83102",
+            "83103",
+            "83104",
+            "83105",
+            "83108",
+        ])
+
+    assert ctrl._selected_programs == [
+        "83101",
+        "83102",
+        "83103",
+        "83104",
+        "83105",
+    ]
