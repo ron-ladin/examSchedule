@@ -9,10 +9,25 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
+QtCore = pytest.importorskip(
+    "PyQt6.QtCore",
+    reason="PyQt6 native GUI libraries are not available in this environment.",
+    exc_type=ImportError,
+)
+QtWidgets = pytest.importorskip(
+    "PyQt6.QtWidgets",
+    reason="PyQt6 native GUI libraries are not available in this environment.",
+    exc_type=ImportError,
+)
+
+Qt = QtCore.Qt
+QApplication = QtWidgets.QApplication
+QFileDialog = QtWidgets.QFileDialog
+QMessageBox = QtWidgets.QMessageBox
 
 from src.controller import DesktopController
 from src.domain.course import Course
