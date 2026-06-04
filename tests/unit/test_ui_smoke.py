@@ -10,9 +10,18 @@ They do not run schedule generation and do not test business logic.
 import os
 import sys
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QPushButton, QListWidget
+QtWidgets = pytest.importorskip(
+    "PyQt6.QtWidgets",
+    reason="PyQt6 native GUI libraries are not available in this environment.",
+)
+
+QApplication = QtWidgets.QApplication
+QPushButton = QtWidgets.QPushButton
+QListWidget = QtWidgets.QListWidget
 
 from src.controller import DesktopController
 from src.ui.app import ExamSchedulerApp
