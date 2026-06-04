@@ -336,9 +336,13 @@ class ResultsScreen(QWidget):
             btn.setStyleSheet(_TAB_ACTIVE_STYLE if i == active_idx else _TAB_INACTIVE_STYLE)
 
     def reset_results_state(self) -> None:
-        """Reset loaded flag and clear stale banner when a new generation starts."""
+        """Reset loaded flag when a new generation starts.
+
+        Stale state is intentionally preserved here — load() clears it on success.
+        A failed generation must not silently re-enable Export on schedules
+        that were already marked stale before the attempt.
+        """
         self._results_loaded = False
-        self._results_panel.clear_stale()
 
     def _sync_periods(self) -> None:
         self._controller.update_exam_periods(

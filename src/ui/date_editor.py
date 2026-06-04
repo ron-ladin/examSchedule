@@ -143,16 +143,14 @@ class _MonthWidget(QFrame):
         self,
         year: int,
         month: int,
-        range_start: date,
-        range_end: date,
+        date_ranges: list[tuple[date, date]],
         excluded_dates: set[date],
         parent=None,
     ):
         super().__init__(parent)
         self._year = year
         self._month = month
-        self._range_start = range_start
-        self._range_end = range_end
+        self._date_ranges = date_ranges
         self._excluded_dates = excluded_dates
         self._day_buttons: dict[date, _DayButton] = {}
 
@@ -201,7 +199,7 @@ class _MonthWidget(QFrame):
             d = date(self._year, self._month, day)
             btn = _DayButton(
                 d,
-                in_range=(self._range_start <= d <= self._range_end),
+                in_range=any(s <= d <= e for s, e in self._date_ranges),
                 is_saturday=(d.weekday() == 5),
                 excluded=(d in self._excluded_dates),
             )
@@ -231,6 +229,7 @@ class DateEditorWidget(QWidget):
     """
 
     period_changed = pyqtSignal()
+    _multi_range_notice: QLabel
 
     def __init__(self, exam_period: ExamPeriod, parent=None):
         super().__init__(parent)
@@ -238,6 +237,7 @@ class DateEditorWidget(QWidget):
         self._day_buttons: dict[date, _DayButton] = {}
         self._building = False       # guard: suppress spurious range-changed callbacks
         self._showing_error = False  # guard: prevent re-entrant validation popup
+        self._multi_range: bool = len(self._period.date_ranges) > 1
         self._setup_ui()
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -252,6 +252,18 @@ class DateEditorWidget(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(6)
+
+        self._multi_range_notice = QLabel(
+            "This period has multiple date ranges — start/end editing is disabled. "
+            "You can still exclude individual days by clicking them."
+        )
+        self._multi_range_notice.setStyleSheet(
+            "color: #92400E; background: #FEF3C7;"
+            " border: 1px solid #F59E0B; border-radius: 6px;"
+            " padding: 4px 10px; font-size: 12px;"
+        )
+        self._multi_range_notice.setVisible(False)
+        outer.addWidget(self._multi_range_notice)
 
         # §2.4.3 — Start / End date editors ─────────────────────────────────
         range_row = QWidget()
@@ -292,7 +304,7 @@ class DateEditorWidget(QWidget):
         self._end_edit.setStyleSheet(_date_edit_style)
 
         if self._period.date_ranges:
-            start_date, end_date = self._period.date_ranges[0]
+            start_date, end_date = self._period.get_overall_date_boundaries()
             self._start_edit.setDate(
                 QDate(start_date.year, start_date.month, start_date.day)
             )
@@ -330,6 +342,11 @@ class DateEditorWidget(QWidget):
 
         self._rebuild_calendar()
 
+        if self._multi_range:
+            self._multi_range_notice.setVisible(True)
+            self._start_edit.setEnabled(False)
+            self._end_edit.setEnabled(False)
+
     def _rebuild_calendar(self) -> None:
         """Recreate all month widgets from the current period state."""
         self._building = True
@@ -345,7 +362,7 @@ class DateEditorWidget(QWidget):
             self._building = False
             return
 
-        range_start, range_end = self._period.date_ranges[0]
+        range_start, range_end = self._period.get_overall_date_boundaries()
 
         # Enumerate all calendar months covered by [range_start, range_end]
         current_month = date(range_start.year, range_start.month, 1)
@@ -358,8 +375,7 @@ class DateEditorWidget(QWidget):
             month_widget = _MonthWidget(
                 current_month.year,
                 current_month.month,
-                range_start,
-                range_end,
+                date_ranges=self._period.date_ranges,
                 excluded_dates=self._period.excluded_dates,
             )
             for d, btn in month_widget.day_buttons().items():
@@ -404,7 +420,7 @@ class DateEditorWidget(QWidget):
 
     def _on_range_changed(self) -> None:
         """§2.4.3 — Sync the period date range with the QDateEdit values."""
-        if self._building or self._showing_error:
+        if self._multi_range or self._building or self._showing_error:
             return
 
         start_qdate = self._start_edit.date()
@@ -431,7 +447,7 @@ class DateEditorWidget(QWidget):
             self._showing_error = False
             # Reset controls to the model's current valid range so UI stays in sync
             if self._period.date_ranges:
-                start_date, end_date = self._period.date_ranges[0]
+                start_date, end_date = self._period.get_overall_date_boundaries()
                 self._start_edit.blockSignals(True)
                 self._end_edit.blockSignals(True)
                 self._start_edit.setDate(
