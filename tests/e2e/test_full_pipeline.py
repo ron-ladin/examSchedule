@@ -226,6 +226,7 @@ Exam
     programs_path.write_text("99999", encoding="utf-8")
 
     controller = _build_controller(courses_path, periods_path, programs_path, output_path)
+
     with pytest.raises(ValueError):
         controller.run()
 
@@ -257,6 +258,7 @@ FALL, Aleph
     programs_path.write_text("83101", encoding="utf-8")
 
     controller = _build_controller(courses_path, periods_path, programs_path, output_path)
+
     with pytest.raises(ValueError):
         controller.run()
 
@@ -286,6 +288,7 @@ Exam
 
     _build_controller(courses_path, periods_path, programs_path, output_path).run()
     first_content = output_path.read_text(encoding="utf-8")
+
     _build_controller(courses_path, periods_path, programs_path, output_path).run()
     second_content = output_path.read_text(encoding="utf-8")
 
@@ -334,7 +337,10 @@ FALL, Aleph
     fall_aleph_idx = content.find("[FALL - Aleph]")
     fall_bet_idx = content.find("[FALL - Bet]")
     spring_idx = content.find("[SPRING - Aleph]")
-    assert fall_aleph_idx != -1 and fall_bet_idx != -1 and spring_idx != -1
+
+    assert fall_aleph_idx != -1
+    assert fall_bet_idx != -1
+    assert spring_idx != -1
     assert fall_aleph_idx < fall_bet_idx < spring_idx
 
 
@@ -369,6 +375,7 @@ Project
 
     _build_controller(courses_path, periods_path, programs_path, output_path).run()
     content = output_path.read_text(encoding="utf-8")
+
     assert "No valid schedules found." in content
     assert "Lab A" not in content
     assert "Lab B" not in content
