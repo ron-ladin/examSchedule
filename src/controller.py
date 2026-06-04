@@ -8,9 +8,8 @@ Responsibilities:
     2. Load data from files using existing file readers (replace/append/update modes)
     3. Delegate schedule generation to the engine via the existing AppController
     4. Capture preview results in memory for display in the UI
-    5. Support loading additional generated schedules in UI-sized batches
-    6. Support Cartesian-product combined schedule navigation for the UI
-    7. Export selected schedules to file via TextFileExporter
+    5. Support Cartesian-product combined schedule navigation for the UI
+    6. Export selected schedules to file via TextFileExporter
 
 Notes:
     - This class is UI-facing. Never import PyQt6 here.
@@ -40,22 +39,34 @@ from src.interfaces.i_output_exporter import IOutputExporter
 logger = logging.getLogger(__name__)
 
 
-# Maximum schedules loaded per period in each desktop UI batch.
-# Kept as RESULT_CAP so existing UI/tests that import this name keep working.
-RESULT_CAP: int = 200
+# Kept for backward compatibility with existing UI/tests that import this name.
+# Full generation now uses cap=None, so this value is only used by old load-more
+# helpers or legacy tests.
+RESULT_BATCH_SIZE: int = 1000
+RESULT_CAP: int = RESULT_BATCH_SIZE
 
 
 class _MemoryExporter(IOutputExporter):
     """
     Captures generated schedules in memory instead of writing to disk.
 
-    The first RESULT_CAP schedules per period are stored for immediate UI display.
-    If more schedules exist, the remaining iterator is preserved so the UI can
-    load the next batch later using DesktopController.load_more_schedules().
+    cap=None means full generation:
+        collect all schedules for each period.
+
+    cap=<number> means batched generation:
+        collect only cap schedules per period and mark truncated periods.
     """
 
-    def __init__(self, cap: int | None = RESULT_CAP) -> None:
+    def __init__(
+        self,
+        cap: int | None = None,
+        offset_by_period: dict[str, int] | None = None,
+        only_period_keys: set[str] | None = None,
+    ) -> None:
         self._cap = cap
+        self._offset_by_period = offset_by_period or {}
+        self._only_period_keys = only_period_keys
+
         self.schedules_by_period: dict[str, list[Schedule]] = {}
         self.courses_by_id: dict[str, Course] = {}
         self.truncated_periods: set[str] = set()
@@ -74,23 +85,31 @@ class _MemoryExporter(IOutputExporter):
         self.has_more_by_period.clear()
 
         for key, schedule_iter in schedules_by_period.items():
+            if self._only_period_keys is not None and key not in self._only_period_keys:
+                continue
+
+            offset = self._offset_by_period.get(key, 0)
+
+            # Full generation: collect everything from this iterator.
             if self._cap is None:
-                self.schedules_by_period[key] = list(schedule_iter)
+                self.schedules_by_period[key] = list(islice(schedule_iter, offset, None))
                 self.has_more_by_period[key] = False
                 continue
 
-            preview = list(islice(schedule_iter, self._cap + 1))
+            # Legacy / optional batched generation.
+            batch = list(islice(schedule_iter, offset, offset + self._cap + 1))
 
-            if len(preview) > self._cap:
-                self.schedules_by_period[key] = preview[: self._cap]
+            if len(batch) > self._cap:
+                self.schedules_by_period[key] = batch[: self._cap]
                 self.truncated_periods.add(key)
                 self.has_more_by_period[key] = True
+
                 self.remaining_iterators[key] = chain(
-                    [preview[self._cap]],
+                    [batch[self._cap]],
                     schedule_iter,
                 )
             else:
-                self.schedules_by_period[key] = preview
+                self.schedules_by_period[key] = batch
                 self.has_more_by_period[key] = False
 
 
@@ -99,13 +118,21 @@ def _run_generation_process(
     courses: "list[Course]",
     exam_periods: "list[ExamPeriod]",
     selected_programs: "list[str]",
-    cap: "int | None" = RESULT_CAP,
+    cap: "int | None" = None,
+    period_key: "str | None" = None,
+    offset: int = 0,
 ) -> None:
     """
     Entry point for multiprocessing.Process-based schedule generation.
 
     Puts (True, schedules_by_period, courses_by_id, truncated_periods) on success
-    or (False, error_message) on failure. Pass cap=None to load all schedules.
+    or (False, error_message) on failure.
+
+    Default behavior:
+        cap=None → generate all schedules up front.
+
+    Optional legacy batching:
+        cap=<number>, period_key=<key>, offset=<already loaded>.
     """
     try:
         data_provider = InMemoryDataProvider(
@@ -115,7 +142,13 @@ def _run_generation_process(
         )
         conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
         generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
-        memory_exporter = _MemoryExporter(cap=cap)
+
+        memory_exporter = _MemoryExporter(
+            cap=cap,
+            offset_by_period={period_key: offset} if period_key else None,
+            only_period_keys={period_key} if period_key else None,
+        )
+
         engine = _EngineController(
             data_provider=data_provider,
             exporter=memory_exporter,
@@ -123,6 +156,7 @@ def _run_generation_process(
             selected_programs=selected_programs,
         )
         engine.run()
+
         result_queue.put(
             (
                 True,
@@ -160,6 +194,7 @@ class DesktopController:
         """
         reader = CourseFileReader(Path(path))
         new_courses = reader.read()
+
         if mode == "update":
             self._update_merge_courses(new_courses)
         else:
@@ -176,6 +211,7 @@ class DesktopController:
     def _update_merge_courses(self, new_courses: list[Course]) -> None:
         """Update mode: merge offerings into existing courses; add unknown courses."""
         existing_by_id: dict[str, Course] = {c.id: c for c in self._courses}
+
         for new_course in new_courses:
             if new_course.id in existing_by_id:
                 existing = existing_by_id[new_course.id]
@@ -183,12 +219,14 @@ class DesktopController:
                     (o.program_id, o.year, normalize_semester(o.semester))
                     for o in existing.offerings
                 }
+
                 for offering in new_course.offerings:
                     key = (
                         offering.program_id,
                         offering.year,
                         normalize_semester(offering.semester),
                     )
+
                     if key not in existing_keys:
                         existing.add_offering(offering)
                         existing_keys.add(key)
@@ -221,6 +259,7 @@ class DesktopController:
         """
         reader = ExamPeriodFileReader(Path(path))
         new_periods = reader.read()
+
         self._merge_by_key(
             self._exam_periods,
             new_periods,
@@ -249,22 +288,28 @@ class DesktopController:
         if mode == "replace":
             existing.clear()
             existing.extend(new_items)
+
         elif mode == "append":
             existing.extend(new_items)
+
         elif mode == "update":
             key_to_idx: dict[str, int] = {
                 key_fn(item): i for i, item in enumerate(existing)
             }
             seen_new: set[str] = set()
+
             for item in new_items:
                 key = key_fn(item)
+
                 if key in seen_new:
                     logger.warning(
                         "_merge_by_key: duplicate key '%s' in new items — "
                         "last occurrence kept",
                         key,
                     )
+
                 seen_new.add(key)
+
                 if key in key_to_idx:
                     existing[key_to_idx[key]] = item
                 else:
@@ -322,6 +367,7 @@ class DesktopController:
         for course in self._courses:
             for offering in course.offerings:
                 ids.add(offering.program_id)
+
         return sorted(ids)
 
     def get_exam_periods(self) -> list[ExamPeriod]:
@@ -339,6 +385,7 @@ class DesktopController:
         """Set which programmes to schedule, up to 5 programmes."""
         if len(program_ids) > 5:
             raise ValueError("Maximum 5 programmes may be selected.")
+
         self._selected_programs = list(program_ids)
 
     def update_exam_periods(self, periods: list[ExamPeriod]) -> None:
@@ -351,13 +398,15 @@ class DesktopController:
         Run the CSP engine and return
         (schedules_by_period, courses_by_id, truncated_periods).
 
-        truncated_periods is used by the desktop UI to tell the user when
-        additional schedules exist beyond the first loaded batch.
+        This version computes all schedules up front.
+        No batching/truncation is applied.
         """
         if not self._selected_programs:
             raise ValueError("No programmes selected. Select at least one programme.")
+
         if not self._courses:
             raise ValueError("No courses loaded. Load a courses file first.")
+
         if not self._exam_periods:
             raise ValueError("No exam periods loaded. Load a periods file first.")
 
@@ -374,7 +423,9 @@ class DesktopController:
             selected_programs=self._selected_programs
         )
         generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
-        memory_exporter = _MemoryExporter(cap=RESULT_CAP)
+
+        # cap=None means full generation: collect all schedules.
+        memory_exporter = _MemoryExporter(cap=None)
 
         engine = _EngineController(
             data_provider=data_provider,
@@ -383,15 +434,18 @@ class DesktopController:
             selected_programs=self._selected_programs,
         )
         engine.run()
+
         self.clear_results_stale()
 
-        self._remaining_schedule_iterators = dict(memory_exporter.remaining_iterators)
-        self._has_more_schedules = dict(memory_exporter.has_more_by_period)
+        # Full generation has no "load more" state.
+        self._remaining_schedule_iterators.clear()
+        self._has_more_schedules.clear()
+        self._iterator_overflows.clear()
 
         return (
             memory_exporter.schedules_by_period,
             memory_exporter.courses_by_id,
-            memory_exporter.truncated_periods,
+            set(),
         )
 
     def reset_generation_state(self) -> None:
@@ -404,8 +458,8 @@ class DesktopController:
         """
         After subprocess generation, preserve which periods have more schedules.
 
-        Unlike reset_generation_state(), this keeps has_more True for truncated
-        periods so the UI can offer a 'Load More' action.
+        With full generation this usually receives an empty set, so it clears
+        all has-more state.
         """
         self._remaining_schedule_iterators.clear()
         self._iterator_overflows.clear()
@@ -417,10 +471,10 @@ class DesktopController:
         already_loaded: int,
     ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
         """
-        Spawn a subprocess that re-runs generation with cap=None for one period.
+        Legacy helper for old batched UI flow.
 
-        The caller slices result[period_key][already_loaded:] to get only the new
-        schedules beyond what was already loaded.
+        Full generation no longer needs Load More. Kept so old UI/tests do not
+        break if they still import or call this method.
         """
         import multiprocessing as _mp
 
@@ -433,7 +487,11 @@ class DesktopController:
                 list(self._exam_periods),
                 list(self._selected_programs),
             ),
-            kwargs={"cap": None},
+            kwargs={
+                "cap": RESULT_BATCH_SIZE,
+                "period_key": period_key,
+                "offset": already_loaded,
+            },
             daemon=True,
         )
         proc.start()
@@ -445,11 +503,12 @@ class DesktopController:
         limit: int | None = None,
     ) -> list[Schedule]:
         """
-        Load the next UI-sized batch of schedules for a given period.
+        Legacy helper for the old in-process batched flow.
 
-        Returns an empty list if no more schedules are available.
+        Full generation normally returns everything in generate(), so this should
+        usually return [] in the UI.
         """
-        batch_size = limit if limit is not None else RESULT_CAP
+        batch_size = limit if limit is not None else RESULT_BATCH_SIZE
 
         if batch_size < 0:
             raise ValueError("limit must be non-negative.")
@@ -465,9 +524,6 @@ class DesktopController:
             self._has_more_schedules[period_key] = False
             return []
 
-        # Prepend any overflow item from the previous call without wrapping
-        # schedule_iter in a new chain each time, which would accumulate O(N)
-        # chain levels after N calls and slow down every subsequent __next__.
         overflow = self._iterator_overflows.pop(period_key, None)
         it = chain([overflow], schedule_iter) if overflow is not None else schedule_iter
 
@@ -490,7 +546,6 @@ class DesktopController:
         Return the number of currently loaded combined schedules.
 
         This is the Cartesian product size of the loaded schedules per period.
-        It may grow after calling load_more_schedules() for one or more periods.
         """
         if not schedules_by_period:
             return 0
@@ -515,6 +570,7 @@ class DesktopController:
         This avoids materialising list(product(...)) in memory.
         """
         total = self.get_combined_schedule_count(schedules_by_period)
+
         if index < 0 or index >= total:
             raise IndexError(
                 f"Combined schedule index {index} out of range for total {total}."
@@ -546,9 +602,12 @@ class DesktopController:
             )
 
         courses_by_id = {course.id: course for course in self._courses}
+
+        # max_combinations=None means export all provided combinations.
         exporter = TextFileExporter(
             output_path=Path(output_path),
-            max_combinations=RESULT_CAP,
+            max_combinations=None,
         )
         exporter.export_schedules(schedules_by_period, courses_by_id)
+
         logger.info("Exported schedules to %s", output_path)
