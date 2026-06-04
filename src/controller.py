@@ -82,7 +82,7 @@ class _MemoryExporter(IOutputExporter):
             preview = list(islice(schedule_iter, self._cap + 1))
 
             if len(preview) > self._cap:
-                self.schedules_by_period[key] = preview[:self._cap]
+                self.schedules_by_period[key] = preview[: self._cap]
                 self.truncated_periods.add(key)
                 self.has_more_by_period[key] = True
                 self.remaining_iterators[key] = chain(
@@ -105,7 +105,7 @@ def _run_generation_process(
     Entry point for multiprocessing.Process-based schedule generation.
 
     Puts (True, schedules_by_period, courses_by_id, truncated_periods) on success
-    or (False, error_message) on failure.  Pass cap=None to load all schedules.
+    or (False, error_message) on failure. Pass cap=None to load all schedules.
     """
     try:
         data_provider = InMemoryDataProvider(
@@ -123,12 +123,14 @@ def _run_generation_process(
             selected_programs=selected_programs,
         )
         engine.run()
-        result_queue.put((
-            True,
-            dict(memory_exporter.schedules_by_period),
-            dict(memory_exporter.courses_by_id),
-            memory_exporter.truncated_periods,
-        ))
+        result_queue.put(
+            (
+                True,
+                dict(memory_exporter.schedules_by_period),
+                dict(memory_exporter.courses_by_id),
+                memory_exporter.truncated_periods,
+            )
+        )
     except Exception as exc:
         result_queue.put((False, str(exc)))
 
@@ -147,6 +149,7 @@ class DesktopController:
         self._remaining_schedule_iterators: dict[str, Iterator[Schedule]] = {}
         self._has_more_schedules: dict[str, bool] = {}
         self._iterator_overflows: dict[str, Schedule] = {}
+        self._results_stale: bool = False
 
     def load_courses(self, path: Path, mode: str = "replace") -> int:
         """
@@ -181,7 +184,11 @@ class DesktopController:
                     for o in existing.offerings
                 }
                 for offering in new_course.offerings:
-                    key = (offering.program_id, offering.year, normalize_semester(offering.semester))
+                    key = (
+                        offering.program_id,
+                        offering.year,
+                        normalize_semester(offering.semester),
+                    )
                     if key not in existing_keys:
                         existing.add_offering(offering)
                         existing_keys.add(key)
@@ -221,6 +228,8 @@ class DesktopController:
             key_fn=lambda p: p.get_key(),
         )
 
+        self.mark_results_stale()
+
         logger.info(
             "load_periods: mode=%s, loaded=%d, total=%d",
             mode,
@@ -251,7 +260,8 @@ class DesktopController:
                 key = key_fn(item)
                 if key in seen_new:
                     logger.warning(
-                        "_merge_by_key: duplicate key '%s' in new items — last occurrence kept",
+                        "_merge_by_key: duplicate key '%s' in new items — "
+                        "last occurrence kept",
                         key,
                     )
                 seen_new.add(key)
@@ -268,6 +278,19 @@ class DesktopController:
     @property
     def courses(self) -> list[Course]:
         return list(self._courses)
+
+    @property
+    def results_stale(self) -> bool:
+        """Return True when generated schedules no longer match current input data."""
+        return self._results_stale
+
+    def mark_results_stale(self) -> None:
+        """Mark generated schedules as stale after input data was edited."""
+        self._results_stale = True
+
+    def clear_results_stale(self) -> None:
+        """Mark generated schedules as fresh after successful regeneration."""
+        self._results_stale = False
 
     @property
     def has_courses(self) -> bool:
@@ -321,6 +344,7 @@ class DesktopController:
     def update_exam_periods(self, periods: list[ExamPeriod]) -> None:
         """Replace in-memory periods with edited versions from the UI."""
         self._exam_periods = list(periods)
+        self.mark_results_stale()
 
     def generate(self) -> tuple[dict[str, list[Schedule]], dict[str, Course], set[str]]:
         """
@@ -359,6 +383,7 @@ class DesktopController:
             selected_programs=self._selected_programs,
         )
         engine.run()
+        self.clear_results_stale()
 
         self._remaining_schedule_iterators = dict(memory_exporter.remaining_iterators)
         self._has_more_schedules = dict(memory_exporter.has_more_by_period)
@@ -376,7 +401,8 @@ class DesktopController:
         self._has_more_schedules.clear()
 
     def set_has_more_from_truncated(self, truncated_periods: set[str]) -> None:
-        """After subprocess generation, preserve which periods have more schedules.
+        """
+        After subprocess generation, preserve which periods have more schedules.
 
         Unlike reset_generation_state(), this keeps has_more True for truncated
         periods so the UI can offer a 'Load More' action.
@@ -390,17 +416,23 @@ class DesktopController:
         period_key: str,
         already_loaded: int,
     ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
-        """Spawn a subprocess that re-runs generation with cap=None for one period.
+        """
+        Spawn a subprocess that re-runs generation with cap=None for one period.
 
         The caller slices result[period_key][already_loaded:] to get only the new
         schedules beyond what was already loaded.
         """
         import multiprocessing as _mp
+
         q: _mp.Queue = _mp.Queue()
         proc = _mp.Process(
             target=_run_generation_process,
-            args=(q, list(self._courses), list(self._exam_periods),
-                  list(self._selected_programs)),
+            args=(
+                q,
+                list(self._courses),
+                list(self._exam_periods),
+                list(self._selected_programs),
+            ),
             kwargs={"cap": None},
             daemon=True,
         )
@@ -508,6 +540,11 @@ class DesktopController:
         output_path: Path,
     ) -> None:
         """Write selected schedules to a text file using TextFileExporter."""
+        if self._results_stale:
+            raise ValueError(
+                "Cannot export stale schedules. Generate schedules again first."
+            )
+
         courses_by_id = {course.id: course for course in self._courses}
         exporter = TextFileExporter(
             output_path=Path(output_path),
