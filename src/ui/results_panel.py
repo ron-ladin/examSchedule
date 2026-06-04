@@ -193,6 +193,7 @@ class _ResultsPanel(QWidget):
         self._lm_procs: dict[str, multiprocessing.Process] = {}
         self._lm_timers: dict[str, QTimer] = {}
         self._lm_ticks: dict[str, int] = {}
+        self._lm_advance_after_load: set[str] = set()
 
         self._total_by_period: dict[str, int] = {}
         self._cell_data: dict[str, dict[tuple[int, int], tuple]] = {}
@@ -499,8 +500,8 @@ class _ResultsPanel(QWidget):
         schedules = self._schedules_by_period[period_key]
 
         if target >= len(schedules) and self._controller.has_more_schedules(period_key):
+            self._lm_advance_after_load.add(period_key)
             self._on_load_more(period_key)
-            self._refresh_period_card(period_key)
             return
 
         if target < len(schedules):
@@ -576,16 +577,23 @@ class _ResultsPanel(QWidget):
                 btn.setText("⚠  Load failed — retry")
 
             logger.error("Load more failed for %s: %s", period_key, error_details)
-            self._cleanup_load_more_state(period_key)
+            self._cleanup_load_more_state(period_key, terminate=True)
             return
 
         _, all_by_period, _courses_by_id, truncated_periods = result
 
+        old_len = len(self._schedules_by_period[period_key])
         extra = all_by_period.get(period_key, [])
         still_more = period_key in truncated_periods
 
         if extra:
             self._schedules_by_period[period_key].extend(extra)
+
+        if period_key in self._lm_advance_after_load:
+            self._lm_advance_after_load.discard(period_key)
+
+            if extra and old_len < len(self._schedules_by_period[period_key]):
+                self._period_indices[period_key] = old_len
 
         self._controller.set_has_more_for_period(period_key, still_more)
 
@@ -604,17 +612,34 @@ class _ResultsPanel(QWidget):
             btn.setEnabled(True)
             btn.setText(f"⟳  +{RESULT_BATCH_SIZE:,} more options")
 
-    def _cleanup_load_more_state(self, period_key: str) -> None:
+    def _cleanup_load_more_state(
+        self,
+        period_key: str,
+        terminate: bool = False,
+    ) -> None:
+        timer = self._lm_timers.pop(period_key, None)
+        if timer is not None:
+            timer.stop()
+
         self._lm_queues.pop(period_key, None)
         self._lm_chunk_sizes.pop(period_key, None)
         self._lm_ticks.pop(period_key, None)
+        self._lm_advance_after_load.discard(period_key)
 
         proc = self._lm_procs.pop(period_key, None)
         if proc is not None:
             try:
+                if terminate and proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=0.5)
+
+                    if proc.is_alive():
+                        proc.kill()
+                        proc.join(timeout=0.5)
+
                 proc.join(timeout=0.1)
             except Exception:
-                logger.debug("Failed joining load-more process", exc_info=True)
+                logger.debug("Failed cleaning up load-more process", exc_info=True)
 
     def _update_summary(self) -> None:
         if not self._schedules_by_period:
