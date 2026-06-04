@@ -382,58 +382,16 @@ Project
 
 
 # ---------------------------------------------------------------------------
-# Integration tests for the full exam-scheduling pipeline.
-#
-# These tests do not use the real project data files from the data/ directory.
-# Instead, each test creates small temporary input files using pytest's tmp_path.
-# This makes the tests stable and independent from future changes in the real
-# course/date/program files.
-#
-# Each test runs the real application flow end-to-end:
-#
-#   temporary input files
-#        -> real file readers
-#        -> AppController
-#        -> ScheduleGenerator
-#        -> TextFileExporter
-#        -> generated output file
-#
-# The generated output is then parsed and compared against hard-coded expected
-# schedules. This means the tests verify both:
-#
-# 1. The number of generated schedules is correct.
-# 2. The actual generated schedules are exactly the expected valid schedules.
-#
-# The first test checks a simple conflict scenario:
-# - Two obligatory courses from the same program/year/semester must not be
-#   scheduled on the same date.
-# - A third course from a different program does not conflict with them.
-#
-# The second test checks an edge case in the full pipeline:
-# - The exam period contains a Saturday and a manually excluded date.
-# - The system must not schedule any exam on those forbidden dates.
-#
-# These tests are intentionally small so their expected output can be verified
-# manually, while still covering the important interaction between parsing,
-# scheduling, conflict detection, date filtering, and output generation.
+# SCRUM-195: Full schedule-generation output correctness.
 # ---------------------------------------------------------------------------
-
 
 def test_small_input_produces_exact_expected_schedules(tmp_path):
     """Integration test: small input, exact output size, exact schedule correctness."""
-
-    # Create temporary input/output files for this test only.
-    # These files are not the real project data files.
     courses_path = tmp_path / "courses.txt"
     periods_path = tmp_path / "dates.txt"
     programs_path = tmp_path / "programs.txt"
     output_path = tmp_path / "schedules.txt"
 
-    # Hard-coded course input:
-    # - Math and Physics belong to the same program, year, and semester.
-    #   Since both are obligatory courses, they must not be scheduled on the same date.
-    # - Intro to Software belongs to a different selected program,
-    #   so it does not conflict with Math or Physics.
     courses_path.write_text(
         """Math 1
 11111
@@ -456,8 +414,6 @@ Exam
         encoding="utf-8",
     )
 
-    # Hard-coded exam period with exactly two valid exam dates.
-    # This keeps the expected output small and easy to verify manually.
     periods_path.write_text(
         """FALL, Aleph
 05-01-2026, 06-01-2026
@@ -465,29 +421,17 @@ Exam
         encoding="utf-8",
     )
 
-    # Select both programs that appear in the test data.
     programs_path.write_text("83101, 83102", encoding="utf-8")
 
-    # Run the real application pipeline:
-    # file readers -> controller -> schedule generator -> text exporter.
     _build_controller(courses_path, periods_path, programs_path, output_path).run()
 
-    # Read and parse the generated output file.
     content = output_path.read_text(encoding="utf-8")
     parsed = _parse_output_schedules(content)
 
-    # There should be exactly 4 schedules:
-    # 2 ways to place Math/Physics on different dates,
-    # multiplied by 2 possible dates for Intro to Software.
     assert content.count("Schedule #") == 4
     assert len(parsed) == 4
-
-    # Verify that the expected period header exists in the output.
     assert "[FALL - Aleph]" in content
 
-    # Exact expected schedules.
-    # Math and Physics must always be on different dates.
-    # Intro to Software may be on either valid date because it does not conflict with them.
     expected = {
         (
             ("11111", date(2026, 1, 5)),
@@ -511,45 +455,27 @@ Exam
         ),
     }
 
-    # Collect the schedules that were actually generated.
     actual = set()
 
     for combined_schedule in parsed:
         assignments = combined_schedule["FALL - Aleph"]
 
-        # Every generated schedule must contain exactly the three test courses.
         assert set(assignments) == {"11111", "22222", "33333"}
-
-        # Math and Physics conflict, so they must not share the same exam date.
         assert assignments["11111"] != assignments["22222"]
-
-        # Intro to Software has no conflict with the other two courses,
-        # but it still must be scheduled on one of the valid exam dates.
         assert assignments["33333"] in {date(2026, 1, 5), date(2026, 1, 6)}
 
-        # Store the normalized schedule representation so order in the output file
-        # does not affect the comparison.
         actual.add(tuple(sorted(assignments.items())))
 
-    # Final exact comparison:
-    # verifies that there are no missing schedules and no extra invalid schedules.
     assert actual == expected
 
 
 def test_small_input_ignores_saturday_and_excluded_dates(tmp_path):
     """Integration test: schedules must not use Saturdays or explicitly excluded dates."""
-
-    # Create temporary input/output files for this test only.
     courses_path = tmp_path / "courses.txt"
     periods_path = tmp_path / "dates.txt"
     programs_path = tmp_path / "programs.txt"
     output_path = tmp_path / "schedules.txt"
 
-    # Hard-coded course input:
-    # - Math and Physics are in the same program/year/semester and both are obligatory,
-    #   so they must not be scheduled on the same date.
-    # - History is in the same selected program but in a different year,
-    #   so it does not conflict with Math or Physics.
     courses_path.write_text(
         """Math 1
 11111
@@ -572,34 +498,21 @@ Exam
         encoding="utf-8",
     )
 
-    # Date range contains four calendar days:
-    # - 09-01-2026 is valid.
-    # - 10-01-2026 is Saturday and must be ignored automatically.
-    # - 11-01-2026 is explicitly excluded and must be ignored.
-    # - 12-01-2026 is valid.
     periods_path.write_text(
         """FALL, Aleph
 09-01-2026, 12-01-2026
-11-01-2026 Holiday
+- 11-01-2026 Holiday
 """,
         encoding="utf-8",
     )
 
-    # Select the program used by the test courses.
     programs_path.write_text("83101", encoding="utf-8")
 
-    # Run the real application pipeline:
-    # file readers -> controller -> schedule generator -> text exporter.
     _build_controller(courses_path, periods_path, programs_path, output_path).run()
 
-    # Read and parse the generated output file.
     content = output_path.read_text(encoding="utf-8")
     parsed = _parse_output_schedules(content)
 
-    # Only two valid dates remain: 09-01-2026 and 12-01-2026.
-    # Math and Physics must be on different dates: 2 possible orders.
-    # History does not conflict with them, so it can be on either valid date.
-    # Total expected schedules: 2 * 2 = 4.
     assert content.count("Schedule #") == 4
     assert len(parsed) == 4
     assert "[FALL - Aleph]" in content
@@ -635,21 +548,264 @@ Exam
     for combined_schedule in parsed:
         assignments = combined_schedule["FALL - Aleph"]
 
-        # Every generated schedule must contain exactly the three test courses.
         assert set(assignments) == {"11111", "22222", "33333"}
-
-        # Math and Physics conflict, so they must not share the same exam date.
         assert assignments["11111"] != assignments["22222"]
-
-        # All courses must be scheduled only on valid dates.
         assert set(assignments.values()).issubset(valid_dates)
-
-        # No course may be scheduled on Saturday or on the explicitly excluded date.
         assert forbidden_dates.isdisjoint(assignments.values())
 
-        # Store the normalized schedule representation so output order does not matter.
         actual.add(tuple(sorted(assignments.items())))
 
-    # Exact comparison:
-    # verifies that the output contains exactly the expected schedules.
     assert actual == expected
+
+
+# ---------------------------------------------------------------------------
+# SCRUM-172 / SCRUM-179 / SCRUM-180 / SCRUM-181:
+# E2E full user-flow coverage through DesktopController.
+# ---------------------------------------------------------------------------
+
+def test_desktop_controller_happy_path_load_generate_export(tmp_path):
+    """
+    E2E happy path for the desktop controller flow:
+    load files -> select programmes -> generate schedules -> export result.
+    """
+    from src.controller import DesktopController
+
+    courses_path = tmp_path / "courses.txt"
+    periods_path = tmp_path / "dates.txt"
+    output_path = tmp_path / "desktop_schedules.txt"
+
+    courses_path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+83101, 1, FALL, Obligatory
+Exam
+$$$$
+Algorithms
+22222
+Dr. Levi
+83101, 1, FALL, Obligatory
+Exam
+$$$$
+Project Lab
+33333
+Dr. Katz
+83101, 1, FALL, Obligatory
+Project
+""",
+        encoding="utf-8",
+    )
+
+    periods_path.write_text(
+        """FALL, Aleph
+05-01-2026, 06-01-2026
+""",
+        encoding="utf-8",
+    )
+
+    controller = DesktopController()
+
+    course_count = controller.load_courses(courses_path)
+    period_count = controller.load_periods(periods_path)
+    controller.set_selected_programs(["83101"])
+
+    schedules_by_period, _courses_by_id, truncated = controller.generate()
+
+    assert course_count == 3
+    assert period_count == 1
+    assert truncated == set()
+    assert "FALL - Aleph" in schedules_by_period
+    assert len(schedules_by_period["FALL - Aleph"]) == 2
+
+    controller.export(schedules_by_period, output_path)
+
+    content = output_path.read_text(encoding="utf-8")
+
+    assert output_path.exists()
+    assert "Schedule #1:" in content
+    assert "[FALL - Aleph]" in content
+    assert "Calculus" in content
+    assert "Algorithms" in content
+    assert "Project Lab" not in content
+    assert "Course ID: 11111" in content
+    assert "Course ID: 22222" in content
+
+
+def test_e2e_missing_courses_file_fails_without_creating_output(tmp_path):
+    """
+    E2E error handling:
+    missing input file should fail safely and must not create an output file.
+    """
+    courses_path = tmp_path / "missing_courses.txt"
+    periods_path = tmp_path / "dates.txt"
+    programs_path = tmp_path / "programs.txt"
+    output_path = tmp_path / "schedules.txt"
+
+    periods_path.write_text(
+        """FALL, Aleph
+05-01-2026, 06-01-2026
+""",
+        encoding="utf-8",
+    )
+    programs_path.write_text("83101", encoding="utf-8")
+
+    controller = _build_controller(
+        courses_path,
+        periods_path,
+        programs_path,
+        output_path,
+    )
+
+    with pytest.raises((FileNotFoundError, ValueError, OSError)):
+        controller.run()
+
+    assert not output_path.exists()
+
+
+def test_e2e_malformed_courses_file_fails_without_creating_output(tmp_path):
+    """
+    E2E error handling:
+    malformed courses input should fail safely and must not create an output file.
+    """
+    courses_path = tmp_path / "courses.txt"
+    periods_path = tmp_path / "dates.txt"
+    programs_path = tmp_path / "programs.txt"
+    output_path = tmp_path / "schedules.txt"
+
+    courses_path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+""",
+        encoding="utf-8",
+    )
+    periods_path.write_text(
+        """FALL, Aleph
+05-01-2026, 06-01-2026
+""",
+        encoding="utf-8",
+    )
+    programs_path.write_text("83101", encoding="utf-8")
+
+    controller = _build_controller(
+        courses_path,
+        periods_path,
+        programs_path,
+        output_path,
+    )
+
+    with pytest.raises(ValueError):
+        controller.run()
+
+    assert not output_path.exists()
+
+
+def test_e2e_malformed_exam_periods_file_fails_without_creating_output(tmp_path):
+    """
+    E2E error handling:
+    malformed exam-period input should fail safely and must not create output.
+    """
+    courses_path = tmp_path / "courses.txt"
+    periods_path = tmp_path / "dates.txt"
+    programs_path = tmp_path / "programs.txt"
+    output_path = tmp_path / "schedules.txt"
+
+    courses_path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+83101, 1, FALL, Obligatory
+Exam
+""",
+        encoding="utf-8",
+    )
+    periods_path.write_text(
+        """FALL, Aleph
+2026-01-05, 2026-01-06
+""",
+        encoding="utf-8",
+    )
+    programs_path.write_text("83101", encoding="utf-8")
+
+    controller = _build_controller(
+        courses_path,
+        periods_path,
+        programs_path,
+        output_path,
+    )
+
+    with pytest.raises(ValueError):
+        controller.run()
+
+    assert not output_path.exists()
+
+
+def test_desktop_full_generation_replaces_load_more_flow(tmp_path):
+    """
+    The original task described a Load More flow after RESULT_CAP.
+
+    Current desktop behavior generates all schedules up front. Therefore this
+    E2E test verifies the updated behavior:
+    - all schedules are returned in one generation call,
+    - no period is marked as truncated,
+    - no Load More state remains active after generation.
+    """
+    from src.controller import DesktopController
+
+    courses_path = tmp_path / "courses.txt"
+    periods_path = tmp_path / "dates.txt"
+
+    courses_path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+83101, 1, FALL, Obligatory
+Exam
+$$$$
+Algorithms
+22222
+Dr. Levi
+83101, 1, FALL, Obligatory
+Exam
+$$$$
+Physics
+33333
+Dr. Bar
+83101, 1, FALL, Obligatory
+Exam
+""",
+        encoding="utf-8",
+    )
+
+    periods_path.write_text(
+        """FALL, Aleph
+05-01-2026, 31-01-2026
+""",
+        encoding="utf-8",
+    )
+
+    controller = DesktopController()
+    controller.load_courses(courses_path)
+    controller.load_periods(periods_path)
+    controller.set_selected_programs(["83101"])
+
+    schedules_by_period, _courses_by_id, truncated = controller.generate()
+
+    period_key = "FALL - Aleph"
+    period = controller.get_exam_periods()[0]
+    valid_dates_count = len(period.get_valid_dates())
+
+    expected_count = (
+        valid_dates_count
+        * (valid_dates_count - 1)
+        * (valid_dates_count - 2)
+    )
+
+    assert valid_dates_count == 23
+    assert truncated == set()
+    assert period_key in schedules_by_period
+    assert len(schedules_by_period[period_key]) == expected_count
+
+    assert controller.has_more_schedules(period_key) is False
+    assert controller.has_any_more_schedules() is False
+    assert controller.load_more_schedules(period_key) == []
