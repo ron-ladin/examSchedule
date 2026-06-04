@@ -1,0 +1,535 @@
+"""
+Integration Tests: UI ↔ Controller
+----------------------------------
+These tests run in offscreen mode and avoid heavy UI automation.
+"""
+
+import os
+import sys
+from datetime import date
+from pathlib import Path
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+from src.controller import DesktopController
+from src.domain.course import Course
+from src.domain.exam_period import ExamPeriod
+from src.domain.schedule import Schedule
+from src.ui.config_screen import ConfigScreen
+from src.ui.input_screen import InputScreen
+
+
+def _get_qapp() -> QApplication:
+    """Return an existing QApplication or create one for UI integration tests."""
+    app = QApplication.instance()
+
+    if app is None:
+        app = QApplication(sys.argv)
+
+    return app
+
+
+def _write_courses_base(path: Path) -> None:
+    path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+83101, 1, FALL, Obligatory
+Exam
+$$$$
+Algorithms
+22222
+Dr. Levi
+83102, 1, FALL, Obligatory
+Exam
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_courses_one(path: Path) -> None:
+    path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+83101, 1, FALL, Obligatory
+Exam
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_courses_replacement(path: Path) -> None:
+    path.write_text(
+        """Physics
+33333
+Dr. Bar
+83108, 1, FALL, Obligatory
+Exam
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_courses_update(path: Path) -> None:
+    path.write_text(
+        """Calculus
+11111
+Dr. Cohen
+83108, 1, FALL, Elective
+Exam
+$$$$
+Algorithms
+22222
+Dr. Levi
+83101, 1, FALL, Obligatory
+Exam
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_periods_one(path: Path) -> None:
+    path.write_text(
+        """FALL, Aleph
+05-01-2026, 09-01-2026
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_periods_short(path: Path) -> None:
+    path.write_text(
+        """FALL, Aleph
+05-01-2026, 06-01-2026
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_periods_replacement(path: Path) -> None:
+    path.write_text(
+        """SPRI, Bet
+01-03-2026, 05-03-2026
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_periods_update(path: Path) -> None:
+    path.write_text(
+        """FALL, Aleph
+12-01-2026, 16-01-2026
+""",
+        encoding="utf-8",
+    )
+
+
+def _set_load_mode(screen: ConfigScreen, mode_text: str) -> None:
+    """Select Replace or Update in the ConfigScreen load-mode radio group."""
+    for button in screen._mode_group.buttons():
+        if button.text() == mode_text:
+            button.setChecked(True)
+            return
+
+    raise AssertionError(f"Load mode not found: {mode_text}")
+
+
+def _patch_file_dialog(monkeypatch, paths: list[Path]) -> None:
+    """Patch QFileDialog.getOpenFileName so UI load actions receive test files."""
+    selected_paths = [str(path) for path in paths]
+
+    def fake_get_open_file_name(*_args, **_kwargs):
+        return selected_paths.pop(0), "Text files (*.txt)"
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", fake_get_open_file_name)
+
+
+def _find_programme_item(screen: ConfigScreen, programme_id: str):
+    """Find a programme QListWidgetItem by stored programme id."""
+    for row in range(screen._prog_list.count()):
+        item = screen._prog_list.item(row)
+
+        if item.data(Qt.ItemDataRole.UserRole) == programme_id:
+            return item
+
+    raise AssertionError(f"Programme item not found: {programme_id}")
+
+
+# ── File loading modes update controller state ─────────────────────
+
+def test_config_screen_replace_courses_updates_controller_state(tmp_path, monkeypatch):
+    """
+    Loading courses through ConfigScreen in Replace mode should replace the
+    controller course state and refresh the programme list.
+    """
+    app = _get_qapp()
+
+    first = tmp_path / "courses_first.txt"
+    second = tmp_path / "courses_second.txt"
+    _write_courses_one(first)
+    _write_courses_replacement(second)
+
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    _patch_file_dialog(monkeypatch, [first, second])
+
+    _set_load_mode(screen, "Replace")
+    screen._load_courses()
+
+    assert [course.id for course in controller.courses] == ["11111"]
+    assert controller.get_programme_ids() == ["83101"]
+    assert screen._prog_list.count() == 1
+    assert "courses_first.txt" in screen._courses_label.text()
+
+    screen._load_courses()
+
+    assert [course.id for course in controller.courses] == ["33333"]
+    assert controller.get_programme_ids() == ["83108"]
+    assert screen._prog_list.count() == 1
+    assert "courses_second.txt" in screen._courses_label.text()
+
+    screen.close()
+
+
+def test_config_screen_update_courses_merges_into_controller_state(
+    tmp_path,
+    monkeypatch,
+):
+    """
+    Loading courses through ConfigScreen in Update mode should merge new course
+    data into the controller instead of clearing unrelated existing data.
+    """
+    app = _get_qapp()
+
+    first = tmp_path / "courses_first.txt"
+    update = tmp_path / "courses_update.txt"
+    _write_courses_one(first)
+    _write_courses_update(update)
+
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    _patch_file_dialog(monkeypatch, [first, update])
+
+    _set_load_mode(screen, "Replace")
+    screen._load_courses()
+
+    assert [course.id for course in controller.courses] == ["11111"]
+
+    _set_load_mode(screen, "Update")
+    screen._load_courses()
+
+    course_ids = [course.id for course in controller.courses]
+    assert course_ids == ["11111", "22222"]
+
+    calculus = next(course for course in controller.courses if course.id == "11111")
+    offering_keys = {
+        (offering.program_id, offering.year, offering.semester, offering.requirement)
+        for offering in calculus.offerings
+    }
+
+    assert ("83101", 1, "FALL", "Obligatory") in offering_keys
+    assert ("83108", 1, "FALL", "Elective") in offering_keys
+
+    assert set(controller.get_programme_ids()) == {"83101", "83108"}
+    assert screen._prog_list.count() == 2
+    assert "courses_update.txt" in screen._courses_label.text()
+
+    screen.close()
+
+
+def test_config_screen_replace_periods_updates_controller_state(
+    tmp_path,
+    monkeypatch,
+):
+    """
+    Loading exam periods through ConfigScreen in Replace mode should replace
+    the controller exam-period state.
+    """
+    app = _get_qapp()
+
+    first = tmp_path / "periods_first.txt"
+    second = tmp_path / "periods_second.txt"
+    _write_periods_one(first)
+    _write_periods_replacement(second)
+
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    _patch_file_dialog(monkeypatch, [first, second])
+
+    _set_load_mode(screen, "Replace")
+    screen._load_dates()
+
+    assert [period.get_key() for period in controller.get_exam_periods()] == [
+        "FALL - Aleph"
+    ]
+    assert "periods_first.txt" in screen._dates_label.text()
+
+    screen._load_dates()
+
+    assert [period.get_key() for period in controller.get_exam_periods()] == [
+        "SPRI - Bet"
+    ]
+    assert "periods_second.txt" in screen._dates_label.text()
+
+    screen.close()
+
+
+def test_config_screen_update_periods_replaces_matching_period_by_key(
+    tmp_path,
+    monkeypatch,
+):
+    """
+    Loading exam periods through ConfigScreen in Update mode should update the
+    matching period key inside the controller state.
+    """
+    app = _get_qapp()
+
+    first = tmp_path / "periods_first.txt"
+    update = tmp_path / "periods_update.txt"
+    _write_periods_one(first)
+    _write_periods_update(update)
+
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    _patch_file_dialog(monkeypatch, [first, update])
+
+    _set_load_mode(screen, "Replace")
+    screen._load_dates()
+
+    original_period = controller.get_exam_periods()[0]
+    assert original_period.get_key() == "FALL - Aleph"
+    assert original_period.date_ranges[0][0].day == 5
+
+    _set_load_mode(screen, "Update")
+    screen._load_dates()
+
+    updated_periods = controller.get_exam_periods()
+
+    assert len(updated_periods) == 1
+    assert updated_periods[0].get_key() == "FALL - Aleph"
+    assert updated_periods[0].date_ranges[0][0].day == 12
+    assert updated_periods[0].date_ranges[0][1].day == 16
+    assert "periods_update.txt" in screen._dates_label.text()
+
+    screen.close()
+
+
+# ── Programme selection filters visible course rows ────────────────
+
+def test_programme_selection_signal_updates_visible_course_table(tmp_path):
+    """
+    Selecting programmes in ConfigScreen should emit courses_changed and update
+    the Course Details table in ResultsScreen through InputScreen wiring.
+    """
+    app = _get_qapp()
+
+    courses_path = tmp_path / "courses.txt"
+    _write_courses_base(courses_path)
+
+    controller = DesktopController()
+    controller.load_courses(courses_path)
+
+    screen = InputScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen._config._refresh_programme_list()
+    app.processEvents()
+
+    item_83101 = _find_programme_item(screen._config, "83101")
+    item_83101.setCheckState(Qt.CheckState.Checked)
+    app.processEvents()
+
+    assert screen._results._course_table.rowCount() == 1
+    assert screen._results._course_table.item(0, 1).text() == "11111"
+    assert "Calculus" in screen._results._course_table.item(0, 0).text()
+
+    item_83102 = _find_programme_item(screen._config, "83102")
+    item_83101.setCheckState(Qt.CheckState.Unchecked)
+    item_83102.setCheckState(Qt.CheckState.Checked)
+    app.processEvents()
+
+    assert screen._results._course_table.rowCount() == 1
+    assert screen._results._course_table.item(0, 1).text() == "22222"
+    assert "Algorithms" in screen._results._course_table.item(0, 0).text()
+
+    screen.close()
+
+
+# ── Date exclusions propagate to generation ────────────────────────
+
+def test_date_editor_exclusion_propagates_to_controller_generation(tmp_path):
+    """
+    Excluding a date through DateEditorWidget should update controller periods,
+    and the next generation should not assign exams to the excluded date.
+    """
+    app = _get_qapp()
+
+    courses_path = tmp_path / "courses.txt"
+    periods_path = tmp_path / "periods.txt"
+    _write_courses_one(courses_path)
+    _write_periods_short(periods_path)
+
+    controller = DesktopController()
+    controller.load_courses(courses_path)
+    controller.load_periods(periods_path)
+    controller.set_selected_programs(["83101"])
+
+    screen = InputScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen._results.refresh_periods()
+    app.processEvents()
+
+    editor = screen._results._date_editors["FALL - Aleph"]
+    excluded = date(2026, 1, 5)
+
+    editor._on_day_toggled(excluded)
+    app.processEvents()
+
+    updated_period = controller.get_exam_periods()[0]
+    assert excluded in updated_period.excluded_dates
+
+    schedules_by_period, _, truncated = controller.generate()
+
+    assert truncated == set()
+    assert schedules_by_period
+
+    for schedules in schedules_by_period.values():
+        for schedule in schedules:
+            assert excluded not in schedule.assignments.values()
+
+    screen.close()
+
+
+# ── ConfigScreen signals drive InputScreen transitions ─────────────
+
+def test_generation_started_signal_switches_to_results_loading_screen():
+    """
+    generation_started should switch InputScreen from ConfigScreen to
+    ResultsScreen and show the loading pane.
+    """
+    app = _get_qapp()
+
+    controller = DesktopController()
+    screen = InputScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    assert screen._stacked.currentIndex() == 0
+
+    screen._config.generation_started.emit((["83101"], {"83101": "#2563EB"}))
+    app.processEvents()
+
+    assert screen._stacked.currentIndex() == 1
+    assert screen._results._content_stack.currentIndex() == 0
+    assert screen._results._spin_timer.isActive() is True
+
+    screen._results.hide_loading()
+    screen.close()
+
+
+def test_schedule_generated_signal_loads_results_and_hides_spinner():
+    """
+    schedule_generated should load result data into ResultsScreen and hide the
+    loading spinner.
+    """
+    app = _get_qapp()
+
+    controller = DesktopController()
+    screen = InputScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    period = ExamPeriod(
+        semester="FALL",
+        moed="Aleph",
+        date_ranges=[(date(2026, 1, 5), date(2026, 1, 6))],
+    )
+    course = Course(
+        id="11111",
+        name="Calculus",
+        instructor="Dr. Cohen",
+        evaluation_type="Exam",
+    )
+    schedule = Schedule(
+        period=period,
+        assignments={"11111": date(2026, 1, 5)},
+    )
+
+    screen._config.generation_started.emit((["83101"], {"83101": "#2563EB"}))
+    app.processEvents()
+
+    screen._config.schedule_generated.emit(
+        (
+            ["83101"],
+            {"FALL - Aleph": [schedule]},
+            {"11111": course},
+            {"83101": "#2563EB"},
+            set(),
+        )
+    )
+    app.processEvents()
+
+    assert screen._stacked.currentIndex() == 1
+    assert screen._results._content_stack.currentIndex() == 1
+    assert screen._results._spin_timer.isActive() is False
+    assert screen._results._workspace.currentIndex() == 2
+    assert screen._results._results_loaded is True
+
+    screen.close()
+
+
+def test_generation_failed_signal_returns_to_config_screen(monkeypatch):
+    """
+    generation_failed should hide loading, return to ConfigScreen, and show a
+    user-facing error dialog.
+    """
+    app = _get_qapp()
+
+    shown_messages: list[tuple[str, str]] = []
+
+    def fake_critical(_parent, title, message):
+        shown_messages.append((title, message))
+
+    monkeypatch.setattr(QMessageBox, "critical", fake_critical)
+
+    controller = DesktopController()
+    screen = InputScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen._config.generation_started.emit((["83101"], {"83101": "#2563EB"}))
+    app.processEvents()
+
+    assert screen._stacked.currentIndex() == 1
+    assert screen._results._content_stack.currentIndex() == 0
+
+    screen._config.generation_failed.emit("Generation failed for test.")
+    app.processEvents()
+
+    assert screen._stacked.currentIndex() == 0
+    assert screen._results._content_stack.currentIndex() == 1
+    assert screen._results._spin_timer.isActive() is False
+    assert shown_messages == [
+        ("Generation Error", "Generation failed for test.")
+    ]
+
+    screen.close()
