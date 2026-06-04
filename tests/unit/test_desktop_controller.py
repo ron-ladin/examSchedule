@@ -405,8 +405,21 @@ def test_generate_returns_all_period_schedules_without_truncation(tmp_path):
 
     assert truncated == set(), "full generation should not truncate results"
 
+    period = ctrl.get_exam_periods()[0]
+    valid_dates_count = len(period.get_valid_dates())
+
+    # Current business rule: Friday is allowed, Saturday is excluded.
+    assert valid_dates_count == 23
+
+    expected_count = (
+        valid_dates_count
+        * (valid_dates_count - 1)
+        * (valid_dates_count - 2)
+    )
+
     period_key = next(iter(schedules_by_period))
-    assert len(schedules_by_period[period_key]) == 10626
+    assert len(schedules_by_period[period_key]) == expected_count
+
 
 # ── duplicate-key warning ─────────────────────────────────────────────────────
 
@@ -484,6 +497,40 @@ def test_export_is_blocked_after_dates_change_even_if_regeneration_fails(tmp_pat
         ctrl.generate()
 
     # Failed generation must NOT clear stale state.
+    assert ctrl.results_stale is True
+
+    with pytest.raises(ValueError, match="Cannot export stale schedules"):
+        ctrl.export(schedules_by_period, out)
+
+    assert not out.exists()
+
+
+def test_export_is_blocked_after_courses_reload(tmp_path):
+    """
+    Old schedules must not be exportable after courses are reloaded.
+
+    Course data changes can change relevant offerings, course names, requirements,
+    or conflicts. Therefore loading courses after a successful generation must
+    mark existing results as stale and block export until regeneration succeeds.
+    """
+    cp = tmp_path / "courses.txt"
+    dp = tmp_path / "dates.txt"
+    out = tmp_path / "out.txt"
+
+    _write_courses(cp)
+    _write_periods(dp)
+
+    ctrl = DesktopController()
+    ctrl.load_courses(cp)
+    ctrl.load_periods(dp)
+    ctrl.set_selected_programs(["83101"])
+
+    schedules_by_period, _, _ = ctrl.generate()
+    assert schedules_by_period
+    assert ctrl.results_stale is False
+
+    ctrl.load_courses(cp, mode="replace")
+
     assert ctrl.results_stale is True
 
     with pytest.raises(ValueError, match="Cannot export stale schedules"):

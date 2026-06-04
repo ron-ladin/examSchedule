@@ -40,8 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 # Kept for backward compatibility with existing UI/tests that import this name.
-# Full generation now uses cap=None, so this value is only used by old load-more
-# helpers or legacy tests.
+# Full generation uses cap=None, so this value is only used by legacy helpers.
 RESULT_BATCH_SIZE: int = 1000
 RESULT_CAP: int = RESULT_BATCH_SIZE
 
@@ -53,7 +52,7 @@ class _MemoryExporter(IOutputExporter):
     cap=None means full generation:
         collect all schedules for each period.
 
-    cap=<number> means batched generation:
+    cap=<number> means legacy batched generation:
         collect only cap schedules per period and mark truncated periods.
     """
 
@@ -90,13 +89,11 @@ class _MemoryExporter(IOutputExporter):
 
             offset = self._offset_by_period.get(key, 0)
 
-            # Full generation: collect everything from this iterator.
             if self._cap is None:
                 self.schedules_by_period[key] = list(islice(schedule_iter, offset, None))
                 self.has_more_by_period[key] = False
                 continue
 
-            # Legacy / optional batched generation.
             batch = list(islice(schedule_iter, offset, offset + self._cap + 1))
 
             if len(batch) > self._cap:
@@ -129,7 +126,7 @@ def _run_generation_process(
     or (False, error_message) on failure.
 
     Default behavior:
-        cap=None → generate all schedules up front.
+        cap=None -> generate all schedules up front.
 
     Optional legacy batching:
         cap=<number>, period_key=<key>, offset=<already loaded>.
@@ -166,6 +163,7 @@ def _run_generation_process(
             )
         )
     except Exception as exc:
+        logger.exception("Generation process failed")
         result_queue.put((False, str(exc)))
 
 
@@ -189,7 +187,7 @@ class DesktopController:
         """
         Load courses from a file into memory.
 
-        mode: "replace" | "update"
+        mode: "replace" | "append" | "update"
         Returns the total number of courses now in memory.
         """
         reader = CourseFileReader(Path(path))
@@ -199,6 +197,8 @@ class DesktopController:
             self._update_merge_courses(new_courses)
         else:
             self._merge_by_key(self._courses, new_courses, mode, key_fn=lambda c: c.id)
+
+        self.mark_results_stale()
 
         logger.info(
             "load_courses: mode=%s, loaded=%d, total=%d",
@@ -353,6 +353,23 @@ class DesktopController:
         """Return True if any period still has more schedules available."""
         return any(self._has_more_schedules.values())
 
+    def set_has_more_for_period(self, period_key: str, has_more: bool) -> None:
+        """
+        Set whether more schedules are available for one period.
+
+        This keeps UI code from mutating controller internals directly.
+        """
+        self._has_more_schedules[period_key] = has_more
+
+    def on_generation_succeeded(self, truncated_periods: set[str] | None = None) -> None:
+        """
+        Update controller state after a successful generation run.
+
+        This is used by both in-process and subprocess-based generation flows.
+        """
+        self.clear_results_stale()
+        self.set_has_more_from_truncated(truncated_periods or set())
+
     def get_programme_ids(self) -> list[str]:
         """
         Return programme IDs to display in the sidebar list.
@@ -424,7 +441,6 @@ class DesktopController:
         )
         generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
 
-        # cap=None means full generation: collect all schedules.
         memory_exporter = _MemoryExporter(cap=None)
 
         engine = _EngineController(
@@ -435,9 +451,8 @@ class DesktopController:
         )
         engine.run()
 
-        self.clear_results_stale()
+        self.on_generation_succeeded(set())
 
-        # Full generation has no "load more" state.
         self._remaining_schedule_iterators.clear()
         self._has_more_schedules.clear()
         self._iterator_overflows.clear()
@@ -603,7 +618,6 @@ class DesktopController:
 
         courses_by_id = {course.id: course for course in self._courses}
 
-        # max_combinations=None means export all provided combinations.
         exporter = TextFileExporter(
             output_path=Path(output_path),
             max_combinations=None,

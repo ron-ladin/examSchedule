@@ -55,12 +55,8 @@ logger = logging.getLogger(__name__)
 _LOGO_PNG = str(Path(__file__).parent / "assets" / "logo.png")
 
 _MAX_PROGS = 5
-
-# Full generation can take longer than the old 1000-result batch generation.
 _MAX_GEN_SECS = 180
 
-
-# ── module-level helpers ──────────────────────────────────────────────────────
 
 def _section_lbl(text: str) -> QLabel:
     lbl = QLabel(text)
@@ -88,13 +84,11 @@ def _card() -> QFrame:
     return f
 
 
-# ── ConfigScreen ──────────────────────────────────────────────────────────────
-
 class ConfigScreen(QWidget):
     """Full-screen configuration (Screen 0)."""
 
-    generation_started = pyqtSignal(object)  # (selected_ids, prog_color_map) — immediate
-    schedule_generated = pyqtSignal(object)  # full result tuple — async
+    generation_started = pyqtSignal(object)
+    schedule_generated = pyqtSignal(object)
     generation_failed = pyqtSignal(str)
     courses_changed = pyqtSignal(list)
     periods_changed = pyqtSignal()
@@ -110,8 +104,6 @@ class ConfigScreen(QWidget):
         self._gen_start_time: float = 0.0
         self._dead_ticks: int = 0
         self._setup_ui()
-
-    # ── Construction ──────────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -452,7 +444,6 @@ class ConfigScreen(QWidget):
         return c
 
     def _build_footer(self) -> QWidget:
-        """Fixed-height footer — Generate button is always anchored here."""
         footer = QWidget()
         footer.setObjectName("configFooter")
         footer.setFixedHeight(76)
@@ -501,8 +492,6 @@ class ConfigScreen(QWidget):
 
         return footer
 
-    # ── File loading ──────────────────────────────────────────────────────────
-
     def _load_courses(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -528,8 +517,12 @@ class ConfigScreen(QWidget):
             self._set_status(f"✓  {count} courses loaded.")
             self._update_gen_btn()
 
-        except Exception as exc:
-            QMessageBox.critical(self, "Load Error", str(exc))
+        except Exception:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                "Could not load the courses file. Please check the file format and try again.",
+            )
             logger.exception("Error loading courses")
 
     def _load_dates(self) -> None:
@@ -557,8 +550,12 @@ class ConfigScreen(QWidget):
             self._update_gen_btn()
             self.periods_changed.emit()
 
-        except Exception as exc:
-            QMessageBox.critical(self, "Load Error", str(exc))
+        except Exception:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                "Could not load the exam periods file. Please check the file format and try again.",
+            )
             logger.exception("Error loading exam periods")
 
     def _load_programs(self) -> None:
@@ -584,11 +581,13 @@ class ConfigScreen(QWidget):
             self._set_status(f"✓  {count} programme(s) loaded.")
             self._update_gen_btn()
 
-        except Exception as exc:
-            QMessageBox.critical(self, "Load Error", str(exc))
+        except Exception:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                "Could not load the programs file. Please check the file format and try again.",
+            )
             logger.exception("Error loading programs")
-
-    # ── Programme list ────────────────────────────────────────────────────────
 
     def _refresh_programme_list(self) -> None:
         self._prog_list.blockSignals(True)
@@ -655,7 +654,6 @@ class ConfigScreen(QWidget):
         )
 
     def _get_selected_ids(self) -> list[str]:
-        """Return programme IDs only via UserRole for selected items."""
         return [
             self._prog_list.item(i).data(Qt.ItemDataRole.UserRole)
             for i in range(self._prog_list.count())
@@ -664,8 +662,6 @@ class ConfigScreen(QWidget):
 
     def _update_prog_label(self) -> None:
         self._prog_count_lbl.setText(f"{self._count_checked()} / {_MAX_PROGS} selected")
-
-    # ── Generation ────────────────────────────────────────────────────────────
 
     def _on_generate(self) -> None:
         selected = self._get_selected_ids()
@@ -759,11 +755,17 @@ class ConfigScreen(QWidget):
 
         self._reset_progress()
 
-        if len(result) == 4 and result[0]:
+        if (
+            isinstance(result, tuple)
+            and len(result) == 4
+            and result[0] is True
+            and isinstance(result[1], dict)
+            and isinstance(result[2], dict)
+            and isinstance(result[3], set)
+        ):
             _, schedules_by_period, courses_by_id, truncated_periods = result
 
-            self._controller.clear_results_stale()
-            self._controller.set_has_more_from_truncated(truncated_periods)
+            self._controller.on_generation_succeeded(truncated_periods)
 
             self._gen_btn.setEnabled(True)
             self._set_status("✓  Schedule generated.", ok=True)
@@ -778,7 +780,8 @@ class ConfigScreen(QWidget):
                 )
             )
         else:
-            self._fail(result[1] if len(result) > 1 else "Unknown generation error.")
+            logger.error("Generation failed or returned invalid result: %s", result)
+            self._fail("Generation failed. Please check the input files and try again.")
 
     def _fail(self, msg: str) -> None:
         self._reset_progress()
