@@ -17,6 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip(
     "PyQt6.QtWidgets",
     reason="PyQt6 native GUI libraries are not available in this environment.",
+    exc_type=ImportError,
 )
 
 QApplication = QtWidgets.QApplication
