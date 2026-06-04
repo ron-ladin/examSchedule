@@ -339,3 +339,98 @@ def test_merge_by_key_update_warns_on_duplicate_key(caplog):
     )
     assert len(existing) == 1
     assert existing[0].name == "Calculus v2"  # last occurrence wins
+
+
+# ── stale results / failed regeneration ───────────────────────────────────────
+
+def test_export_is_blocked_after_dates_change_even_if_regeneration_fails(tmp_path):
+    """
+    Old schedules must not be exportable after exam dates changed,
+    even if the next generation attempt fails.
+
+    This is a logic test, not a UI test:
+    it verifies that DesktopController keeps stale state and blocks export.
+    """
+    cp = tmp_path / "courses.txt"
+    dp = tmp_path / "dates.txt"
+    out = tmp_path / "out.txt"
+
+    _write_courses(cp)
+    _write_periods(dp)
+
+    ctrl = DesktopController()
+    ctrl.load_courses(cp)
+    ctrl.load_periods(dp)
+    ctrl.set_selected_programs(["83101"])
+
+    schedules_by_period, _, _ = ctrl.generate()
+    assert schedules_by_period
+
+    ctrl.mark_results_stale()
+    assert ctrl.results_stale is True
+
+    # Simulate a failed generation attempt after the date change.
+    ctrl.set_selected_programs([])
+
+    with pytest.raises(ValueError, match="No programmes selected"):
+        ctrl.generate()
+
+    # Failed generation must NOT clear stale state.
+    assert ctrl.results_stale is True
+
+    with pytest.raises(ValueError, match="Cannot export stale schedules"):
+        ctrl.export(schedules_by_period, out)
+
+    assert not out.exists()
+
+
+def test_successful_generation_clears_stale_state(tmp_path):
+    """
+    If the user generates schedules successfully after dates changed,
+    the new schedules are valid again and stale state should be cleared.
+    """
+    cp = tmp_path / "courses.txt"
+    dp = tmp_path / "dates.txt"
+
+    _write_courses(cp)
+    _write_periods(dp)
+
+    ctrl = DesktopController()
+    ctrl.load_courses(cp)
+    ctrl.load_periods(dp)
+    ctrl.set_selected_programs(["83101"])
+
+    ctrl.mark_results_stale()
+    assert ctrl.results_stale is True
+
+    schedules_by_period, _, _ = ctrl.generate()
+
+    assert schedules_by_period
+    assert ctrl.results_stale is False
+
+
+def test_export_allowed_when_results_are_not_stale(tmp_path):
+    """
+    Normal export should still work after a successful generation.
+    This makes sure the stale guard does not break valid exports.
+    """
+    cp = tmp_path / "courses.txt"
+    dp = tmp_path / "dates.txt"
+    out = tmp_path / "out.txt"
+
+    _write_courses(cp)
+    _write_periods(dp)
+
+    ctrl = DesktopController()
+    ctrl.load_courses(cp)
+    ctrl.load_periods(dp)
+    ctrl.set_selected_programs(["83101"])
+
+    schedules_by_period, _, _ = ctrl.generate()
+
+    assert ctrl.results_stale is False
+
+    ctrl.export(schedules_by_period, out)
+
+    assert out.exists()
+    assert out.stat().st_size > 0
