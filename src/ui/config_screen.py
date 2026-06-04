@@ -48,16 +48,15 @@ from PyQt6.QtWidgets import (
 
 from src.controller import DesktopController, _run_generation_process
 from src.ui.assets.icons import BookIcon, CalendarIcon, GraduationIcon
-_LOGO_PNG = str(Path(__file__).parent / "assets" / "logo.png")
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
 
 logger = logging.getLogger(__name__)
 
+_LOGO_PNG = str(Path(__file__).parent / "assets" / "logo.png")
+
 _MAX_PROGS = 5
-_MAX_GEN_SECS = 30
+_MAX_GEN_SECS = 180
 
-
-# ── module-level helpers ──────────────────────────────────────────────────────
 
 def _section_lbl(text: str) -> QLabel:
     lbl = QLabel(text)
@@ -85,16 +84,14 @@ def _card() -> QFrame:
     return f
 
 
-# ── ConfigScreen ──────────────────────────────────────────────────────────────
-
 class ConfigScreen(QWidget):
     """Full-screen configuration (Screen 0)."""
 
-    generation_started = pyqtSignal(object)  # (selected_ids, prog_color_map) — immediate
-    schedule_generated = pyqtSignal(object)  # full result tuple — async
-    generation_failed  = pyqtSignal(str)
-    courses_changed    = pyqtSignal(list)
-    periods_changed    = pyqtSignal()
+    generation_started = pyqtSignal(object)
+    schedule_generated = pyqtSignal(object)
+    generation_failed = pyqtSignal(str)
+    courses_changed = pyqtSignal(list)
+    periods_changed = pyqtSignal()
 
     def __init__(self, controller: DesktopController, parent=None) -> None:
         super().__init__(parent)
@@ -108,43 +105,55 @@ class ConfigScreen(QWidget):
         self._dead_ticks: int = 0
         self._setup_ui()
 
-    # ── Construction ──────────────────────────────────────────────────────────
-
     def _setup_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         root.addWidget(self._build_header())
-        root.addWidget(self._build_scroll_area(), 1)  # expands
-        root.addWidget(self._build_footer())           # always visible
+        root.addWidget(self._build_scroll_area(), 1)
+        root.addWidget(self._build_footer())
 
     def _build_header(self) -> QWidget:
         hdr = QWidget()
         hdr.setObjectName("appHeader")
         hdr.setFixedHeight(80)
+
         hl = QHBoxLayout(hdr)
         hl.setContentsMargins(20, 0, 20, 0)
         hl.setSpacing(12)
-        _logo = QLabel()
-        _logo.setStyleSheet("background: transparent; border: none;")
-        _logo.setFixedSize(32, 32)
-        _pix = QPixmap(_LOGO_PNG)
-        if not _pix.isNull():
-            _logo.setPixmap(_pix.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio,
-                                         Qt.TransformationMode.SmoothTransformation))
-        hl.addWidget(_logo)
+
+        logo = QLabel()
+        logo.setStyleSheet("background: transparent; border: none;")
+        logo.setFixedSize(32, 32)
+
+        pix = QPixmap(_LOGO_PNG)
+        if not pix.isNull():
+            logo.setPixmap(
+                pix.scaled(
+                    32,
+                    32,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
+        hl.addWidget(logo)
+
         brand = QLabel("Syncacademic")
         brand.setStyleSheet(
             "font-size: 22px; font-weight: 800; color: #005ac2;"
             " letter-spacing: -0.5px; background: transparent;"
         )
+
         tagline = QLabel("Academic Command Center")
         tagline.setStyleSheet(
             "font-size: 12px; color: #42474e; font-weight: 500; background: transparent;"
         )
+
         hl.addWidget(brand)
         hl.addWidget(tagline)
         hl.addStretch()
+
         return hdr
 
     def _build_scroll_area(self) -> QScrollArea:
@@ -155,23 +164,26 @@ class ConfigScreen(QWidget):
 
         outer = QWidget()
         outer.setStyleSheet("background:transparent;")
+
         ol = QHBoxLayout(outer)
         ol.setContentsMargins(32, 32, 32, 32)
 
         content = QWidget()
         content.setMaximumWidth(900)
         content.setStyleSheet("background:transparent;")
+
         cl = QVBoxLayout(content)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(20)
 
-        # Steps tracker row
         steps_row = QWidget()
         steps_row.setStyleSheet("background: transparent;")
+
         sl = QHBoxLayout(steps_row)
         sl.setContentsMargins(0, 4, 0, 4)
         sl.setSpacing(0)
         sl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         for i, (icon, text, active) in enumerate([
             ("①", "Load files", True),
             ("②", "Select programmes", False),
@@ -180,34 +192,40 @@ class ConfigScreen(QWidget):
             if i > 0:
                 div = QLabel("  ——  ")
                 div.setStyleSheet(
-                    "color: rgba(194, 198, 214, 0.9); background: transparent; font-size: 11px;"
+                    "color: rgba(194, 198, 214, 0.9);"
+                    " background: transparent; font-size: 11px;"
                 )
                 sl.addWidget(div)
+
             step = QLabel(f"{icon}  {text}")
             step.setStyleSheet(
                 f"font-size: 13px; font-weight: {'700' if active else '500'};"
-                f" color: {'#004394' if active else '#42474e'}; background: transparent;"
+                f" color: {'#004394' if active else '#42474e'};"
+                " background: transparent;"
             )
             sl.addWidget(step)
+
         cl.addWidget(steps_row)
 
         top = QHBoxLayout()
         top.setSpacing(16)
         top.addWidget(self._build_mode_card(), 1)
         top.addWidget(self._build_files_card(), 1)
-        cl.addLayout(top)
 
+        cl.addLayout(top)
         cl.addWidget(self._build_prog_card())
         cl.addStretch(1)
 
         ol.addStretch(1)
         ol.addWidget(content, 0)
         ol.addStretch(1)
+
         scroll.setWidget(outer)
         return scroll
 
     def _build_mode_card(self) -> QFrame:
         c = _card()
+
         vl = QVBoxLayout(c)
         vl.setContentsMargins(20, 18, 20, 18)
         vl.setSpacing(10)
@@ -216,7 +234,7 @@ class ConfigScreen(QWidget):
         self._mode_group = QButtonGroup(self)
         self._mode_frames: list[QFrame] = []
 
-        _rb_style = (
+        radio_style = (
             "QRadioButton { font-size:14px; font-weight:600; color:#171c20;"
             " spacing:10px; background:transparent; }"
             "QRadioButton::indicator { width:18px; height:18px; border-radius:9px;"
@@ -228,43 +246,53 @@ class ConfigScreen(QWidget):
 
         for label, hint_text in (
             ("Replace", "Clear all existing data"),
-            ("Update",  "Merge with existing data"),
+            ("Update", "Merge with existing data"),
         ):
             option_frame = QFrame()
             option_frame.setCursor(Qt.CursorShape.PointingHandCursor)
+
             fl = QVBoxLayout(option_frame)
             fl.setContentsMargins(0, 0, 0, 0)
             fl.setSpacing(0)
 
             rb_row = QWidget()
             rb_row.setStyleSheet("background:transparent;")
+
             rl = QHBoxLayout(rb_row)
             rl.setContentsMargins(14, 12, 14, 4)
             rl.setSpacing(10)
+
             rb = QRadioButton(label)
             rb.setCursor(Qt.CursorShape.PointingHandCursor)
-            rb.setStyleSheet(_rb_style)
+            rb.setStyleSheet(radio_style)
+
             self._mode_group.addButton(rb)
+
             rl.addWidget(rb)
             rl.addStretch()
 
             hint = QLabel(hint_text)
             hint.setContentsMargins(42, 0, 14, 10)
-            hint.setStyleSheet("font-size:12px; color:#42474e; background:transparent;")
+            hint.setStyleSheet(
+                "font-size:12px; color:#42474e; background:transparent;"
+            )
 
             fl.addWidget(rb_row)
             fl.addWidget(hint)
+
             rb.toggled.connect(lambda _: self._update_mode_card_styles())
             self._mode_frames.append(option_frame)
             vl.addWidget(option_frame)
 
         self._mode_group.buttons()[0].setChecked(True)
         self._update_mode_card_styles()
+
         vl.addStretch()
         return c
 
     def _update_mode_card_styles(self) -> None:
         checked = self._mode_group.checkedButton()
+
         for btn, frame in zip(self._mode_group.buttons(), self._mode_frames):
             if btn is checked:
                 frame.setStyleSheet(
@@ -279,33 +307,58 @@ class ConfigScreen(QWidget):
 
     def _build_files_card(self) -> QFrame:
         c = _card()
+
         vl = QVBoxLayout(c)
         vl.setContentsMargins(20, 18, 20, 18)
         vl.setSpacing(10)
         vl.addWidget(_section_lbl("FILES"))
 
         specs = [
-            (BookIcon(14, "#004394"),       "Courses",      "Load Courses",
-             "_load_courses_btn", "_courses_label",   self._load_courses),
-            (CalendarIcon(14, "#004394"),   "Exam Periods", "Load Periods",
-             "_load_periods_btn", "_dates_label",     self._load_dates),
-            (GraduationIcon(14, "#004394"), "Programmes",   "Load Programs",
-             "_load_programs_btn", "_programs_label", self._load_programs),
+            (
+                BookIcon(14, "#004394"),
+                "Courses",
+                "Load Courses",
+                "_load_courses_btn",
+                "_courses_label",
+                self._load_courses,
+            ),
+            (
+                CalendarIcon(14, "#004394"),
+                "Exam Periods",
+                "Load Periods",
+                "_load_periods_btn",
+                "_dates_label",
+                self._load_dates,
+            ),
+            (
+                GraduationIcon(14, "#004394"),
+                "Programmes",
+                "Load Programs",
+                "_load_programs_btn",
+                "_programs_label",
+                self._load_programs,
+            ),
         ]
-        _file_btn_style = (
+
+        file_btn_style = (
             "QPushButton { background:rgba(222,227,235,0.9);"
             " border:1px solid rgba(194,198,214,0.5); border-radius:8px;"
             " padding:5px 12px; font-size:12px; font-weight:600; color:#171c20; }"
             "QPushButton:hover { background:rgba(0,67,148,0.08);"
             " border-color:#004394; color:#004394; }"
         )
+
         for icon, title, btn_text, btn_attr, lbl_attr, slot in specs:
             btn = QPushButton(btn_text)
             btn.setFixedWidth(110)
-            btn.setStyleSheet(_file_btn_style)
+            btn.setStyleSheet(file_btn_style)
             btn.clicked.connect(slot)
+
             lbl = QLabel("No file loaded")
-            lbl.setStyleSheet("font-size:11px; color:#72778c; background:transparent;")
+            lbl.setStyleSheet(
+                "font-size:11px; color:#72778c; background:transparent;"
+            )
+
             setattr(self, btn_attr, btn)
             setattr(self, lbl_attr, lbl)
 
@@ -314,23 +367,30 @@ class ConfigScreen(QWidget):
                 "QFrame { background:transparent; border-radius:8px; border:none; }"
                 "QFrame:hover { background:rgba(0,67,148,0.04); }"
             )
+
             hl = QHBoxLayout(row)
             hl.setContentsMargins(10, 8, 10, 8)
             hl.setSpacing(10)
+
             hl.addWidget(icon)
-            t = QLabel(title)
-            t.setStyleSheet(
+
+            title_lbl = QLabel(title)
+            title_lbl.setStyleSheet(
                 "font-size:14px; font-weight:600; color:#171c20; background:transparent;"
             )
-            hl.addWidget(t)
+
+            hl.addWidget(title_lbl)
             hl.addStretch()
             hl.addWidget(btn)
             hl.addWidget(lbl)
+
             vl.addWidget(row)
+
         return c
 
     def _build_prog_card(self) -> QFrame:
         c = _card()
+
         vl = QVBoxLayout(c)
         vl.setContentsMargins(20, 18, 20, 18)
         vl.setSpacing(8)
@@ -338,8 +398,12 @@ class ConfigScreen(QWidget):
         hdr = QHBoxLayout()
         hdr.addWidget(_section_lbl("STUDY PROGRAMMES  (max 5)"))
         hdr.addStretch()
+
         self._prog_count_lbl = QLabel("0 / 5 selected")
-        self._prog_count_lbl.setStyleSheet("font-size:11px; color:#64748B; background:transparent;")
+        self._prog_count_lbl.setStyleSheet(
+            "font-size:11px; color:#64748B; background:transparent;"
+        )
+
         hdr.addWidget(self._prog_count_lbl)
         vl.addLayout(hdr)
 
@@ -375,11 +439,11 @@ class ConfigScreen(QWidget):
             QListWidget::indicator:checked { background: #004394; border-color: #004394; }
         """)
         self._prog_list.itemChanged.connect(self._on_programme_toggled)
+
         vl.addWidget(self._prog_list)
         return c
 
     def _build_footer(self) -> QWidget:
-        """Fixed-height footer — Generate button is always anchored here."""
         footer = QWidget()
         footer.setObjectName("configFooter")
         footer.setFixedHeight(76)
@@ -389,6 +453,7 @@ class ConfigScreen(QWidget):
             " border-top: 1px solid rgba(194, 198, 214, 0.6);"
             "}"
         )
+
         vl = QVBoxLayout(footer)
         vl.setContentsMargins(32, 8, 32, 12)
         vl.setSpacing(4)
@@ -406,9 +471,12 @@ class ConfigScreen(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(16)
+
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet("font-size:11px; color:#64748B; background:transparent;")
+        self._status_label.setStyleSheet(
+            "font-size:11px; color:#64748B; background:transparent;"
+        )
         row.addWidget(self._status_label, 1)
 
         self._gen_btn = QPushButton("▶  Generate Schedule")
@@ -418,19 +486,25 @@ class ConfigScreen(QWidget):
         self._gen_btn.setFixedWidth(220)
         self._gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._gen_btn.clicked.connect(self._on_generate)
+
         row.addWidget(self._gen_btn)
         vl.addLayout(row)
-        return footer
 
-    # ── File loading ──────────────────────────────────────────────────────────
+        return footer
 
     def _load_courses(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Courses File", "", "Text files (*.txt);;All files (*)"
+            self,
+            "Select Courses File",
+            "",
+            "Text files (*.txt);;All files (*)",
         )
+
         if not path:
             return
+
         mode = self._mode_group.checkedButton().text().lower()
+
         try:
             count = self._controller.load_courses(Path(path), mode=mode)
             self._courses_label.setText(f"{Path(path).name}  ({count})")
@@ -438,20 +512,32 @@ class ConfigScreen(QWidget):
                 "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
                 " border-radius:4px; padding:2px 7px;"
             )
+
             self._refresh_programme_list()
             self._set_status(f"✓  {count} courses loaded.")
             self._update_gen_btn()
-        except Exception as exc:
-            QMessageBox.critical(self, "Load Error", str(exc))
+
+        except Exception:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                "Could not load the courses file. Please check the file format and try again.",
+            )
             logger.exception("Error loading courses")
 
     def _load_dates(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Exam Periods File", "", "Text files (*.txt);;All files (*)"
+            self,
+            "Select Exam Periods File",
+            "",
+            "Text files (*.txt);;All files (*)",
         )
+
         if not path:
             return
+
         mode = self._mode_group.checkedButton().text().lower()
+
         try:
             count = self._controller.load_periods(Path(path), mode=mode)
             self._dates_label.setText(f"{Path(path).name}  ({count})")
@@ -459,19 +545,30 @@ class ConfigScreen(QWidget):
                 "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
                 " border-radius:4px; padding:2px 7px;"
             )
+
             self._set_status(f"✓  {count} exam period(s) loaded.")
             self._update_gen_btn()
             self.periods_changed.emit()
-        except Exception as exc:
-            QMessageBox.critical(self, "Load Error", str(exc))
+
+        except Exception:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                "Could not load the exam periods file. Please check the file format and try again.",
+            )
             logger.exception("Error loading exam periods")
 
     def _load_programs(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Programs File", "", "Text files (*.txt);;All files (*)"
+            self,
+            "Select Programs File",
+            "",
+            "Text files (*.txt);;All files (*)",
         )
+
         if not path:
             return
+
         try:
             count = self._controller.load_programs(Path(path))
             self._programs_label.setText(f"{Path(path).name}  ({count})")
@@ -479,29 +576,37 @@ class ConfigScreen(QWidget):
                 "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
                 " border-radius:4px; padding:2px 7px;"
             )
+
             self._refresh_programme_list()
             self._set_status(f"✓  {count} programme(s) loaded.")
             self._update_gen_btn()
-        except Exception as exc:
-            QMessageBox.critical(self, "Load Error", str(exc))
-            logger.exception("Error loading programs")
 
-    # ── Programme list ────────────────────────────────────────────────────────
+        except Exception:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                "Could not load the programs file. Please check the file format and try again.",
+            )
+            logger.exception("Error loading programs")
 
     def _refresh_programme_list(self) -> None:
         self._prog_list.blockSignals(True)
         self._prog_list.clear()
+
         for pid in self._controller.get_programme_ids():
             name = PROGRAM_NAMES_MAPPING.get(pid, "Unknown Program")
             item = QListWidgetItem(f"{pid}  —  {name}")
-            item.setData(Qt.ItemDataRole.UserRole, pid)  # bare ID for _get_selected_ids
+            item.setData(Qt.ItemDataRole.UserRole, pid)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Unchecked)
             self._prog_list.addItem(item)
+
         self._prog_list.blockSignals(False)
+
         has = self._prog_list.count() > 0
         self._prog_placeholder.setVisible(not has)
         self._prog_list.setVisible(has)
+
         self._update_prog_label()
         self.courses_changed.emit(self._get_selected_ids())
 
@@ -510,11 +615,14 @@ class ConfigScreen(QWidget):
             self._prog_list.blockSignals(True)
             item.setCheckState(Qt.CheckState.Unchecked)
             self._prog_list.blockSignals(False)
+
             QMessageBox.information(
-                self, "Limit Reached",
+                self,
+                "Limit Reached",
                 f"You can select at most {_MAX_PROGS} programmes.",
             )
             return
+
         self._update_programme_colours()
         self._update_prog_label()
         self._update_gen_btn()
@@ -522,24 +630,30 @@ class ConfigScreen(QWidget):
 
     def _update_programme_colours(self) -> None:
         slot = 0
+
         self._prog_list.blockSignals(True)
+
         for i in range(self._prog_list.count()):
-            it = self._prog_list.item(i)
-            if it.checkState() == Qt.CheckState.Checked:
-                it.setForeground(QColor(PROGRAMME_COLOURS[slot % len(PROGRAMME_COLOURS)]))
+            item = self._prog_list.item(i)
+
+            if item.checkState() == Qt.CheckState.Checked:
+                item.setForeground(
+                    QColor(PROGRAMME_COLOURS[slot % len(PROGRAMME_COLOURS)])
+                )
                 slot += 1
             else:
-                it.setForeground(QColor(100, 116, 139))
+                item.setForeground(QColor(100, 116, 139))
+
         self._prog_list.blockSignals(False)
 
     def _count_checked(self) -> int:
         return sum(
-            1 for i in range(self._prog_list.count())
+            1
+            for i in range(self._prog_list.count())
             if self._prog_list.item(i).checkState() == Qt.CheckState.Checked
         )
 
     def _get_selected_ids(self) -> list[str]:
-        """Return programme IDs only (via UserRole) for selected items."""
         return [
             self._prog_list.item(i).data(Qt.ItemDataRole.UserRole)
             for i in range(self._prog_list.count())
@@ -549,10 +663,9 @@ class ConfigScreen(QWidget):
     def _update_prog_label(self) -> None:
         self._prog_count_lbl.setText(f"{self._count_checked()} / {_MAX_PROGS} selected")
 
-    # ── Generation ────────────────────────────────────────────────────────────
-
     def _on_generate(self) -> None:
         selected = self._get_selected_ids()
+
         self._controller.set_selected_programs(selected)
         self._pending_selected = selected
         self._pending_color_map = {
@@ -560,7 +673,6 @@ class ConfigScreen(QWidget):
             for i, pid in enumerate(selected)
         }
 
-        # Switch to Results Screen BEFORE the heavy subprocess starts
         self.generation_started.emit((selected, self._pending_color_map))
 
         self._gen_btn.setEnabled(False)
@@ -573,8 +685,10 @@ class ConfigScreen(QWidget):
 
         if self._gen_process is not None and self._gen_process.is_alive():
             self._gen_process.kill()
+
         if self._poll_timer is not None:
             self._poll_timer.stop()
+
         if self._result_queue is not None:
             self._result_queue.cancel_join_thread()
             self._result_queue.close()
@@ -582,65 +696,101 @@ class ConfigScreen(QWidget):
         self._gen_start_time = time.monotonic()
         self._dead_ticks = 0
         self._result_queue = multiprocessing.Queue()
+
         self._gen_process = multiprocessing.Process(
             target=_run_generation_process,
             args=(
-                self._result_queue, self._controller.courses,
-                self._controller.get_exam_periods(), selected,
+                self._result_queue,
+                self._controller.courses,
+                self._controller.get_exam_periods(),
+                selected,
             ),
+            kwargs={
+                "cap": None,
+            },
             daemon=True,
         )
+
         self._gen_process.start()
+
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_result)
         self._poll_timer.start(150)
 
     def _poll_result(self) -> None:
         elapsed = int(time.monotonic() - self._gen_start_time)
+
         if elapsed > _MAX_GEN_SECS:
-            self._poll_timer.stop()
+            if self._poll_timer:
+                self._poll_timer.stop()
+
             if self._gen_process:
                 self._gen_process.kill()
+
             self._fail(f"Generation timed out after {_MAX_GEN_SECS}s.")
             return
 
         try:
             result = self._result_queue.get_nowait()
         except (_QueueEmpty, OSError):
-            if not self._gen_process.is_alive():
+            if self._gen_process is not None and not self._gen_process.is_alive():
                 self._dead_ticks += 1
+
                 if self._dead_ticks >= 5:
                     self._dead_ticks = 0
-                    self._poll_timer.stop()
+
+                    if self._poll_timer:
+                        self._poll_timer.stop()
+
                     self._fail("Generation process exited unexpectedly.")
             else:
                 self._dead_ticks = 0
+
             return
 
         self._dead_ticks = 0
-        self._poll_timer.stop()
+
+        if self._poll_timer:
+            self._poll_timer.stop()
+
         self._reset_progress()
 
-        if len(result) == 4 and result[0]:
+        if (
+            isinstance(result, tuple)
+            and len(result) == 4
+            and result[0] is True
+            and isinstance(result[1], dict)
+            and isinstance(result[2], dict)
+            and isinstance(result[3], set)
+        ):
             _, schedules_by_period, courses_by_id, truncated_periods = result
-            self._controller.set_has_more_from_truncated(truncated_periods)
+
+            self._controller.on_generation_succeeded(truncated_periods)
+
             self._gen_btn.setEnabled(True)
             self._set_status("✓  Schedule generated.", ok=True)
-            self.schedule_generated.emit((
-                self._pending_selected,
-                schedules_by_period,
-                courses_by_id,
-                self._pending_color_map,
-                truncated_periods,
-            ))
+
+            self.schedule_generated.emit(
+                (
+                    self._pending_selected,
+                    schedules_by_period,
+                    courses_by_id,
+                    self._pending_color_map,
+                    truncated_periods,
+                )
+            )
         else:
-            self._fail(result[1] if len(result) > 1 else "Unknown generation error.")
+            logger.error("Generation failed or returned invalid result: %s", result)
+            self._fail("Generation failed. Please check the input files and try again.")
 
     def _fail(self, msg: str) -> None:
         self._reset_progress()
+
         if self._poll_timer:
             self._poll_timer.stop()
+
         logger.error("Generation failed: %s", msg)
+
         self._update_gen_btn()
         self.generation_failed.emit(msg)
 
@@ -661,6 +811,7 @@ class ConfigScreen(QWidget):
 
     def _update_gen_btn(self) -> None:
         running = self._gen_process is not None and self._gen_process.is_alive()
+
         self._gen_btn.setEnabled(
             not running
             and self._controller.has_courses
