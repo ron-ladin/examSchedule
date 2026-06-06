@@ -496,11 +496,6 @@ class ConfigScreen(QWidget):
 
         checked_btn = self._mode_group.checkedButton()
         mode = checked_btn.text().lower()
-        print(
-            f"[DEBUG _load_courses] checkedButton={checked_btn!r} "
-            f"text={checked_btn.text()!r} mode={mode!r} "
-            f"pairs={([(b.text(), id(f)) for b, f in self._mode_btn_frame_pairs])}"
-        )
 
         try:
             count = self._controller.load_courses(Path(path), mode=mode)

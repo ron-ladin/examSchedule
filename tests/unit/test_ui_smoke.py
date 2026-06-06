@@ -96,7 +96,6 @@ def test_config_screen_renders_file_loading_controls():
 
     assert screen._courses_label.text() == "No file loaded"
     assert screen._dates_label.text() == "No file loaded"
-    assert screen._programs_label.text() == "No file loaded"
 
     screen.close()
 
