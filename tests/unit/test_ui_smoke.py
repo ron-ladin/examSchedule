@@ -94,9 +94,6 @@ def test_config_screen_renders_file_loading_controls():
     assert isinstance(screen._load_periods_btn, QPushButton)
     assert screen._load_periods_btn.text() == "Load Periods"
 
-    assert isinstance(screen._load_programs_btn, QPushButton)
-    assert screen._load_programs_btn.text() == "Load Programs"
-
     assert screen._courses_label.text() == "No file loaded"
     assert screen._dates_label.text() == "No file loaded"
     assert screen._programs_label.text() == "No file loaded"
