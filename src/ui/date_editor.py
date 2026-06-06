@@ -43,7 +43,7 @@ from src.ui.tokens import (
 )
 
 
-_ARROW_SVG = str(Path(__file__).parent / "assets" / "arrow_down_white.svg")
+_ARROW_SVG = (Path(__file__).parent / "assets" / "arrow_down_white.svg").as_posix()
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 _SAT_BG, _SAT_FG = "#f3f4f6", "#9ca3af"       # Saturday (auto-excluded)
