@@ -12,7 +12,9 @@ Usage (from main.py):
 """
 
 import logging
+from pathlib import Path
 
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QMainWindow
 
 from src.controller import DesktopController
@@ -28,6 +30,7 @@ class ExamSchedulerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Syncacademic — Exam Schedule Portal")
+        self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets" / "app_icon.svg")))
         self.setMinimumSize(1100, 720)
         self.setStyleSheet(QSS())
         controller = DesktopController()
