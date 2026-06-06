@@ -281,7 +281,7 @@ class DateEditorWidget(QWidget):
             "QDateEdit::drop-down {"
             "  subcontrol-origin: padding; subcontrol-position: top right;"
             "  width: 28px; background: #2563EB; border-left: 1px solid #1D4ED8;"
-            "  border-radius: 0 6px 6px 0;"
+            "  border-radius: 6px;"
             "}"
             "QDateEdit::drop-down:hover { background: #1D4ED8; }"
             f"QDateEdit::down-arrow {{ image: url({_ARROW_SVG}); width: 8px; height: 6px; }}"
