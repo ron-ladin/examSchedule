@@ -47,7 +47,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.controller import DesktopController, _run_generation_process
-from src.ui.assets.icons import BookIcon, CalendarIcon, GraduationIcon
+from src.ui.assets.icons import BookIcon, CalendarIcon
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
 
 logger = logging.getLogger(__name__)
@@ -330,14 +330,6 @@ class ConfigScreen(QWidget):
                 "_dates_label",
                 self._load_dates,
             ),
-            (
-                GraduationIcon(14, "#004394"),
-                "Programmes",
-                "Load Programs",
-                "_load_programs_btn",
-                "_programs_label",
-                self._load_programs,
-            ),
         ]
 
         file_btn_style = (
@@ -557,37 +549,6 @@ class ConfigScreen(QWidget):
                 "Could not load the exam periods file. Please check the file format and try again.",
             )
             logger.exception("Error loading exam periods")
-
-    def _load_programs(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Programs File",
-            "",
-            "Text files (*.txt);;All files (*)",
-        )
-
-        if not path:
-            return
-
-        try:
-            count = self._controller.load_programs(Path(path))
-            self._programs_label.setText(f"{Path(path).name}  ({count})")
-            self._programs_label.setStyleSheet(
-                "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
-                " border-radius:4px; padding:2px 7px;"
-            )
-
-            self._refresh_programme_list()
-            self._set_status(f"✓  {count} programme(s) loaded.")
-            self._update_gen_btn()
-
-        except Exception:
-            QMessageBox.critical(
-                self,
-                "Load Error",
-                "Could not load the programs file. Please check the file format and try again.",
-            )
-            logger.exception("Error loading programs")
 
     def _refresh_programme_list(self) -> None:
         self._prog_list.blockSignals(True)

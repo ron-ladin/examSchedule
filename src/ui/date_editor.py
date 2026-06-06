@@ -17,6 +17,7 @@ Usage:
 import calendar
 import copy
 from datetime import date
+from pathlib import Path
 
 from PyQt6.QtCore import QDate, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -41,6 +42,8 @@ from src.ui.tokens import (
     COLOR_CAL_EXCLUDED_FG as _EXCLUDED_FG,
 )
 
+
+_ARROW_SVG = str(Path(__file__).parent / "assets" / "arrow_down_white.svg")
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 _SAT_BG, _SAT_FG = "#f3f4f6", "#9ca3af"       # Saturday (auto-excluded)
@@ -281,12 +284,7 @@ class DateEditorWidget(QWidget):
             "  border-radius: 0 6px 6px 0;"
             "}"
             "QDateEdit::drop-down:hover { background: #1D4ED8; }"
-            "QDateEdit::down-arrow {"
-            "  width: 0px; height: 0px;"
-            "  border-left: 4px solid transparent;"
-            "  border-right: 4px solid transparent;"
-            "  border-top: 6px solid white;"
-            "}"
+            f"QDateEdit::down-arrow {{ image: url({_ARROW_SVG}); width: 8px; height: 6px; }}"
             "QCalendarWidget { background:#FFFFFF; }"
             "QCalendarWidget QAbstractItemView { background:#FFFFFF; color:#0F172A; }"
             "QCalendarWidget QWidget#qt_calendar_navigationbar { background:#F8FAFC; }"

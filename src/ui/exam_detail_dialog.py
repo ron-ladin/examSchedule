@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.domain.course import Course
+from src.ui.assets.icons import CalendarIcon
 
 
 class ExamDetailDialog(QDialog):
@@ -55,8 +56,7 @@ class ExamDetailDialog(QDialog):
 
         # ── Header ─────────────────────────────────────────────────────────────
         header_row = QHBoxLayout()
-        date_badge = QLabel("📅")
-        date_badge.setStyleSheet("font-size: 22px; background: transparent;")
+        date_badge = CalendarIcon(22, "#2563EB")
         header_row.addWidget(date_badge)
 
         title_col = QVBoxLayout()

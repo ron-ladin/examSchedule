@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.ui.assets.animated_widgets import AnimatedPlaceholder
+from src.ui.tokens import COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG
 
 from src.controller import DesktopController, RESULT_BATCH_SIZE
 from src.domain.course import Course
@@ -318,7 +319,7 @@ class _ResultsPanel(QWidget):
 
         cl.addWidget(self._stale_banner)
 
-        tip_lbl = QLabel("💡  Tip: Click on any scheduled exam date to view full details.")
+        tip_lbl = QLabel("Tip: Click on any scheduled exam date to view full details.")
         tip_lbl.setStyleSheet(
             "background: rgba(0,90,194,0.06); color: #004394;"
             " border: 1px solid rgba(0,90,194,0.12); border-radius: 8px;"
@@ -690,6 +691,10 @@ class _ResultsPanel(QWidget):
         if not schedule.assignments:
             return
 
+        period_lookup = {p.get_key(): p for p in self._controller.get_exam_periods()}
+        period_obj = period_lookup.get(period_key)
+        excluded_dates: set[date] = period_obj.excluded_dates if period_obj else set()
+
         date_to_ids: dict[date, list[str]] = {}
         for course_id, exam_date in schedule.assignments.items():
             date_to_ids.setdefault(exam_date, []).append(course_id)
@@ -754,6 +759,8 @@ class _ResultsPanel(QWidget):
                     color = QColor(self._prog_color_map[first_prog])
                     color.setAlpha(75)
                     item.setBackground(color)
+                elif current_date in excluded_dates:
+                    item.setBackground(QColor(_EXCLUDED_BG))
 
                 table.setItem(week, dow, item)
                 self._cell_data[period_key][(week, dow)] = (
