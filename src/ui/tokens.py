@@ -16,7 +16,21 @@ COLOR_CAL_ACTIVE_FG   = "#1D4ED8"  # Blue-700 active day text
 COLOR_CAL_EXCLUDED_BG = "#FEE2E2"  # Red-100 excluded days
 COLOR_CAL_EXCLUDED_FG = "#DC2626"  # Red-600 excluded day text
 
-# ── 3. Layout Spacing Tokens ─────────────────────────────────────────────────
+# ── 3. Shared Period Tab QSS ─────────────────────────────────────────────────
+PERIOD_TAB_STYLE: str = """
+    QTabWidget::pane { border: none; background: transparent; }
+    QTabBar::tab {
+        background: transparent; color: #42474e;
+        border: none; border-bottom: 2px solid transparent;
+        padding: 8px 18px; font-size: 12px; font-weight: 500;
+    }
+    QTabBar::tab:selected {
+        color: #005ac2; border-bottom: 2px solid #005ac2; font-weight: 700;
+    }
+    QTabBar::tab:hover { background: rgba(0,90,194,0.04); color: #005ac2; }
+"""
+
+# ── 4. Layout Spacing Tokens ─────────────────────────────────────────────────
 SPACING_PANEL_GAP  = 12
 CALENDAR_CELL_SIZE = 30
 

@@ -21,15 +21,13 @@ from PyQt6.QtGui import QBrush, QColor, QFont, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSplitter,
     QStyledItemDelegate,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -37,7 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.ui.assets.animated_widgets import AnimatedPlaceholder
-from src.ui.tokens import COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG
+from src.ui.tokens import COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG, PERIOD_TAB_STYLE
 
 from src.controller import DesktopController, RESULT_BATCH_SIZE
 from src.domain.course import Course
@@ -244,11 +242,7 @@ class _ResultsPanel(QWidget):
         self._schedules_by_period = merged
         self._period_indices = {k: 0 for k in merged}
 
-        while self._cards_splitter.count():
-            widget = self._cards_splitter.widget(0)
-            if widget:
-                widget.setParent(None)
-                widget.deleteLater()
+        self._period_tabs.clear()
 
         self._counter_labels.clear()
         self._cal_tables.clear()
@@ -259,7 +253,10 @@ class _ResultsPanel(QWidget):
         self._cell_data.clear()
 
         for period_key in merged:
-            self._cards_splitter.addWidget(self._build_period_card(period_key))
+            self._period_tabs.addTab(
+                self._build_period_card(period_key),
+                _display_period_key(period_key),
+            )
 
         self._update_summary()
         self._placeholder.setVisible(False)
@@ -329,40 +326,14 @@ class _ResultsPanel(QWidget):
 
         cl.addWidget(tip_lbl)
 
-        self._cards_splitter = QSplitter(Qt.Orientation.Vertical)
-        self._cards_splitter.setChildrenCollapsible(False)
-        self._cards_splitter.setHandleWidth(8)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setWidget(self._cards_splitter)
-
-        cl.addWidget(scroll)
+        self._period_tabs = QTabWidget()
+        self._period_tabs.setStyleSheet(PERIOD_TAB_STYLE)
+        cl.addWidget(self._period_tabs)
         root.addWidget(self._content)
 
-    def _build_period_card(self, period_key: str) -> QGroupBox:
-        card = QGroupBox(_display_period_key(period_key))
-        card.setStyleSheet("""
-            QGroupBox {
-                background: rgba(255, 255, 255, 0.7);
-                border: 1px solid rgba(255, 255, 255, 0.9);
-                border-radius: 12px;
-                margin-top: 22px;
-                padding: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 12px;
-                padding: 4px 16px;
-                background: #005ac2;
-                color: white;
-                border-radius: 8px;
-                font-weight: 700;
-                font-size: 12px;
-            }
-        """)
+    def _build_period_card(self, period_key: str) -> QWidget:
+        card = QWidget()
+        card.setStyleSheet("background: transparent;")
         card.setMinimumHeight(320)
 
         layout = QVBoxLayout(card)
