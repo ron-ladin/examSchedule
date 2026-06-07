@@ -170,7 +170,7 @@ def test_config_screen_renders_load_mode_controls():
 
     mode_labels = [button.text() for button in screen._mode_group.buttons()]
 
-    assert mode_labels == ["Replace", "Append", "Update"]
+    assert mode_labels == ["Replace", "Update"]
     assert screen._mode_group.checkedButton().text() == "Replace"
 
     screen.close()

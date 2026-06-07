@@ -154,6 +154,7 @@ def _make_data_table(headers: list[str]) -> QTableWidget:
 
 
 def _display_period_key(period_key: str) -> str:
+    # TODO: team decision — tab label format (current: "FALL — Aleph"; alternatives: Hebrew convention)
     if " - " not in period_key:
         return period_key
 
@@ -196,6 +197,7 @@ class _ResultsPanel(QWidget):
 
         self._total_by_period: dict[str, int] = {}
         self._cell_data: dict[str, dict[tuple[int, int], tuple]] = {}
+        self._empty_labels: dict[str, QLabel] = {}
 
         self._has_stale_results: bool = False
         self._stale_banner: QLabel = QLabel()
@@ -204,10 +206,9 @@ class _ResultsPanel(QWidget):
         self._setup_ui()
 
     def mark_stale(self) -> None:
-        """Show the stale-data warning and disable Export."""
+        """Show the stale-data warning."""
         self._has_stale_results = True
         self._stale_banner.setVisible(True)
-        self._save_btn.setEnabled(False)
 
     def clear_stale(self) -> None:
         """Hide the stale-data warning and re-enable Export."""
@@ -251,6 +252,7 @@ class _ResultsPanel(QWidget):
         self._load_more_btns.clear()
         self._load_more_chunk_btns.clear()
         self._cell_data.clear()
+        self._empty_labels.clear()
 
         for period_key in merged:
             self._period_tabs.addTab(
@@ -410,8 +412,17 @@ class _ResultsPanel(QWidget):
         """)
         layout.addWidget(table)
 
+        empty_lbl = QLabel("No exams scheduled for this period.")
+        empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_lbl.setStyleSheet(
+            "color: #72778c; font-size: 13px; padding: 24px; background: transparent;"
+        )
+        empty_lbl.setVisible(False)
+        layout.addWidget(empty_lbl)
+
         self._counter_labels[period_key] = counter
         self._cal_tables[period_key] = table
+        self._empty_labels[period_key] = empty_lbl
         self._prev_btns[period_key] = prev_btn
         self._next_btns[period_key] = next_btn
         self._load_more_btns[period_key] = chunk_btn
@@ -435,8 +446,14 @@ class _ResultsPanel(QWidget):
 
         if total == 0:
             nav_text = "0 / 0"
+            if period_key in self._empty_labels:
+                self._empty_labels[period_key].setVisible(True)
+                self._cal_tables[period_key].setVisible(False)
         else:
             nav_text = f"{idx + 1:,} / {display_total:,}"
+            if period_key in self._empty_labels:
+                self._empty_labels[period_key].setVisible(False)
+                self._cal_tables[period_key].setVisible(True)
 
         self._counter_labels[period_key].setText(nav_text)
         self._prev_btns[period_key].setEnabled(idx > 0)
@@ -775,15 +792,6 @@ class _ResultsPanel(QWidget):
         dialog.exec()
 
     def _on_save(self) -> None:
-        if self._has_stale_results:
-            QMessageBox.warning(
-                self,
-                "Stale Schedules",
-                "Exam period dates have changed since the last generation.\n\n"
-                "Please click  ▶  Generate again before exporting.",
-            )
-            return
-
         if not self._schedules_by_period:
             QMessageBox.warning(
                 self,

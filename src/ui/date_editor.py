@@ -133,6 +133,7 @@ class _DayButton(QPushButton):
             f"}}"
             f"QPushButton:hover:enabled {{ border: 2px solid {fg}; }}"
         )
+        self.update()
 
 
 # ── Month widget ──────────────────────────────────────────────────────────────

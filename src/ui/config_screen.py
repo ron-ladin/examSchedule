@@ -30,6 +30,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QDialog,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -42,6 +43,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -82,6 +84,48 @@ def _card() -> QFrame:
     eff.setOffset(0, 4)
     f.setGraphicsEffect(eff)
     return f
+
+
+class ExamPeriodsEditorDialog(QDialog):
+    """Modal dialog for editing exam period dates before generation (SRS §2.4)."""
+
+    def __init__(self, controller: "DesktopController", parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Edit Exam Periods")
+        self.setModal(True)
+        self.setMinimumSize(720, 480)
+
+        self._controller = controller
+        self._editors: list = []
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+
+        tabs = QTabWidget()
+        from src.ui.date_editor import DateEditorWidget
+
+        for period in controller.get_exam_periods():
+            editor = DateEditorWidget(period)
+            editor.period_changed.connect(self._sync)
+            self._editors.append(editor)
+            semester = period.semester
+            moed = period.moed
+            tabs.addTab(editor, f"{semester} — {moed}")
+
+        root.addWidget(tabs)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.setFixedSize(110, 36)
+        close_btn.clicked.connect(self.accept)
+        close_row.addWidget(close_btn)
+        root.addLayout(close_row)
+
+    def _sync(self) -> None:
+        updated = [editor.get_exam_period() for editor in self._editors]
+        self._controller.update_exam_periods(updated)
 
 
 class ConfigScreen(QWidget):
@@ -217,6 +261,7 @@ class ConfigScreen(QWidget):
 
         cl.addLayout(top)
         cl.addWidget(self._build_prog_card())
+        cl.addWidget(self._build_periods_card())
 
         self._gen_btn = QPushButton("▶  Generate Schedule")
         self._gen_btn.setObjectName("generateBtn")
@@ -258,7 +303,6 @@ class ConfigScreen(QWidget):
 
         for label, hint_text in (
             ("Replace", "Clear all existing data"),
-            ("Append", "Add to existing data"),
             ("Update", "Merge with existing data"),
         ):
             option_frame = QFrame()
@@ -471,6 +515,51 @@ class ConfigScreen(QWidget):
 
         return c
 
+    def _build_periods_card(self) -> QFrame:
+        c = _card()
+        vl = QVBoxLayout(c)
+        vl.setContentsMargins(20, 18, 20, 18)
+        vl.setSpacing(10)
+        vl.addWidget(_section_lbl("EXAM PERIODS"))
+
+        self._periods_summary_lbl = QLabel("No periods loaded")
+        self._periods_summary_lbl.setStyleSheet(
+            "font-size:12px; color:#42474e; background:transparent;"
+        )
+        vl.addWidget(self._periods_summary_lbl)
+
+        self._edit_periods_btn = QPushButton("Edit Exam Periods ▶")
+        self._edit_periods_btn.setEnabled(False)
+        self._edit_periods_btn.setFixedHeight(32)
+        self._edit_periods_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._edit_periods_btn.setStyleSheet(
+            "QPushButton { color:#004394; border:1px solid #004394;"
+            " border-radius:6px; padding:0 14px; font-size:12px; font-weight:600;"
+            " background:rgba(0,67,148,0.06); }"
+            "QPushButton:hover:enabled { background:rgba(0,67,148,0.12); }"
+            "QPushButton:disabled { color:#aaa; border-color:#ccc; }"
+        )
+        self._edit_periods_btn.clicked.connect(self._on_edit_periods)
+        vl.addWidget(self._edit_periods_btn)
+        return c
+
+    def _refresh_periods_card(self) -> None:
+        periods = self._controller.get_exam_periods()
+        if not periods:
+            self._periods_summary_lbl.setText("No periods loaded")
+            self._edit_periods_btn.setEnabled(False)
+            return
+
+        names = ", ".join(f"{p.semester} — {p.moed}" for p in periods)
+        self._periods_summary_lbl.setText(f"{len(periods)} period(s): {names}")
+        self._edit_periods_btn.setEnabled(True)
+
+    def _on_edit_periods(self) -> None:
+        dlg = ExamPeriodsEditorDialog(self._controller, parent=self)
+        dlg.exec()
+        self._refresh_periods_card()
+        self.periods_changed.emit()
+
     def _build_footer(self) -> QWidget:
         footer = QWidget()
         footer.setObjectName("configFooter")
@@ -563,6 +652,7 @@ class ConfigScreen(QWidget):
 
             self._set_status(f"✓  {count} exam period(s) loaded.")
             self._update_gen_btn()
+            self._refresh_periods_card()
             self.periods_changed.emit()
 
         except Exception:
@@ -612,6 +702,9 @@ class ConfigScreen(QWidget):
         self._update_prog_label()
         self._update_gen_btn()
         self.courses_changed.emit(self._get_selected_ids())
+        self._view_courses_btn.setEnabled(
+            self._count_checked() > 0 and self._controller.has_courses
+        )
 
     def _on_prog_selection_changed(
         self,
@@ -619,11 +712,18 @@ class ConfigScreen(QWidget):
         previous: QListWidgetItem | None,
     ) -> None:
         self._view_courses_btn.setEnabled(
-            current is not None and self._controller.has_courses
+            self._count_checked() > 0 and self._controller.has_courses
         )
 
     def _on_view_courses(self) -> None:
         item = self._prog_list.currentItem()
+        if item is None:
+            for i in range(self._prog_list.count()):
+                candidate = self._prog_list.item(i)
+                if candidate.checkState() == Qt.CheckState.Checked:
+                    self._prog_list.setCurrentItem(candidate)
+                    item = candidate
+                    break
         if item is None:
             return
         pid = item.data(Qt.ItemDataRole.UserRole)
