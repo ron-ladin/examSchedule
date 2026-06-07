@@ -258,6 +258,7 @@ class ConfigScreen(QWidget):
 
         for label, hint_text in (
             ("Replace", "Clear all existing data"),
+            ("Append", "Add to existing data"),
             ("Update", "Merge with existing data"),
         ):
             option_frame = QFrame()
@@ -444,8 +445,30 @@ class ConfigScreen(QWidget):
             QListWidget::indicator:checked { background: #004394; border-color: #004394; }
         """)
         self._prog_list.itemChanged.connect(self._on_programme_toggled)
+        self._prog_list.currentItemChanged.connect(self._on_prog_selection_changed)
 
         vl.addWidget(self._prog_list)
+
+        view_row = QHBoxLayout()
+        view_row.setContentsMargins(0, 4, 0, 0)
+        self._view_courses_btn = QPushButton("View Courses ▶")
+        self._view_courses_btn.setEnabled(False)
+        self._view_courses_btn.setFixedHeight(32)
+        self._view_courses_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._view_courses_btn.setStyleSheet(
+            "QPushButton { background:rgba(0,67,148,0.07);"
+            " border:1px solid rgba(0,67,148,0.2); border-radius:8px;"
+            " padding:0px 14px; font-size:12px; font-weight:600; color:#004394; }"
+            "QPushButton:hover { background:rgba(0,67,148,0.13);"
+            " border-color:#004394; }"
+            "QPushButton:disabled { color:#94A3B8; border-color:rgba(194,198,214,0.4);"
+            " background:transparent; }"
+        )
+        self._view_courses_btn.clicked.connect(self._on_view_courses)
+        view_row.addStretch()
+        view_row.addWidget(self._view_courses_btn)
+        vl.addLayout(view_row)
+
         return c
 
     def _build_footer(self) -> QWidget:
@@ -568,6 +591,7 @@ class ConfigScreen(QWidget):
         self._prog_placeholder.setVisible(not has)
         self._prog_list.setVisible(has)
 
+        self._view_courses_btn.setEnabled(False)
         self._update_prog_label()
         self.courses_changed.emit(self._get_selected_ids())
 
@@ -588,6 +612,24 @@ class ConfigScreen(QWidget):
         self._update_prog_label()
         self._update_gen_btn()
         self.courses_changed.emit(self._get_selected_ids())
+
+    def _on_prog_selection_changed(
+        self,
+        current: QListWidgetItem | None,
+        previous: QListWidgetItem | None,
+    ) -> None:
+        self._view_courses_btn.setEnabled(
+            current is not None and self._controller.has_courses
+        )
+
+    def _on_view_courses(self) -> None:
+        item = self._prog_list.currentItem()
+        if item is None:
+            return
+        pid = item.data(Qt.ItemDataRole.UserRole)
+        from src.ui.programme_courses_dialog import ProgrammeCoursesDialog
+        dlg = ProgrammeCoursesDialog(pid, self._controller, parent=self)
+        dlg.exec()
 
     def _update_programme_colours(self) -> None:
         slot = 0
