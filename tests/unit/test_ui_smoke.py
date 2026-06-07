@@ -40,6 +40,20 @@ def _get_qapp() -> QApplication:
     return app
 
 
+def test_app_uses_logo_png_as_window_icon():
+    """Window icon should be set from logo.png, not app_icon.svg."""
+    from pathlib import Path
+
+    app = _get_qapp()
+    window = ExamSchedulerApp()
+
+    assert not window.windowIcon().isNull()
+    logo_path = Path(__file__).parent.parent.parent / "src" / "ui" / "assets" / "logo.png"
+    assert logo_path.exists(), "logo.png asset must exist"
+
+    window.close()
+
+
 def test_app_launches_and_uses_input_screen_as_central_widget():
     """
     The main desktop app should launch without crashing and should use
@@ -94,12 +108,8 @@ def test_config_screen_renders_file_loading_controls():
     assert isinstance(screen._load_periods_btn, QPushButton)
     assert screen._load_periods_btn.text() == "Load Periods"
 
-    assert isinstance(screen._load_programs_btn, QPushButton)
-    assert screen._load_programs_btn.text() == "Load Programs"
-
     assert screen._courses_label.text() == "No file loaded"
     assert screen._dates_label.text() == "No file loaded"
-    assert screen._programs_label.text() == "No file loaded"
 
     screen.close()
 

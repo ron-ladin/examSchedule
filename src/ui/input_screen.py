@@ -15,14 +15,11 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
-    QFrame,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QStackedWidget,
     QTabWidget,
     QTableWidgetItem,
@@ -35,8 +32,8 @@ from src.domain.course import Course
 from src.domain.schedule import Schedule
 from src.ui.config_screen import ConfigScreen
 from src.ui.date_editor import DateEditorWidget
-from src.ui.results_panel import _ResultsPanel, _make_data_table
-from src.ui.tokens import PROGRAM_NAMES_MAPPING
+from src.ui.results_panel import _ResultsPanel, _display_period_key, _make_data_table
+from src.ui.tokens import PERIOD_TAB_STYLE, PROGRAM_NAMES_MAPPING
 
 logger = logging.getLogger(__name__)
 
@@ -149,55 +146,24 @@ class ResultsScreen(QWidget):
         self._course_table.setVisible(has_rows)
 
     def refresh_periods(self) -> None:
-        while self._periods_grid_layout.count():
-            item = self._periods_grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
+        self._periods_tabs.clear()
         self._date_editors.clear()
 
         periods = self._controller.get_exam_periods()
         if not periods:
             self._no_periods_hint.setVisible(True)
-            self._periods_scroll.setVisible(False)
+            self._periods_tabs.setVisible(False)
             return
 
         self._no_periods_hint.setVisible(False)
-        self._periods_scroll.setVisible(True)
+        self._periods_tabs.setVisible(True)
 
-        n = len(periods)
-        cols = n if n <= 3 else 2
-
-        for i, period in enumerate(periods):
+        for period in periods:
             key = period.get_key()
             editor = DateEditorWidget(period)
             editor.period_changed.connect(self._sync_periods)
             self._date_editors[key] = editor
-
-            card = QFrame()
-            card.setStyleSheet(
-                "QFrame { border:1px solid #E2E8F0; border-radius:10px;"
-                " background:#FAFAFA; }"
-            )
-
-            vl = QVBoxLayout(card)
-            vl.setContentsMargins(8, 8, 8, 8)
-            vl.setSpacing(4)
-
-            title = QLabel(key)
-            title.setStyleSheet(
-                "font-weight:700; font-size:12px; color:#005ac2;"
-                " background:transparent; border:none;"
-            )
-
-            vl.addWidget(title)
-            vl.addWidget(editor)
-
-            row, col = divmod(i, cols)
-            self._periods_grid_layout.addWidget(card, row, col)
-
-        for c in range(cols):
-            self._periods_grid_layout.setColumnStretch(c, 1)
+            self._periods_tabs.addTab(editor, _display_period_key(key))
 
     def _setup_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -336,19 +302,10 @@ class ResultsScreen(QWidget):
         self._no_periods_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ptl.addWidget(self._no_periods_hint)
 
-        self._periods_scroll = QScrollArea()
-        self._periods_scroll.setWidgetResizable(True)
-        self._periods_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-
-        self._periods_grid_ctr = QWidget()
-        self._periods_grid_layout = QGridLayout(self._periods_grid_ctr)
-        self._periods_grid_layout.setSpacing(12)
-        self._periods_grid_layout.setContentsMargins(4, 4, 4, 4)
-
-        self._periods_scroll.setWidget(self._periods_grid_ctr)
-        self._periods_scroll.setVisible(False)
-
-        ptl.addWidget(self._periods_scroll)
+        self._periods_tabs = QTabWidget()
+        self._periods_tabs.setStyleSheet(PERIOD_TAB_STYLE)
+        self._periods_tabs.setVisible(False)
+        ptl.addWidget(self._periods_tabs)
         self._workspace.addTab(periods_ctr, "Exam Periods")
 
         self._results_panel = _ResultsPanel(self._controller)

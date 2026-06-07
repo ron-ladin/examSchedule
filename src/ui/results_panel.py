@@ -21,15 +21,13 @@ from PyQt6.QtGui import QBrush, QColor, QFont, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSplitter,
     QStyledItemDelegate,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -37,6 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.ui.assets.animated_widgets import AnimatedPlaceholder
+from src.ui.tokens import COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG, PERIOD_TAB_STYLE
 
 from src.controller import DesktopController, RESULT_BATCH_SIZE
 from src.domain.course import Course
@@ -243,11 +242,7 @@ class _ResultsPanel(QWidget):
         self._schedules_by_period = merged
         self._period_indices = {k: 0 for k in merged}
 
-        while self._cards_splitter.count():
-            widget = self._cards_splitter.widget(0)
-            if widget:
-                widget.setParent(None)
-                widget.deleteLater()
+        self._period_tabs.clear()
 
         self._counter_labels.clear()
         self._cal_tables.clear()
@@ -258,7 +253,10 @@ class _ResultsPanel(QWidget):
         self._cell_data.clear()
 
         for period_key in merged:
-            self._cards_splitter.addWidget(self._build_period_card(period_key))
+            self._period_tabs.addTab(
+                self._build_period_card(period_key),
+                _display_period_key(period_key),
+            )
 
         self._update_summary()
         self._placeholder.setVisible(False)
@@ -318,7 +316,7 @@ class _ResultsPanel(QWidget):
 
         cl.addWidget(self._stale_banner)
 
-        tip_lbl = QLabel("💡  Tip: Click on any scheduled exam date to view full details.")
+        tip_lbl = QLabel("Tip: Click on any scheduled exam date to view full details.")
         tip_lbl.setStyleSheet(
             "background: rgba(0,90,194,0.06); color: #004394;"
             " border: 1px solid rgba(0,90,194,0.12); border-radius: 8px;"
@@ -328,40 +326,14 @@ class _ResultsPanel(QWidget):
 
         cl.addWidget(tip_lbl)
 
-        self._cards_splitter = QSplitter(Qt.Orientation.Vertical)
-        self._cards_splitter.setChildrenCollapsible(False)
-        self._cards_splitter.setHandleWidth(8)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setWidget(self._cards_splitter)
-
-        cl.addWidget(scroll)
+        self._period_tabs = QTabWidget()
+        self._period_tabs.setStyleSheet(PERIOD_TAB_STYLE)
+        cl.addWidget(self._period_tabs)
         root.addWidget(self._content)
 
-    def _build_period_card(self, period_key: str) -> QGroupBox:
-        card = QGroupBox(_display_period_key(period_key))
-        card.setStyleSheet("""
-            QGroupBox {
-                background: rgba(255, 255, 255, 0.7);
-                border: 1px solid rgba(255, 255, 255, 0.9);
-                border-radius: 12px;
-                margin-top: 22px;
-                padding: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 12px;
-                padding: 4px 16px;
-                background: #005ac2;
-                color: white;
-                border-radius: 8px;
-                font-weight: 700;
-                font-size: 12px;
-            }
-        """)
+    def _build_period_card(self, period_key: str) -> QWidget:
+        card = QWidget()
+        card.setStyleSheet("background: transparent;")
         card.setMinimumHeight(320)
 
         layout = QVBoxLayout(card)
@@ -651,31 +623,42 @@ class _ResultsPanel(QWidget):
             if value
         }
 
-        combined = self._controller.get_combined_schedule_count(non_empty)
-
-        all_known = bool(self._total_by_period) and all(
-            key in self._total_by_period for key in non_empty
-        )
-
-        if all_known:
-            total_combined = 1
-            for key in non_empty:
-                total_combined *= self._total_by_period[key]
-
-            combined_str = f"{combined:,} / {total_combined:,}"
-        else:
-            combined_str = f"{combined:,}"
-
-        if combined == 0:
+        if not non_empty:
             self._summary_lbl.setStyleSheet(
                 "color: #DC2626; font-weight: 600; font-size: 12px;"
             )
-            self._summary_lbl.setText("⚠  No valid combined schedules found.")
-        else:
-            self._summary_lbl.setStyleSheet(
-                "color: #059669; font-weight: 600; font-size: 12px;"
+            self._summary_lbl.setText("⚠  No valid schedules found.")
+            return
+
+        period_schedules_total = sum(
+            len(schedules)
+            for schedules in non_empty.values()
+        )
+
+        combined_options_total = self._controller.get_combined_schedule_count(
+            non_empty
+        )
+
+        has_more = any(
+            self._controller.has_more_schedules(period_key)
+            or period_key in self._truncated_periods
+            for period_key in non_empty
+        )
+
+        self._summary_lbl.setStyleSheet(
+            "color: #059669; font-weight: 600; font-size: 12px;"
+        )
+
+        if has_more:
+            self._summary_lbl.setText(
+                f"✓  {combined_options_total:,} combined schedule options available "
+                f"({period_schedules_total:,} period schedules loaded so far)"
             )
-            self._summary_lbl.setText(f"✓  {combined_str} schedules generated")
+        else:
+            self._summary_lbl.setText(
+                f"✓  {combined_options_total:,} combined schedule options available "
+                f"({period_schedules_total:,} period schedules loaded in total)"
+            )
 
     def _populate_calendar(
         self,
@@ -689,6 +672,10 @@ class _ResultsPanel(QWidget):
 
         if not schedule.assignments:
             return
+
+        period_lookup = {p.get_key(): p for p in self._controller.get_exam_periods()}
+        period_obj = period_lookup.get(period_key)
+        excluded_dates: set[date] = period_obj.excluded_dates if period_obj else set()
 
         date_to_ids: dict[date, list[str]] = {}
         for course_id, exam_date in schedule.assignments.items():
@@ -754,6 +741,8 @@ class _ResultsPanel(QWidget):
                     color = QColor(self._prog_color_map[first_prog])
                     color.setAlpha(75)
                     item.setBackground(color)
+                elif current_date in excluded_dates:
+                    item.setBackground(QColor(_EXCLUDED_BG))
 
                 table.setItem(week, dow, item)
                 self._cell_data[period_key][(week, dow)] = (

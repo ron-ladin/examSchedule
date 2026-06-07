@@ -47,7 +47,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.controller import DesktopController, _run_generation_process
-from src.ui.assets.icons import BookIcon, CalendarIcon, GraduationIcon
+from src.ui.assets.icons import BookIcon, CalendarIcon
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
 
 logger = logging.getLogger(__name__)
@@ -160,24 +160,27 @@ class ConfigScreen(QWidget):
         scroll = QScrollArea()
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("background:transparent; border:none;")
+        scroll.setStyleSheet("QScrollArea { background:transparent; border:none; }")
 
         outer = QWidget()
-        outer.setStyleSheet("background:transparent;")
+        outer.setObjectName("configScrollOuter")
+        outer.setStyleSheet("QWidget#configScrollOuter { background:transparent; }")
 
         ol = QHBoxLayout(outer)
         ol.setContentsMargins(32, 32, 32, 32)
 
         content = QWidget()
         content.setMaximumWidth(900)
-        content.setStyleSheet("background:transparent;")
+        content.setObjectName("configScrollContent")
+        content.setStyleSheet("QWidget#configScrollContent { background:transparent; }")
 
         cl = QVBoxLayout(content)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(20)
 
         steps_row = QWidget()
-        steps_row.setStyleSheet("background: transparent;")
+        steps_row.setObjectName("configStepsRow")
+        steps_row.setStyleSheet("QWidget#configStepsRow { background:transparent; }")
 
         sl = QHBoxLayout(steps_row)
         sl.setContentsMargins(0, 4, 0, 4)
@@ -214,6 +217,15 @@ class ConfigScreen(QWidget):
 
         cl.addLayout(top)
         cl.addWidget(self._build_prog_card())
+
+        self._gen_btn = QPushButton("▶  Generate Schedule")
+        self._gen_btn.setObjectName("generateBtn")
+        self._gen_btn.setEnabled(False)
+        self._gen_btn.setFixedHeight(44)
+        self._gen_btn.setFixedWidth(220)
+        self._gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._gen_btn.clicked.connect(self._on_generate)
+        cl.addWidget(self._gen_btn, 0, Qt.AlignmentFlag.AlignRight)
         cl.addStretch(1)
 
         ol.addStretch(1)
@@ -232,7 +244,7 @@ class ConfigScreen(QWidget):
         vl.addWidget(_section_lbl("LOAD MODE"))
 
         self._mode_group = QButtonGroup(self)
-        self._mode_frames: list[QFrame] = []
+        self._mode_btn_frame_pairs: list[tuple[QRadioButton, QFrame]] = []
 
         radio_style = (
             "QRadioButton { font-size:14px; font-weight:600; color:#171c20;"
@@ -281,7 +293,8 @@ class ConfigScreen(QWidget):
             fl.addWidget(hint)
 
             rb.toggled.connect(lambda _: self._update_mode_card_styles())
-            self._mode_frames.append(option_frame)
+            option_frame.mousePressEvent = lambda event, _rb=rb: _rb.setChecked(True)
+            self._mode_btn_frame_pairs.append((rb, option_frame))
             vl.addWidget(option_frame)
 
         self._mode_group.buttons()[0].setChecked(True)
@@ -293,11 +306,11 @@ class ConfigScreen(QWidget):
     def _update_mode_card_styles(self) -> None:
         checked = self._mode_group.checkedButton()
 
-        for btn, frame in zip(self._mode_group.buttons(), self._mode_frames):
+        for btn, frame in self._mode_btn_frame_pairs:
             if btn is checked:
                 frame.setStyleSheet(
-                    "QFrame { background:rgba(0,67,148,0.05);"
-                    " border:1.5px solid #004394; border-radius:10px; }"
+                    "QFrame { background:rgba(0,67,148,0.08);"
+                    " border:1px solid rgba(194,198,214,0.5); border-radius:10px; }"
                 )
             else:
                 frame.setStyleSheet(
@@ -329,14 +342,6 @@ class ConfigScreen(QWidget):
                 "_load_periods_btn",
                 "_dates_label",
                 self._load_dates,
-            ),
-            (
-                GraduationIcon(14, "#004394"),
-                "Programmes",
-                "Load Programs",
-                "_load_programs_btn",
-                "_programs_label",
-                self._load_programs,
             ),
         ]
 
@@ -446,7 +451,7 @@ class ConfigScreen(QWidget):
     def _build_footer(self) -> QWidget:
         footer = QWidget()
         footer.setObjectName("configFooter")
-        footer.setFixedHeight(76)
+        footer.setFixedHeight(44)
         footer.setStyleSheet(
             "QWidget#configFooter {"
             " background: rgba(255, 255, 255, 0.85);"
@@ -455,8 +460,8 @@ class ConfigScreen(QWidget):
         )
 
         vl = QVBoxLayout(footer)
-        vl.setContentsMargins(32, 8, 32, 12)
-        vl.setSpacing(4)
+        vl.setContentsMargins(32, 6, 32, 6)
+        vl.setSpacing(2)
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setTextVisible(False)
@@ -469,26 +474,12 @@ class ConfigScreen(QWidget):
         )
         vl.addWidget(self._progress_bar)
 
-        row = QHBoxLayout()
-        row.setSpacing(16)
-
         self._status_label = QLabel("")
-        self._status_label.setWordWrap(True)
+        self._status_label.setWordWrap(False)
         self._status_label.setStyleSheet(
             "font-size:11px; color:#64748B; background:transparent;"
         )
-        row.addWidget(self._status_label, 1)
-
-        self._gen_btn = QPushButton("▶  Generate Schedule")
-        self._gen_btn.setObjectName("generateBtn")
-        self._gen_btn.setEnabled(False)
-        self._gen_btn.setFixedHeight(44)
-        self._gen_btn.setFixedWidth(220)
-        self._gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._gen_btn.clicked.connect(self._on_generate)
-
-        row.addWidget(self._gen_btn)
-        vl.addLayout(row)
+        vl.addWidget(self._status_label)
 
         return footer
 
@@ -503,7 +494,8 @@ class ConfigScreen(QWidget):
         if not path:
             return
 
-        mode = self._mode_group.checkedButton().text().lower()
+        checked_btn = self._mode_group.checkedButton()
+        mode = checked_btn.text().lower()
 
         try:
             count = self._controller.load_courses(Path(path), mode=mode)
@@ -557,37 +549,6 @@ class ConfigScreen(QWidget):
                 "Could not load the exam periods file. Please check the file format and try again.",
             )
             logger.exception("Error loading exam periods")
-
-    def _load_programs(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Programs File",
-            "",
-            "Text files (*.txt);;All files (*)",
-        )
-
-        if not path:
-            return
-
-        try:
-            count = self._controller.load_programs(Path(path))
-            self._programs_label.setText(f"{Path(path).name}  ({count})")
-            self._programs_label.setStyleSheet(
-                "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
-                " border-radius:4px; padding:2px 7px;"
-            )
-
-            self._refresh_programme_list()
-            self._set_status(f"✓  {count} programme(s) loaded.")
-            self._update_gen_btn()
-
-        except Exception:
-            QMessageBox.critical(
-                self,
-                "Load Error",
-                "Could not load the programs file. Please check the file format and try again.",
-            )
-            logger.exception("Error loading programs")
 
     def _refresh_programme_list(self) -> None:
         self._prog_list.blockSignals(True)

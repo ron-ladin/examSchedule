@@ -149,10 +149,10 @@ QPushButton:disabled {
 
 /* Generate CTA — solid blue pill */
 QPushButton#generateBtn {
-    background-color: @COLOR_PRIMARY@;
+    background: #005ac2;
     border: none;
     border-radius: 10px;
-    color: #FFFFFF;
+    color: #ffffff;
     font-size: 13px;
     font-weight: 700;
     letter-spacing: 0.3px;
