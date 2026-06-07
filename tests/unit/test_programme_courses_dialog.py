@@ -26,10 +26,15 @@ from src.domain.course_offering import CourseOffering
 from src.ui.programme_courses_dialog import ProgrammeCoursesDialog
 
 
+_APP: "QApplication | None" = None  # module-level ref prevents CPython GC
+
+
 def _get_qapp() -> QApplication:
+    global _APP
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
+    _APP = app
     return app
 
 
