@@ -79,7 +79,7 @@ flowchart TD
 > **University exam scheduler** — given a course catalog, exam windows, and a set of study programs, generates every valid conflict-free timetable using a backtracking CSP solver with an MCV heuristic.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-127%20passed-2ecc71?style=flat-square)
+![Tests](https://img.shields.io/badge/Tests-191%20passed-2ecc71?style=flat-square)
 ![Architecture](https://img.shields.io/badge/Architecture-Clean%20%2F%20Ports%20%26%20Adapters-c678dd?style=flat-square)
 ![Algorithm](https://img.shields.io/badge/Algorithm-Backtracking%20%2B%20MCV-e5a22e?style=flat-square)
 ![UI](https://img.shields.io/badge/UI-PyQt6%20Desktop-4a90d9?style=flat-square)
@@ -442,6 +442,27 @@ examSchedule/
 
 ## Setup
 
+### 1. System libraries (Linux only)
+
+PyQt6 requires several native graphics and display libraries. Install them before running `pip install`:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  libegl1 libgl1 libgl1-mesa-glx \
+  libxkbcommon0 libxkbcommon-x11-0 \
+  libfontconfig1 libfreetype6 \
+  libdbus-1-3 libglib2.0-0 \
+  libx11-6 libx11-xcb1 \
+  libxcb1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+  libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+  libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1
+```
+
+> **macOS / Windows:** these libraries are bundled with the PyQt6 wheel — no extra step needed.
+
+### 2. Python environment
+
 ```bash
 cd examSchedule
 python -m venv venv
@@ -459,7 +480,7 @@ Windows:
 .\venv\Scripts\activate
 ```
 
-Install dependencies:
+### 3. Python dependencies
 
 ```bash
 pip install -r requirements.txt
@@ -471,7 +492,7 @@ For development and tests:
 pip install -r requirements-dev.txt
 ```
 
-Run the desktop app:
+### 4. Run the desktop app
 
 ```bash
 python main.py
@@ -624,8 +645,8 @@ HTTP/API testing is not part of the current project scope.
 There are no FastAPI endpoint tests, no HTTP integration tests, and no `pytest-asyncio` API tests.
 
 ```bash
-# Full suite
-python -m pytest tests/ -v
+# Full suite (requires PyQt6 + system libs above)
+QT_QPA_PLATFORM=offscreen python -m pytest tests/ -v
 
 # Unit tests only
 python -m pytest tests/unit/ -v
@@ -633,11 +654,11 @@ python -m pytest tests/unit/ -v
 # E2E tests only
 python -m pytest tests/e2e/ -v
 
-# UI tests only
-python -m pytest tests/ui/ -v
+# UI tests only (requires PyQt6)
+QT_QPA_PLATFORM=offscreen python -m pytest tests/unit/test_ui_smoke.py tests/unit/test_ui_controller_integration.py -v
 ```
 
-**122 test functions · 127 pytest runs · all passing**
+**191 tests · all passing**
 
 | Suite | Scope |
 |---|---|
