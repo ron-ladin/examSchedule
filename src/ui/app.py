@@ -30,7 +30,7 @@ class ExamSchedulerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Syncacademic — Exam Schedule Portal")
-        self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets" / "app_icon.svg")))
+        self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets" / "logo.png")))
         self.setMinimumSize(1100, 720)
         self.setStyleSheet(QSS())
         controller = DesktopController()

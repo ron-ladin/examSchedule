@@ -40,6 +40,20 @@ def _get_qapp() -> QApplication:
     return app
 
 
+def test_app_uses_logo_png_as_window_icon():
+    """Window icon should be set from logo.png, not app_icon.svg."""
+    from pathlib import Path
+
+    app = _get_qapp()
+    window = ExamSchedulerApp()
+
+    assert not window.windowIcon().isNull()
+    logo_path = Path(__file__).parent.parent.parent / "src" / "ui" / "assets" / "logo.png"
+    assert logo_path.exists(), "logo.png asset must exist"
+
+    window.close()
+
+
 def test_app_launches_and_uses_input_screen_as_central_widget():
     """
     The main desktop app should launch without crashing and should use

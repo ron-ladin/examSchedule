@@ -623,31 +623,42 @@ class _ResultsPanel(QWidget):
             if value
         }
 
-        combined = self._controller.get_combined_schedule_count(non_empty)
-
-        all_known = bool(self._total_by_period) and all(
-            key in self._total_by_period for key in non_empty
-        )
-
-        if all_known:
-            total_combined = 1
-            for key in non_empty:
-                total_combined *= self._total_by_period[key]
-
-            combined_str = f"{combined:,} / {total_combined:,}"
-        else:
-            combined_str = f"{combined:,}"
-
-        if combined == 0:
+        if not non_empty:
             self._summary_lbl.setStyleSheet(
                 "color: #DC2626; font-weight: 600; font-size: 12px;"
             )
-            self._summary_lbl.setText("⚠  No valid combined schedules found.")
-        else:
-            self._summary_lbl.setStyleSheet(
-                "color: #059669; font-weight: 600; font-size: 12px;"
+            self._summary_lbl.setText("⚠  No valid schedules found.")
+            return
+
+        period_schedules_total = sum(
+            len(schedules)
+            for schedules in non_empty.values()
+        )
+
+        combined_options_total = self._controller.get_combined_schedule_count(
+            non_empty
+        )
+
+        has_more = any(
+            self._controller.has_more_schedules(period_key)
+            or period_key in self._truncated_periods
+            for period_key in non_empty
+        )
+
+        self._summary_lbl.setStyleSheet(
+            "color: #059669; font-weight: 600; font-size: 12px;"
+        )
+
+        if has_more:
+            self._summary_lbl.setText(
+                f"✓  {combined_options_total:,} combined schedule options available "
+                f"({period_schedules_total:,} period schedules loaded so far)"
             )
-            self._summary_lbl.setText(f"✓  {combined_str} schedules generated")
+        else:
+            self._summary_lbl.setText(
+                f"✓  {combined_options_total:,} combined schedule options available "
+                f"({period_schedules_total:,} period schedules loaded in total)"
+            )
 
     def _populate_calendar(
         self,
