@@ -131,8 +131,7 @@ def test_config_screen_renders_programme_selection_area():
     assert screen._prog_list.isVisible() is False
 
     assert screen._prog_placeholder.isVisible() is True
-    assert "Load a courses or programs file" in screen._prog_placeholder.text()
-
+    assert "Load a courses file" in screen._prog_placeholder.text()
     assert screen._prog_count_lbl.text() == "0 / 5 selected"
 
     screen.close()

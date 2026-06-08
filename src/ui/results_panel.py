@@ -46,6 +46,15 @@ logger = logging.getLogger(__name__)
 
 _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
+EXPECTED_PERIOD_KEYS = [
+    "FALL - Aleph",
+    "FALL - Bet",
+    "SPRI - Aleph",
+    "SPRI - Bet",
+    "SUMM - Aleph",
+    "SUMM - Bet",
+]
+
 
 class _CalendarCellDelegate(QStyledItemDelegate):
     """Custom painter for schedule calendar cells.
@@ -228,15 +237,21 @@ class _ResultsPanel(QWidget):
         self._courses_by_id = courses_by_id
         self._prog_color_map = prog_color_map
         self._truncated_periods = truncated_periods or set()
-        self._period_indices = {k: 0 for k in schedules_by_period}
         self._total_by_period = {}
 
         for key, scheds in schedules_by_period.items():
             if key not in self._truncated_periods:
                 self._total_by_period[key] = len(scheds)
 
-        all_period_keys = [p.get_key() for p in self._controller.get_exam_periods()]
-        merged: dict[str, list[Schedule]] = {k: [] for k in all_period_keys}
+        file_period_keys = [p.get_key() for p in self._controller.get_exam_periods()]
+
+        display_period_keys = list(
+            dict.fromkeys(file_period_keys + EXPECTED_PERIOD_KEYS)
+        )
+
+        merged: dict[str, list[Schedule]] = {
+            key: [] for key in display_period_keys
+        }
         merged.update(schedules_by_period)
 
         self._schedules_by_period = merged

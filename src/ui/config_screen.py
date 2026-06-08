@@ -413,7 +413,7 @@ class ConfigScreen(QWidget):
         vl.addLayout(hdr)
 
         self._prog_placeholder = QLabel(
-            "Load a courses or programs file to see programmes here."
+            "Load a courses file to see programmes here."
         )
         self._prog_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._prog_placeholder.setStyleSheet(
