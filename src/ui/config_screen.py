@@ -160,8 +160,17 @@ class ExamPeriodsEditorDialog(QDialog):
 
         from src.ui.date_editor import DateEditorWidget
 
+        self._tabs = tabs
+
         for period in self._build_display_periods():
             key = period.get_key()
+
+            if not period.date_ranges:
+                tabs.addTab(
+                    self._build_missing_period_tab(period),
+                    _display_period_key(key),
+                )
+                continue
 
             editor = DateEditorWidget(period)
             editor.period_changed.connect(lambda k=key: self._sync(k))
@@ -222,6 +231,95 @@ class ExamPeriodsEditorDialog(QDialog):
 
         return display_periods
 
+    def _build_missing_period_tab(self, period: "ExamPeriod") -> QWidget:
+        """Create a tab for a missing exam period with an activation button."""
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        missing_lbl = QLabel(
+            "No exam period dates are defined for this semester/moed."
+        )
+        missing_lbl.setWordWrap(True)
+        missing_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        missing_lbl.setStyleSheet(
+            "background: #FEF3C7;"
+            "color: #92400E;"
+            "border: 1px solid #F59E0B;"
+            "border-radius: 8px;"
+            "padding: 10px 14px;"
+            "font-size: 12px;"
+            "font-weight: 600;"
+        )
+
+        create_btn = QPushButton("＋ Define exam period dates")
+        create_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        create_btn.setFixedHeight(36)
+        create_btn.setStyleSheet(
+            "QPushButton {"
+            " background: #005ac2;"
+            " color: white;"
+            " border: none;"
+            " border-radius: 8px;"
+            " padding: 8px 16px;"
+            " font-size: 12px;"
+            " font-weight: 700;"
+            "}"
+            "QPushButton:hover {"
+            " background: #004494;"
+            "}"
+        )
+        create_btn.clicked.connect(
+            lambda _=False, p=period: self._activate_missing_period(p)
+        )
+
+        layout.addWidget(missing_lbl)
+        layout.addWidget(create_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addStretch()
+
+        return wrapper
+
+    def _activate_missing_period(self, period: "ExamPeriod") -> None:
+        """Convert a missing display-only period into a real editable period."""
+        from src.domain.exam_period import ExamPeriod
+        from src.ui.date_editor import DateEditorWidget
+
+        key = period.get_key()
+        start = date.today()
+        end = start + timedelta(days=13)
+
+        new_period = ExamPeriod(
+            semester=period.semester,
+            moed=period.moed,
+            date_ranges=[(start, end)],
+            excluded_dates=set(),
+        )
+
+        self._activated_synthetic_period_keys.add(key)
+
+        editor = DateEditorWidget(new_period)
+        editor.period_changed.connect(lambda k=key: self._sync(k))
+        self._editors[key] = editor
+
+        tab_label = _display_period_key(key)
+        tab_index = -1
+
+        for i in range(self._tabs.count()):
+            if self._tabs.tabText(i) == tab_label:
+                tab_index = i
+                break
+
+        if tab_index == -1:
+            self._tabs.addTab(editor, tab_label)
+            self._tabs.setCurrentWidget(editor)
+        else:
+            self._tabs.removeTab(tab_index)
+            self._tabs.insertTab(tab_index, editor, tab_label)
+            self._tabs.setCurrentIndex(tab_index)
+
+        self._sync(key)
+
     def _sync(self, changed_key: str | None = None) -> None:
         """
         Sync editor changes back to the controller.
@@ -244,11 +342,18 @@ class ExamPeriodsEditorDialog(QDialog):
             key = period.get_key()
             updated.append(edited_by_key.get(key, period))
 
+        existing_updated_keys = {period.get_key() for period in updated}
+
         for semester, moed in self._STANDARD_PERIOD_ORDER:
             key = f"{semester} - {moed}"
 
-            if key in self._activated_synthetic_period_keys and key in edited_by_key:
+            if (
+                key in self._activated_synthetic_period_keys
+                and key in edited_by_key
+                and key not in existing_updated_keys
+            ):
                 updated.append(edited_by_key[key])
+                existing_updated_keys.add(key)
 
         deduped = []
         seen_keys = set()
@@ -695,16 +800,12 @@ class ConfigScreen(QWidget):
             return
 
         display_names = [
-            "FALL — Aleph",
-            "FALL — Bet",
-            "SPRING — Aleph",
-            "SPRING — Bet",
-            "SUMMER — Aleph",
-            "SUMMER — Bet",
+            _display_period_key(period.get_key())
+            for period in periods
         ]
 
         self._periods_summary_lbl.setText(
-            "Editable exam periods:\n" + ", ".join(display_names)
+            "Loaded exam periods:\n" + ", ".join(display_names)
         )
         self._edit_periods_btn.setEnabled(True)
 
