@@ -125,13 +125,20 @@ class _ProgrammeRow(QWidget):
         )
         layout.addWidget(self._checkbox)
 
-        self._label = QLabel(f"{pid}  —  {name}")
+        self._label = QLabel(f"\u200e{pid}  —  {name}")
+        self._label.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self._label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self._label.setStyleSheet(
             "font-size:13px; color:#171c20; font-weight:500; background:transparent;"
         )
-        layout.addWidget(self._label, stretch=1)
+
+        layout.addWidget(self._label)
+        layout.addStretch(1)
 
         self._view_btn = QPushButton("View Courses ▶")
+
         self._view_btn.setEnabled(False)
         self._view_btn.setFixedHeight(26)
         self._view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -802,12 +809,16 @@ class ConfigScreen(QWidget):
             return
 
         display_names = [
-            _display_period_key(period.get_key())
-            for period in periods
+            "FALL — Aleph",
+            "FALL — Bet",
+            "SPRING — Aleph",
+            "SPRING — Bet",
+            "SUMMER — Aleph",
+            "SUMMER — Bet",
         ]
 
         self._periods_summary_lbl.setText(
-            "Loaded exam periods:\n" + ", ".join(display_names)
+            "Editable exam periods:\n" + ", ".join(display_names)
         )
         self._edit_periods_btn.setEnabled(True)
 
