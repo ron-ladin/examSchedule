@@ -542,3 +542,59 @@ def test_generation_failed_signal_returns_to_config_screen(monkeypatch):
     ]
 
     screen.close()
+
+
+def test_view_courses_uses_checked_programme_not_unchecked_highlighted_item(
+    tmp_path,
+    monkeypatch,
+):
+    """
+    View Courses should open courses only for a checked programme.
+
+    If the currently highlighted item is not checked, the UI should fall back to
+    the first checked programme instead of opening the highlighted unchecked one.
+    """
+    app = _get_qapp()
+
+    courses_path = tmp_path / "courses.txt"
+    _write_courses_base(courses_path)
+
+    controller = DesktopController()
+    controller.load_courses(courses_path)
+
+    screen = ConfigScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen._refresh_programme_list()
+    app.processEvents()
+
+    item_83101 = _find_programme_item(screen, "83101")
+    item_83102 = _find_programme_item(screen, "83102")
+
+    item_83101.setCheckState(Qt.CheckState.Checked)
+    item_83102.setCheckState(Qt.CheckState.Unchecked)
+
+    # Highlight an unchecked programme.
+    screen._prog_list.setCurrentItem(item_83102)
+    app.processEvents()
+
+    opened_programmes: list[str] = []
+
+    class FakeProgrammeCoursesDialog:
+        def __init__(self, programme_id, controller, parent=None):
+            opened_programmes.append(programme_id)
+
+        def exec(self):
+            return None
+
+    monkeypatch.setattr(
+        "src.ui.programme_courses_dialog.ProgrammeCoursesDialog",
+        FakeProgrammeCoursesDialog,
+    )
+
+    screen._on_view_courses()
+
+    assert opened_programmes == ["83101"]
+
+    screen.close()

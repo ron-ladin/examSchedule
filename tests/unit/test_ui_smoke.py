@@ -233,3 +233,82 @@ def test_results_panel_includes_standard_period_tabs_even_when_empty():
     ]
 
     panel.close()
+
+def test_edit_exam_periods_dialog_does_not_add_missing_periods_to_controller_until_edited():
+    """
+    Missing standard periods should be displayed in the Edit Exam Periods dialog
+    as UI-only tabs.
+
+    Opening the dialog alone must not add synthetic periods into the controller.
+    """
+    app = _get_qapp()
+
+    controller = DesktopController()
+    controller.update_exam_periods([
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 29), date(2026, 2, 5))]),
+    ])
+
+    from src.ui.config_screen import ExamPeriodsEditorDialog
+
+    dialog = ExamPeriodsEditorDialog(controller)
+    dialog.show()
+    app.processEvents()
+
+    tabs = dialog.findChild(QtWidgets.QTabWidget)
+    labels = [tabs.tabText(i) for i in range(tabs.count())]
+
+    assert labels == [
+        "FALL — Aleph",
+        "FALL — Bet",
+        "SPRING — Aleph",
+        "SPRING — Bet",
+        "SUMMER — Aleph",
+        "SUMMER — Bet",
+    ]
+
+    # Important logic assertion:
+    # opening the UI must not pollute controller state.
+    assert [period.get_key() for period in controller.get_exam_periods()] == [
+        "FALL - Aleph"
+    ]
+
+    dialog.close()
+
+
+def test_editing_synthetic_exam_period_tab_adds_it_to_controller():
+    """
+    A missing standard period should be added to the controller only after the
+    user actually edits that synthetic tab.
+    """
+    app = _get_qapp()
+
+    controller = DesktopController()
+    controller.update_exam_periods([
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 29), date(2026, 2, 5))]),
+    ])
+
+    from src.ui.config_screen import ExamPeriodsEditorDialog
+
+    dialog = ExamPeriodsEditorDialog(controller)
+    dialog.show()
+    app.processEvents()
+
+    tabs = dialog.findChild(QtWidgets.QTabWidget)
+    labels = [tabs.tabText(i) for i in range(tabs.count())]
+
+    spring_bet_index = labels.index("SPRING — Bet")
+    editor = tabs.widget(spring_bet_index)
+
+    # Simulate a user edit on the synthetic tab.
+    # Direct method call is acceptable here because this is a lightweight
+    # UI-controller integration smoke test, not full mouse automation.
+    editor._on_day_toggled(date(2026, 1, 29))
+    app.processEvents()
+
+    period_keys = [period.get_key() for period in controller.get_exam_periods()]
+
+    assert "FALL - Aleph" in period_keys
+    assert "SPRI - Bet" in period_keys
+    assert len(period_keys) == 2
+
+    dialog.close()
