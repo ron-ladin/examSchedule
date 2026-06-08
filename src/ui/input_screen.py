@@ -29,10 +29,10 @@ from PyQt6.QtWidgets import (
 
 from src.controller import DesktopController
 from src.domain.course import Course
-from src.domain.exam_period import ExamPeriod
 from src.domain.schedule import Schedule
 from src.ui.config_screen import ConfigScreen
 from src.ui.date_editor import DateEditorWidget
+from src.ui.period_utils import build_display_periods as _build_display_periods
 from src.ui.results_panel import _ResultsPanel, _display_period_key, _make_data_table
 from src.ui.tokens import PERIOD_TAB_STYLE, PROGRAM_NAMES_MAPPING
 
@@ -75,51 +75,6 @@ _TAB_INACTIVE_STYLE = (
 
 )
 
-_STANDARD_PERIOD_ORDER: tuple[tuple[str, str], ...] = (
-    ("FALL", "Aleph"),
-    ("FALL", "Bet"),
-    ("SPRI", "Aleph"),
-    ("SPRI", "Bet"),
-    ("SUMM", "Aleph"),
-    ("SUMM", "Bet"),
-)
-
-def _build_display_periods(controller: DesktopController) -> list[ExamPeriod]:
-    """
-    Build the list of exam periods shown in the UI editor tabs.
-
-    Real loaded periods keep their real dates.
-    Missing standard periods are shown as empty display-only periods, without
-    copying dates from another semester/moed.
-    """
-    existing_periods = list(controller.get_exam_periods())
-    existing_by_key = {period.get_key(): period for period in existing_periods}
-
-    display_periods: list[ExamPeriod] = []
-
-    for semester, moed in _STANDARD_PERIOD_ORDER:
-        key = f"{semester} - {moed}"
-
-        if key in existing_by_key:
-            display_periods.append(existing_by_key[key])
-            continue
-
-        display_periods.append(
-            ExamPeriod(
-                semester=semester,
-                moed=moed,
-                date_ranges=[],
-                excluded_dates=set(),
-            )
-        )
-
-    display_keys = {period.get_key() for period in display_periods}
-
-    for period in existing_periods:
-        if period.get_key() not in display_keys:
-            display_periods.append(period)
-
-    return display_periods
 
 class ResultsScreen(QWidget):
     """Screen 1: Course Details | Exam Periods | Schedule Results + loading pane."""
@@ -130,8 +85,6 @@ class ResultsScreen(QWidget):
         super().__init__(parent)
         self._controller = controller
         self._date_editors: dict[str, DateEditorWidget] = {}
-        self._period_editor_existing_keys: set[str] = set()
-        self._activated_synthetic_period_keys: set[str] = set()
         self._spin_tick = 0
         self._spin_timer = QTimer(self)
         self._spin_timer.timeout.connect(self._tick_spinner)
@@ -197,11 +150,6 @@ class ResultsScreen(QWidget):
     def refresh_periods(self) -> None:
         self._periods_tabs.clear()
         self._date_editors.clear()
-        self._period_editor_existing_keys = {
-            period.get_key()
-            for period in self._controller.get_exam_periods()
-        }
-        self._activated_synthetic_period_keys.clear()
 
         periods = self._controller.get_exam_periods()
         if not periods:

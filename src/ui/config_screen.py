@@ -31,14 +31,13 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QDialog,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -51,6 +50,10 @@ from PyQt6.QtWidgets import (
 
 from src.controller import DesktopController, _run_generation_process
 from src.ui.assets.icons import BookIcon, CalendarIcon
+from src.ui.period_utils import (
+    STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER,
+    build_display_periods as _build_display_periods,
+)
 from src.ui.results_panel import _display_period_key
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
 
@@ -88,17 +91,81 @@ def _card() -> QFrame:
     return f
 
 
+_VIEW_BTN_STYLE = (
+    "QPushButton { background:rgba(0,67,148,0.07);"
+    " border:1px solid rgba(0,67,148,0.2); border-radius:6px;"
+    " padding:0px 10px; font-size:11px; font-weight:600; color:#004394; }"
+    "QPushButton:hover:enabled { background:rgba(0,67,148,0.13); border-color:#004394; }"
+    "QPushButton:disabled { color:#94A3B8; border-color:rgba(194,198,214,0.4);"
+    " background:transparent; }"
+)
+
+
+class _ProgrammeRow(QWidget):
+    """One programme row: checkbox · label · View Courses button."""
+
+    toggled = pyqtSignal(str, bool)           # pid, is_checked
+    view_courses_clicked = pyqtSignal(str)    # pid
+
+    def __init__(self, pid: str, name: str, parent=None) -> None:
+        super().__init__(parent)
+        self._pid = pid
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(10)
+
+        self._checkbox = QCheckBox()
+        self._checkbox.setFixedSize(22, 22)
+        self._checkbox.setStyleSheet(
+            "QCheckBox::indicator { width:18px; height:18px; border-radius:5px;"
+            " border:2px solid rgba(194,198,214,0.9); background:white; }"
+            "QCheckBox::indicator:hover { border-color:#004394; }"
+            "QCheckBox::indicator:checked { background:#004394; border-color:#004394; }"
+        )
+        layout.addWidget(self._checkbox)
+
+        self._label = QLabel(f"{pid}  —  {name}")
+        self._label.setStyleSheet(
+            "font-size:13px; color:#171c20; font-weight:500; background:transparent;"
+        )
+        layout.addWidget(self._label, stretch=1)
+
+        self._view_btn = QPushButton("View Courses ▶")
+        self._view_btn.setEnabled(False)
+        self._view_btn.setFixedHeight(26)
+        self._view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._view_btn.setStyleSheet(_VIEW_BTN_STYLE)
+        self._view_btn.clicked.connect(lambda: self.view_courses_clicked.emit(self._pid))
+        layout.addWidget(self._view_btn)
+
+        self._checkbox.stateChanged.connect(self._on_state_changed)
+
+    def is_checked(self) -> bool:
+        return self._checkbox.isChecked()
+
+    def set_checked(self, checked: bool) -> None:
+        self._checkbox.blockSignals(True)
+        self._checkbox.setChecked(checked)
+        self._checkbox.blockSignals(False)
+        self._view_btn.setEnabled(checked)
+
+    def set_label_color(self, color: str) -> None:
+        self._label.setStyleSheet(
+            f"font-size:13px; color:{color}; font-weight:500; background:transparent;"
+        )
+
+    def set_view_btn_enabled(self, has_courses: bool) -> None:
+        self._view_btn.setEnabled(self._checkbox.isChecked() and has_courses)
+
+    def _on_state_changed(self, state: int) -> None:
+        checked = state == Qt.CheckState.Checked.value
+        self._view_btn.setEnabled(checked)
+        self.toggled.emit(self._pid, checked)
+
+
 class ExamPeriodsEditorDialog(QDialog):
     """Modal dialog for editing exam period dates before generation (SRS §2.4)."""
-
-    _STANDARD_PERIOD_ORDER: tuple[tuple[str, str], ...] = (
-        ("FALL", "Aleph"),
-        ("FALL", "Bet"),
-        ("SPRI", "Aleph"),
-        ("SPRI", "Bet"),
-        ("SUMM", "Aleph"),
-        ("SUMM", "Bet"),
-    )
 
     def __init__(self, controller: "DesktopController", parent=None) -> None:
         super().__init__(parent)
@@ -162,7 +229,7 @@ class ExamPeriodsEditorDialog(QDialog):
 
         self._tabs = tabs
 
-        for period in self._build_display_periods():
+        for period in _build_display_periods(self._controller):
             key = period.get_key()
 
             if not period.date_ranges:
@@ -189,47 +256,6 @@ class ExamPeriodsEditorDialog(QDialog):
 
         close_row.addWidget(close_btn)
         root.addLayout(close_row)
-
-    def _build_display_periods(self) -> list["ExamPeriod"]:
-        """
-        Build all semester/moed tabs shown in the pre-generation editor dialog.
-
-        Existing periods keep their real loaded dates.
-        Missing standard periods are shown as empty display-only periods.
-        They are not written into controller state until the user defines dates.
-        """
-        from src.domain.exam_period import ExamPeriod
-
-        existing_periods = list(self._controller.get_exam_periods())
-        existing_by_key = {
-            period.get_key(): period
-            for period in existing_periods
-        }
-
-        display_periods: list[ExamPeriod] = []
-
-        for semester, moed in self._STANDARD_PERIOD_ORDER:
-            key = f"{semester} - {moed}"
-
-            if key in existing_by_key:
-                display_periods.append(existing_by_key[key])
-            else:
-                display_periods.append(
-                    ExamPeriod(
-                        semester=semester,
-                        moed=moed,
-                        date_ranges=[],
-                        excluded_dates=set(),
-                    )
-                )
-
-        display_keys = {period.get_key() for period in display_periods}
-
-        for period in existing_periods:
-            if period.get_key() not in display_keys:
-                display_periods.append(period)
-
-        return display_periods
 
     def _build_missing_period_tab(self, period: "ExamPeriod") -> QWidget:
         """Create a tab for a missing exam period with an activation button."""
@@ -344,7 +370,7 @@ class ExamPeriodsEditorDialog(QDialog):
 
         existing_updated_keys = {period.get_key() for period in updated}
 
-        for semester, moed in self._STANDARD_PERIOD_ORDER:
+        for semester, moed in _STANDARD_PERIOD_ORDER:
             key = f"{semester} - {moed}"
 
             if (
@@ -709,54 +735,30 @@ class ConfigScreen(QWidget):
         )
         vl.addWidget(self._prog_placeholder)
 
-        self._prog_list = QListWidget()
-        self._prog_list.setFixedHeight(160)
-        self._prog_list.setVisible(False)
-        self._prog_list.setStyleSheet("""
-            QListWidget {
-                border: 1px solid rgba(194,198,214,0.4); border-radius: 10px;
-                background: rgba(255,255,255,0.75); outline: none; padding: 4px;
-            }
-            QListWidget::item {
-                padding: 9px 12px; border-radius: 8px; margin: 2px 2px;
-                font-size: 13px; color: #171c20; font-weight: 500;
-            }
-            QListWidget::item:hover    { background: rgba(0,67,148,0.05); }
-            QListWidget::item:selected { background: transparent; }
-            QListWidget::indicator {
-                width: 18px; height: 18px; border-radius: 5px;
-                border: 2px solid rgba(194,198,214,0.9); background: white;
-                margin-right: 6px;
-            }
-            QListWidget::indicator:hover   { border-color: #004394; }
-            QListWidget::indicator:checked { background: #004394; border-color: #004394; }
-        """)
-        self._prog_list.itemChanged.connect(self._on_programme_toggled)
-        self._prog_list.currentItemChanged.connect(self._on_prog_selection_changed)
+        self._prog_rows: dict[str, _ProgrammeRow] = {}
 
-        vl.addWidget(self._prog_list)
+        self._prog_rows_container = QWidget()
+        self._prog_rows_container.setStyleSheet("background: transparent;")
+        self._prog_rows_layout = QVBoxLayout(self._prog_rows_container)
+        self._prog_rows_layout.setContentsMargins(4, 4, 4, 4)
+        self._prog_rows_layout.setSpacing(2)
+        self._prog_rows_layout.addStretch()
 
-        view_row = QHBoxLayout()
-        view_row.setContentsMargins(0, 4, 0, 0)
-
-        self._view_courses_btn = QPushButton("View Courses ▶")
-        self._view_courses_btn.setEnabled(False)
-        self._view_courses_btn.setFixedHeight(32)
-        self._view_courses_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._view_courses_btn.setStyleSheet(
-            "QPushButton { background:rgba(0,67,148,0.07);"
-            " border:1px solid rgba(0,67,148,0.2); border-radius:8px;"
-            " padding:0px 14px; font-size:12px; font-weight:600; color:#004394; }"
-            "QPushButton:hover { background:rgba(0,67,148,0.13);"
-            " border-color:#004394; }"
-            "QPushButton:disabled { color:#94A3B8; border-color:rgba(194,198,214,0.4);"
-            " background:transparent; }"
+        prog_scroll = QScrollArea()
+        prog_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        prog_scroll.setWidgetResizable(True)
+        prog_scroll.setFixedHeight(160)
+        prog_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        prog_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        prog_scroll.setWidget(self._prog_rows_container)
+        prog_scroll.setStyleSheet(
+            "QScrollArea { border:1px solid rgba(194,198,214,0.4); border-radius:10px;"
+            " background:rgba(255,255,255,0.75); }"
         )
-        self._view_courses_btn.clicked.connect(self._on_view_courses)
+        prog_scroll.setVisible(False)
+        self._prog_scroll = prog_scroll
 
-        view_row.addStretch()
-        view_row.addWidget(self._view_courses_btn)
-        vl.addLayout(view_row)
+        vl.addWidget(self._prog_scroll)
 
         return c
 
@@ -919,33 +921,31 @@ class ConfigScreen(QWidget):
             logger.exception("Error loading exam periods")
 
     def _refresh_programme_list(self) -> None:
-        self._prog_list.blockSignals(True)
-        self._prog_list.clear()
+        # Clear old rows
+        while self._prog_rows_layout.count() > 1:  # keep trailing stretch
+            item = self._prog_rows_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._prog_rows.clear()
 
         for pid in self._controller.get_programme_ids():
             name = PROGRAM_NAMES_MAPPING.get(pid, "Unknown Program")
-            item = QListWidgetItem(f"{pid}  —  {name}")
-            item.setData(Qt.ItemDataRole.UserRole, pid)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Unchecked)
-            self._prog_list.addItem(item)
+            row = _ProgrammeRow(pid, name, parent=self._prog_rows_container)
+            row.toggled.connect(self._on_programme_toggled)
+            row.view_courses_clicked.connect(self._on_view_courses_for)
+            self._prog_rows[pid] = row
+            self._prog_rows_layout.insertWidget(self._prog_rows_layout.count() - 1, row)
 
-        self._prog_list.blockSignals(False)
-
-        has = self._prog_list.count() > 0
+        has = bool(self._prog_rows)
         self._prog_placeholder.setVisible(not has)
-        self._prog_list.setVisible(has)
+        self._prog_scroll.setVisible(has)
 
-        self._view_courses_btn.setEnabled(False)
         self._update_prog_label()
         self.courses_changed.emit(self._get_selected_ids())
 
-    def _on_programme_toggled(self, item: QListWidgetItem) -> None:
-        if self._count_checked() > _MAX_PROGS:
-            self._prog_list.blockSignals(True)
-            item.setCheckState(Qt.CheckState.Unchecked)
-            self._prog_list.blockSignals(False)
-
+    def _on_programme_toggled(self, pid: str, checked: bool) -> None:
+        if checked and self._count_checked() > _MAX_PROGS:
+            self._prog_rows[pid].set_checked(False)
             QMessageBox.information(
                 self,
                 "Limit Reached",
@@ -957,38 +957,8 @@ class ConfigScreen(QWidget):
         self._update_prog_label()
         self._update_gen_btn()
         self.courses_changed.emit(self._get_selected_ids())
-        self._view_courses_btn.setEnabled(
-            self._count_checked() > 0 and self._controller.has_courses
-        )
 
-    def _on_prog_selection_changed(
-        self,
-        current: QListWidgetItem | None,
-        previous: QListWidgetItem | None,
-    ) -> None:
-        self._view_courses_btn.setEnabled(
-            self._count_checked() > 0 and self._controller.has_courses
-        )
-
-    def _on_view_courses(self) -> None:
-        item = self._prog_list.currentItem()
-
-        if item is not None and item.checkState() != Qt.CheckState.Checked:
-            item = None
-
-        if item is None:
-            for i in range(self._prog_list.count()):
-                candidate = self._prog_list.item(i)
-                if candidate.checkState() == Qt.CheckState.Checked:
-                    self._prog_list.setCurrentItem(candidate)
-                    item = candidate
-                    break
-
-        if item is None:
-            return
-
-        pid = item.data(Qt.ItemDataRole.UserRole)
-
+    def _on_view_courses_for(self, pid: str) -> None:
         from src.ui.programme_courses_dialog import ProgrammeCoursesDialog
 
         dlg = ProgrammeCoursesDialog(pid, self._controller, parent=self)
@@ -996,35 +966,18 @@ class ConfigScreen(QWidget):
 
     def _update_programme_colours(self) -> None:
         slot = 0
-
-        self._prog_list.blockSignals(True)
-
-        for i in range(self._prog_list.count()):
-            item = self._prog_list.item(i)
-
-            if item.checkState() == Qt.CheckState.Checked:
-                item.setForeground(
-                    QColor(PROGRAMME_COLOURS[slot % len(PROGRAMME_COLOURS)])
-                )
+        for pid, row in self._prog_rows.items():
+            if row.is_checked():
+                row.set_label_color(PROGRAMME_COLOURS[slot % len(PROGRAMME_COLOURS)])
                 slot += 1
             else:
-                item.setForeground(QColor(100, 116, 139))
-
-        self._prog_list.blockSignals(False)
+                row.set_label_color("#64748B")
 
     def _count_checked(self) -> int:
-        return sum(
-            1
-            for i in range(self._prog_list.count())
-            if self._prog_list.item(i).checkState() == Qt.CheckState.Checked
-        )
+        return sum(1 for row in self._prog_rows.values() if row.is_checked())
 
     def _get_selected_ids(self) -> list[str]:
-        return [
-            self._prog_list.item(i).data(Qt.ItemDataRole.UserRole)
-            for i in range(self._prog_list.count())
-            if self._prog_list.item(i).checkState() == Qt.CheckState.Checked
-        ]
+        return [pid for pid, row in self._prog_rows.items() if row.is_checked()]
 
     def _update_prog_label(self) -> None:
         self._prog_count_lbl.setText(f"{self._count_checked()} / {_MAX_PROGS} selected")
