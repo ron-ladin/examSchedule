@@ -843,21 +843,61 @@ class _ResultsPanel(QWidget):
         )
         dialog.exec()
 
+    def _show_message(
+        self,
+        title: str,
+        text: str,
+        icon: QMessageBox.Icon,
+    ) -> None:
+        """Show a readable dark-themed message box."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle(title)
+        msg.setIcon(icon)
+        msg.setText(text)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: #111827;
+            }
+
+            QMessageBox QLabel {
+                color: #FFFFFF;
+                font-size: 13px;
+                background: transparent;
+            }
+
+            QMessageBox QPushButton {
+                background-color: transparent;
+                color: #FFFFFF;
+                border: 1px solid #2563EB;
+                border-radius: 8px;
+                padding: 6px 18px;
+                min-width: 72px;
+                min-height: 28px;
+            }
+
+            QMessageBox QPushButton:hover {
+                background-color: #2563EB;
+                color: #FFFFFF;
+            }
+        """)
+        msg.exec()
+
     def _on_save(self) -> None:
         if self._has_stale_results:
-            QMessageBox.warning(
-                self,
+            self._show_message(
                 "Stale Schedules",
                 "Exam period dates have changed since the last generation.\n\n"
                 "Please click  ▶  Generate again before exporting.",
+                QMessageBox.Icon.Warning,
             )
             return
 
         if not self._schedules_by_period:
-            QMessageBox.warning(
-                self,
+            self._show_message(
                 "Nothing to Save",
                 "No schedules have been generated.",
+                QMessageBox.Icon.Warning,
             )
             return
 
@@ -878,24 +918,25 @@ class _ResultsPanel(QWidget):
         }
 
         if not selected:
-            QMessageBox.warning(
-                self,
+            self._show_message(
                 "Nothing to Save",
                 "No schedules are currently displayed.",
+                QMessageBox.Icon.Warning,
             )
             return
 
         try:
             self._controller.export(selected, Path(path))
-            QMessageBox.information(
-                self,
+            self._show_message(
                 "Saved",
                 f"Schedule saved to:\n{path}",
+                QMessageBox.Icon.Information,
             )
-        except Exception:
-            QMessageBox.critical(
-                self,
-                "Save Error",
-                "Could not save the schedule file. Please check the selected path and try again.",
-            )
+        except Exception as exc:
             logger.exception("Save failed")
+            self._show_message(
+                "Save Error",
+                "Could not save the schedule file. Please check the selected path and try again.\n\n"
+                f"Error: {exc}",
+                QMessageBox.Icon.Critical,
+            )
