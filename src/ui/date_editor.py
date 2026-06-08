@@ -56,6 +56,7 @@ def _build_legend() -> QWidget:
     row = QHBoxLayout(w)
     row.setContentsMargins(8, 0, 0, 0)
     row.setSpacing(6)
+
     for bg_color, label_text in (
         (_ACTIVE_BG, "Active"),
         (_EXCLUDED_BG, "Excluded"),
@@ -66,10 +67,13 @@ def _build_legend() -> QWidget:
         swatch.setStyleSheet(
             f"background: {bg_color}; border-radius: 3px; border: 1px solid #D1D5DB;"
         )
+
         lbl = QLabel(label_text)
         lbl.setStyleSheet("color: #6b7280; font-size: 11px;")
+
         row.addWidget(swatch)
         row.addWidget(lbl)
+
     row.addStretch()
     return w
 
@@ -90,6 +94,7 @@ class _DayButton(QPushButton):
         parent=None,
     ):
         super().__init__(str(d.day), parent)
+
         self._date = d
         self._in_range = in_range
         self._is_saturday = is_saturday
@@ -105,13 +110,9 @@ class _DayButton(QPushButton):
         else:
             self.setEnabled(False)
 
-    # ── Public ────────────────────────────────────────────────────────────────
-
     def set_excluded(self, excluded: bool) -> None:
         self._excluded = excluded
         self._refresh_style()
-
-    # ── Private ───────────────────────────────────────────────────────────────
 
     def _emit_toggle(self) -> None:
         self.toggled_date.emit(self._date)
@@ -152,6 +153,7 @@ class _MonthWidget(QFrame):
         parent=None,
     ):
         super().__init__(parent)
+
         self._year = year
         self._month = month
         self._date_ranges = date_ranges
@@ -163,6 +165,7 @@ class _MonthWidget(QFrame):
             " border: 1px solid rgba(194,198,214,0.4); border-radius: 8px; }"
         )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
         self._build()
         self.setMinimumWidth(7 * 46 + 16)
 
@@ -174,7 +177,6 @@ class _MonthWidget(QFrame):
         grid.setSpacing(2)
         grid.setContentsMargins(6, 4, 6, 6)
 
-        # Month title
         title = QLabel(date(self._year, self._month, 1).strftime("%B %Y"))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setFixedHeight(26)
@@ -184,7 +186,6 @@ class _MonthWidget(QFrame):
         )
         grid.addWidget(title, 0, 0, 1, 7)
 
-        # Day-of-week headers
         for col, name in enumerate(self._HEADERS):
             header = QLabel(name)
             header.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -194,21 +195,24 @@ class _MonthWidget(QFrame):
             header.setFixedSize(44, 26)
             grid.addWidget(header, 1, col)
 
-        # Day cells
-        first_weekday = date(self._year, self._month, 1).weekday()  # 0 = Monday
+        first_weekday = date(self._year, self._month, 1).weekday()
         num_days = calendar.monthrange(self._year, self._month)[1]
 
         row, col = 2, first_weekday
+
         for day in range(1, num_days + 1):
             d = date(self._year, self._month, day)
+
             btn = _DayButton(
                 d,
                 in_range=any(s <= d <= e for s, e in self._date_ranges),
                 is_saturday=(d.weekday() == 5),
                 excluded=(d in self._excluded_dates),
             )
+
             self._day_buttons[d] = btn
             grid.addWidget(btn, row, col)
+
             col += 1
             if col == 7:
                 col = 0
@@ -237,20 +241,18 @@ class DateEditorWidget(QWidget):
 
     def __init__(self, exam_period: ExamPeriod, parent=None):
         super().__init__(parent)
+
         self._period = copy.deepcopy(exam_period)
         self._day_buttons: dict[date, _DayButton] = {}
-        self._building = False       # guard: suppress spurious range-changed callbacks
-        self._showing_error = False  # guard: prevent re-entrant validation popup
+        self._building = False
+        self._showing_error = False
         self._multi_range: bool = len(self._period.date_ranges) > 1
-        self._setup_ui()
 
-    # ── Public API ─────────────────────────────────────────────────────────────
+        self._setup_ui()
 
     def get_exam_period(self) -> ExamPeriod:
         """Return a deep copy of the current edited exam period."""
         return copy.deepcopy(self._period)
-
-    # ── UI construction ────────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -269,7 +271,6 @@ class DateEditorWidget(QWidget):
         self._multi_range_notice.setVisible(False)
         outer.addWidget(self._multi_range_notice)
 
-        # §2.4.3 — Start / End date editors ─────────────────────────────────
         range_row = QWidget()
         range_layout = QHBoxLayout(range_row)
         range_layout.setContentsMargins(0, 0, 0, 0)
@@ -277,12 +278,20 @@ class DateEditorWidget(QWidget):
         range_layout.addWidget(QLabel("Exam window:"))
 
         _date_edit_style = (
-            "QDateEdit { background:#FFFFFF; color:#0F172A; border:1px solid #D1D5DB;"
-            " border-radius:6px; padding:3px 8px; }"
+            "QDateEdit {"
+            " background:#FFFFFF;"
+            " color:#0F172A;"
+            " border:1px solid #D1D5DB;"
+            " border-radius:6px;"
+            " padding:3px 36px 3px 8px;"
+            "}"
             "QDateEdit::drop-down {"
-            "  subcontrol-origin: padding; subcontrol-position: top right;"
-            "  width: 28px; background: #2563EB; border-left: 1px solid #1D4ED8;"
-            "  border-radius: 6px;"
+            " subcontrol-origin: padding;"
+            " subcontrol-position: top right;"
+            " width: 30px;"
+            " background: #2563EB;"
+            " border-left: 1px solid #1D4ED8;"
+            " border-radius: 6px;"
             "}"
             "QDateEdit::drop-down:hover { background: #1D4ED8; }"
             f"QDateEdit::down-arrow {{ image: url({_ARROW_SVG}); width: 8px; height: 6px; }}"
@@ -295,15 +304,20 @@ class DateEditorWidget(QWidget):
         self._start_edit = QDateEdit()
         self._start_edit.setCalendarPopup(True)
         self._start_edit.setDisplayFormat("dd/MM/yyyy")
+        self._start_edit.setFixedWidth(160)
+        self._start_edit.setMinimumWidth(160)
         self._start_edit.setStyleSheet(_date_edit_style)
 
         self._end_edit = QDateEdit()
         self._end_edit.setCalendarPopup(True)
         self._end_edit.setDisplayFormat("dd/MM/yyyy")
+        self._end_edit.setFixedWidth(160)
+        self._end_edit.setMinimumWidth(160)
         self._end_edit.setStyleSheet(_date_edit_style)
 
         if self._period.date_ranges:
             start_date, end_date = self._period.get_overall_date_boundaries()
+
             self._start_edit.setDate(
                 QDate(start_date.year, start_date.month, start_date.day)
             )
@@ -316,7 +330,6 @@ class DateEditorWidget(QWidget):
         range_layout.addWidget(QLabel("End:"))
         range_layout.addWidget(self._end_edit)
         range_layout.addStretch()
-
         range_layout.addWidget(_build_legend())
 
         self._start_edit.dateChanged.connect(self._on_range_changed)
@@ -324,7 +337,6 @@ class DateEditorWidget(QWidget):
 
         outer.addWidget(range_row)
 
-        # §2.4.1 — Year calendar ────────────────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -351,9 +363,9 @@ class DateEditorWidget(QWidget):
         self._building = True
         self._day_buttons.clear()
 
-        # Remove old month widgets
         while self._cal_layout.count():
             item = self._cal_layout.takeAt(0)
+
             if item.widget():
                 item.widget().deleteLater()
 
@@ -363,7 +375,6 @@ class DateEditorWidget(QWidget):
 
         range_start, range_end = self._period.get_overall_date_boundaries()
 
-        # Enumerate all calendar months covered by [range_start, range_end]
         current_month = date(range_start.year, range_start.month, 1)
         end_month = date(range_end.year, range_end.month, 1)
 
@@ -377,16 +388,17 @@ class DateEditorWidget(QWidget):
                 date_ranges=self._period.date_ranges,
                 excluded_dates=self._period.excluded_dates,
             )
+
             for d, btn in month_widget.day_buttons().items():
                 if btn.isEnabled():
                     btn.toggled_date.connect(self._on_day_toggled)
+
                 self._day_buttons[d] = btn
 
             grid_row, grid_col = divmod(month_index, _GRID_COLS)
             self._cal_layout.addWidget(month_widget, grid_row, grid_col)
             month_index += 1
 
-            # Advance to next month
             if current_month.month == 12:
                 current_month = date(current_month.year + 1, 1, 1)
             else:
@@ -400,8 +412,6 @@ class DateEditorWidget(QWidget):
             self._cal_layout.setColumnStretch(c, 1)
 
         self._building = False
-
-    # ── Event handlers ─────────────────────────────────────────────────────────
 
     def _on_day_toggled(self, d: date) -> None:
         """§2.4.2 — Toggle one date between active and excluded."""
@@ -424,6 +434,7 @@ class DateEditorWidget(QWidget):
 
         start_qdate = self._start_edit.date()
         end_qdate = self._end_edit.date()
+
         new_start = date(
             start_qdate.year(),
             start_qdate.month(),
@@ -444,22 +455,25 @@ class DateEditorWidget(QWidget):
                 "Please select a valid date range.",
             )
             self._showing_error = False
-            # Reset controls to the model's current valid range so UI stays in sync
+
             if self._period.date_ranges:
                 start_date, end_date = self._period.get_overall_date_boundaries()
+
                 self._start_edit.blockSignals(True)
                 self._end_edit.blockSignals(True)
+
                 self._start_edit.setDate(
                     QDate(start_date.year, start_date.month, start_date.day)
                 )
                 self._end_edit.setDate(
                     QDate(end_date.year, end_date.month, end_date.day)
                 )
+
                 self._start_edit.blockSignals(False)
                 self._end_edit.blockSignals(False)
+
             return
 
-        # Trim excluded dates that fall outside the new range
         self._period.excluded_dates = {
             d
             for d in self._period.excluded_dates

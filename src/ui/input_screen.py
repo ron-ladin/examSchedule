@@ -165,6 +165,9 @@ class ResultsScreen(QWidget):
             self._date_editors[key] = editor
             self._periods_tabs.addTab(editor, _display_period_key(key))
 
+        if self._results_loaded and self._controller.results_stale:
+            self._results_panel.mark_stale()
+
     def _setup_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)

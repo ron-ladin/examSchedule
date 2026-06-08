@@ -206,9 +206,10 @@ class _ResultsPanel(QWidget):
         self._setup_ui()
 
     def mark_stale(self) -> None:
-        """Show the stale-data warning."""
+        """Show the stale-data warning and disable Export."""
         self._has_stale_results = True
         self._stale_banner.setVisible(True)
+        self._save_btn.setEnabled(False)
 
     def clear_stale(self) -> None:
         """Hide the stale-data warning and re-enable Export."""
@@ -792,6 +793,15 @@ class _ResultsPanel(QWidget):
         dialog.exec()
 
     def _on_save(self) -> None:
+        if self._has_stale_results:
+            QMessageBox.warning(
+                self,
+                "Stale Schedules",
+                "Exam period dates have changed since the last generation.\n\n"
+                "Please click  ▶  Generate again before exporting.",
+            )
+            return
+
         if not self._schedules_by_period:
             QMessageBox.warning(
                 self,

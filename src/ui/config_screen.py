@@ -50,6 +50,7 @@ from PyQt6.QtWidgets import (
 
 from src.controller import DesktopController, _run_generation_process
 from src.ui.assets.icons import BookIcon, CalendarIcon
+from src.ui.results_panel import _display_period_key
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
 
 logger = logging.getLogger(__name__)
@@ -109,9 +110,7 @@ class ExamPeriodsEditorDialog(QDialog):
             editor = DateEditorWidget(period)
             editor.period_changed.connect(self._sync)
             self._editors.append(editor)
-            semester = period.semester
-            moed = period.moed
-            tabs.addTab(editor, f"{semester} — {moed}")
+            tabs.addTab(editor, _display_period_key(period.get_key()))
 
         root.addWidget(tabs)
 
@@ -458,7 +457,7 @@ class ConfigScreen(QWidget):
         vl.addLayout(hdr)
 
         self._prog_placeholder = QLabel(
-            "Load a courses or programs file to see programmes here."
+            "Load a courses file to see programmes here."
         )
         self._prog_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._prog_placeholder.setStyleSheet(
@@ -550,7 +549,7 @@ class ConfigScreen(QWidget):
             self._edit_periods_btn.setEnabled(False)
             return
 
-        names = ", ".join(f"{p.semester} — {p.moed}" for p in periods)
+        names = ", ".join(_display_period_key(p.get_key()) for p in periods)
         self._periods_summary_lbl.setText(f"{len(periods)} period(s): {names}")
         self._edit_periods_btn.setEnabled(True)
 
@@ -717,6 +716,10 @@ class ConfigScreen(QWidget):
 
     def _on_view_courses(self) -> None:
         item = self._prog_list.currentItem()
+
+        if item is not None and item.checkState() != Qt.CheckState.Checked:
+            item = None
+
         if item is None:
             for i in range(self._prog_list.count()):
                 candidate = self._prog_list.item(i)
@@ -724,10 +727,14 @@ class ConfigScreen(QWidget):
                     self._prog_list.setCurrentItem(candidate)
                     item = candidate
                     break
+
         if item is None:
             return
+
         pid = item.data(Qt.ItemDataRole.UserRole)
+
         from src.ui.programme_courses_dialog import ProgrammeCoursesDialog
+
         dlg = ProgrammeCoursesDialog(pid, self._controller, parent=self)
         dlg.exec()
 
