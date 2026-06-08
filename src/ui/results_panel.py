@@ -968,7 +968,6 @@ class _ResultsPanel(QWidget):
             logger.exception("Save failed")
             self._show_message(
                 "Save Error",
-                "Could not save the schedule file. Please check the selected path and try again.\n\n"
-                f"Error: {exc}",
+                "Could not save the schedule file. Please check the selected path and try again.",
                 QMessageBox.Icon.Critical,
             )
