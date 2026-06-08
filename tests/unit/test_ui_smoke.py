@@ -9,6 +9,7 @@ They do not run schedule generation and do not test business logic.
 
 import os
 import sys
+from datetime import date
 
 import pytest
 
@@ -25,8 +26,10 @@ QPushButton = QtWidgets.QPushButton
 QListWidget = QtWidgets.QListWidget
 
 from src.controller import DesktopController
+from src.domain.exam_period import ExamPeriod
 from src.ui.app import ExamSchedulerApp
 from src.ui.config_screen import ConfigScreen
+from src.ui.results_panel import _ResultsPanel
 from src.ui.input_screen import InputScreen, ResultsScreen
 
 
@@ -174,3 +177,59 @@ def test_config_screen_renders_load_mode_controls():
     assert screen._mode_group.checkedButton().text() == "Replace"
 
     screen.close()
+
+
+def test_edit_exam_periods_dialog_adds_missing_standard_period_tabs():
+    """Editing periods should show all required semester/moed tabs without changing dates.txt."""
+    app = _get_qapp()
+
+    controller = DesktopController()
+    controller.update_exam_periods([
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 29), date(2026, 2, 5))]),
+        ExamPeriod("FALL", "Bet", [(date(2026, 4, 10), date(2026, 4, 13))]),
+        ExamPeriod("SPRI", "Aleph", [(date(2026, 7, 1), date(2026, 7, 10))]),
+    ])
+
+    from src.ui.config_screen import ExamPeriodsEditorDialog
+
+    dialog = ExamPeriodsEditorDialog(controller)
+    dialog.show()
+    app.processEvents()
+
+    tabs = dialog.findChild(QtWidgets.QTabWidget)
+    labels = [tabs.tabText(i) for i in range(tabs.count())]
+
+    assert labels == [
+        "FALL — Aleph",
+        "FALL — Bet",
+        "SPRING — Aleph",
+        "SPRING — Bet",
+        "SUMMER — Aleph",
+        "SUMMER — Bet",
+    ]
+
+    dialog.close()
+
+
+def test_results_panel_includes_standard_period_tabs_even_when_empty():
+    """Results tabs should include Spring Bet and Summer periods even if no schedules exist."""
+    app = _get_qapp()
+
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    panel.load({}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    labels = [panel._period_tabs.tabText(i) for i in range(panel._period_tabs.count())]
+
+    assert labels == [
+        "FALL — Aleph",
+        "FALL — Bet",
+        "SPRING — Aleph",
+        "SPRING — Bet",
+        "SUMMER — Aleph",
+        "SUMMER — Bet",
+    ]
+
+    panel.close()

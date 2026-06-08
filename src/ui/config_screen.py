@@ -23,6 +23,7 @@ periods_changed()           → after exam periods are (re)loaded
 import logging
 import multiprocessing
 import time
+from datetime import date, timedelta
 from pathlib import Path
 from queue import Empty as _QueueEmpty
 
@@ -90,41 +91,184 @@ def _card() -> QFrame:
 class ExamPeriodsEditorDialog(QDialog):
     """Modal dialog for editing exam period dates before generation (SRS §2.4)."""
 
+    _STANDARD_PERIOD_ORDER: tuple[tuple[str, str], ...] = (
+        ("FALL", "Aleph"),
+        ("FALL", "Bet"),
+        ("SPRI", "Aleph"),
+        ("SPRI", "Bet"),
+        ("SUMM", "Aleph"),
+        ("SUMM", "Bet"),
+    )
+
     def __init__(self, controller: "DesktopController", parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit Exam Periods")
         self.setModal(True)
-        self.setMinimumSize(720, 480)
+        self.setMinimumSize(950, 560)
 
         self._controller = controller
-        self._editors: list = []
+        self._editors: dict[str, object] = {}
+        self._existing_period_keys: set[str] = {
+            period.get_key()
+            for period in self._controller.get_exam_periods()
+        }
+        self._activated_synthetic_period_keys: set[str] = set()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
 
         tabs = QTabWidget()
+        tabs.setUsesScrollButtons(True)
+        tabs.setMovable(False)
+
+        # Important:
+        # The tabs already exist, but inactive tab text was almost white.
+        # This stylesheet makes all semester/moed tabs readable.
+        tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: none;
+                background: transparent;
+            }
+
+            QTabBar::tab {
+                background: transparent;
+                color: #374151;
+                padding: 8px 18px;
+                margin-right: 4px;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 500;
+                min-width: 110px;
+            }
+
+            QTabBar::tab:hover {
+                background: rgba(0, 90, 194, 0.08);
+                color: #005ac2;
+            }
+
+            QTabBar::tab:selected {
+                background: #9CA3AF;
+                color: #FFFFFF;
+                font-weight: 700;
+            }
+
+            QTabBar::tab:disabled {
+                color: #9CA3AF;
+            }
+        """)
+
         from src.ui.date_editor import DateEditorWidget
 
-        for period in controller.get_exam_periods():
+        for period in self._build_display_periods():
+            key = period.get_key()
+
             editor = DateEditorWidget(period)
-            editor.period_changed.connect(self._sync)
-            self._editors.append(editor)
-            tabs.addTab(editor, _display_period_key(period.get_key()))
+            editor.period_changed.connect(lambda k=key: self._sync(k))
+
+            self._editors[key] = editor
+            tabs.addTab(editor, _display_period_key(key))
 
         root.addWidget(tabs)
 
         close_row = QHBoxLayout()
         close_row.addStretch()
+
         close_btn = QPushButton("Close")
         close_btn.setFixedSize(110, 36)
         close_btn.clicked.connect(self.accept)
+
         close_row.addWidget(close_btn)
         root.addLayout(close_row)
 
-    def _sync(self) -> None:
-        updated = [editor.get_exam_period() for editor in self._editors]
-        self._controller.update_exam_periods(updated)
+    def _build_display_periods(self) -> list["ExamPeriod"]:
+        """
+        Build all semester/moed tabs shown in the pre-generation editor dialog.
+
+        Existing periods keep their real loaded dates.
+        Missing standard periods are created for UI display only.
+        They are not written into controller state until the user edits that tab.
+        """
+        from src.domain.exam_period import ExamPeriod
+
+        existing_periods = list(self._controller.get_exam_periods())
+        existing_by_key = {
+            period.get_key(): period
+            for period in existing_periods
+        }
+
+        if existing_periods:
+            fallback_start, fallback_end = existing_periods[0].get_overall_date_boundaries()
+        else:
+            fallback_start = date.today()
+            fallback_end = fallback_start + timedelta(days=13)
+
+        display_periods: list[ExamPeriod] = []
+
+        for semester, moed in self._STANDARD_PERIOD_ORDER:
+            key = f"{semester} - {moed}"
+
+            if key in existing_by_key:
+                display_periods.append(existing_by_key[key])
+            else:
+                display_periods.append(
+                    ExamPeriod(
+                        semester=semester,
+                        moed=moed,
+                        date_ranges=[(fallback_start, fallback_end)],
+                        excluded_dates=set(),
+                    )
+                )
+
+        display_keys = {period.get_key() for period in display_periods}
+
+        for period in existing_periods:
+            if period.get_key() not in display_keys:
+                display_periods.append(period)
+
+        return display_periods
+
+    def _sync(self, changed_key: str | None = None) -> None:
+        """
+        Sync editor changes back to the controller.
+
+        Existing periods are always updated.
+        Synthetic standard periods are added only after the user edits that
+        specific synthetic tab.
+        """
+        if changed_key and changed_key not in self._existing_period_keys:
+            self._activated_synthetic_period_keys.add(changed_key)
+
+        edited_by_key = {
+            key: editor.get_exam_period()
+            for key, editor in self._editors.items()
+        }
+
+        updated = []
+
+        for period in self._controller.get_exam_periods():
+            key = period.get_key()
+            updated.append(edited_by_key.get(key, period))
+
+        for semester, moed in self._STANDARD_PERIOD_ORDER:
+            key = f"{semester} - {moed}"
+
+            if key in self._activated_synthetic_period_keys and key in edited_by_key:
+                updated.append(edited_by_key[key])
+
+        deduped = []
+        seen_keys = set()
+
+        for period in updated:
+            key = period.get_key()
+
+            if key in seen_keys:
+                continue
+
+            deduped.append(period)
+            seen_keys.add(key)
+
+        self._controller.update_exam_periods(deduped)
 
 
 class ConfigScreen(QWidget):
@@ -269,6 +413,7 @@ class ConfigScreen(QWidget):
         self._gen_btn.setFixedWidth(220)
         self._gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._gen_btn.clicked.connect(self._on_generate)
+
         cl.addWidget(self._gen_btn, 0, Qt.AlignmentFlag.AlignRight)
         cl.addStretch(1)
 
@@ -494,6 +639,7 @@ class ConfigScreen(QWidget):
 
         view_row = QHBoxLayout()
         view_row.setContentsMargins(0, 4, 0, 0)
+
         self._view_courses_btn = QPushButton("View Courses ▶")
         self._view_courses_btn.setEnabled(False)
         self._view_courses_btn.setFixedHeight(32)
@@ -508,6 +654,7 @@ class ConfigScreen(QWidget):
             " background:transparent; }"
         )
         self._view_courses_btn.clicked.connect(self._on_view_courses)
+
         view_row.addStretch()
         view_row.addWidget(self._view_courses_btn)
         vl.addLayout(view_row)
@@ -516,6 +663,7 @@ class ConfigScreen(QWidget):
 
     def _build_periods_card(self) -> QFrame:
         c = _card()
+
         vl = QVBoxLayout(c)
         vl.setContentsMargins(20, 18, 20, 18)
         vl.setSpacing(10)
@@ -539,18 +687,31 @@ class ConfigScreen(QWidget):
             "QPushButton:disabled { color:#aaa; border-color:#ccc; }"
         )
         self._edit_periods_btn.clicked.connect(self._on_edit_periods)
+
         vl.addWidget(self._edit_periods_btn)
+
         return c
 
     def _refresh_periods_card(self) -> None:
         periods = self._controller.get_exam_periods()
+
         if not periods:
             self._periods_summary_lbl.setText("No periods loaded")
             self._edit_periods_btn.setEnabled(False)
             return
 
-        names = ", ".join(_display_period_key(p.get_key()) for p in periods)
-        self._periods_summary_lbl.setText(f"{len(periods)} period(s): {names}")
+        display_names = [
+            "FALL — Aleph",
+            "FALL — Bet",
+            "SPRING — Aleph",
+            "SPRING — Bet",
+            "SUMMER — Aleph",
+            "SUMMER — Bet",
+        ]
+
+        self._periods_summary_lbl.setText(
+            "Editable exam periods:\n" + ", ".join(display_names)
+        )
         self._edit_periods_btn.setEnabled(True)
 
     def _on_edit_periods(self) -> None:
