@@ -387,12 +387,15 @@ def test_programme_selection_signal_updates_visible_course_table(tmp_path):
     screen.close()
 
 
-# ── Date exclusions propagate to generation ────────────────────────
+# ── Results Exam Periods are read-only ─────────────────────────────
 
-def test_date_editor_exclusion_propagates_to_controller_generation(tmp_path):
+def test_results_exam_periods_are_read_only_and_do_not_update_controller(tmp_path):
     """
-    Excluding a date through DateEditorWidget should update controller periods,
-    and the next generation should not assign exams to the excluded date.
+    The ResultsScreen Exam Periods tab is view-only.
+
+    Date changes are allowed only from the home/config screen. After generation,
+    the Exam Periods tab should display the periods but must not allow changing
+    exclusions or date ranges through DateEditorWidget.
     """
     app = _get_qapp()
 
@@ -420,16 +423,7 @@ def test_date_editor_exclusion_propagates_to_controller_generation(tmp_path):
     app.processEvents()
 
     updated_period = controller.get_exam_periods()[0]
-    assert excluded in updated_period.excluded_dates
-
-    schedules_by_period, _, truncated = controller.generate()
-
-    assert truncated == set()
-    assert schedules_by_period
-
-    for schedules in schedules_by_period.values():
-        for schedule in schedules:
-            assert excluded not in schedule.assignments.values()
+    assert excluded not in updated_period.excluded_dates
 
     screen.close()
 
@@ -546,5 +540,61 @@ def test_generation_failed_signal_returns_to_config_screen(monkeypatch):
     assert shown_messages == [
         ("Generation Error", "Generation failed for test.")
     ]
+
+    screen.close()
+
+
+def test_view_courses_uses_checked_programme_not_unchecked_highlighted_item(
+    tmp_path,
+    monkeypatch,
+):
+    """
+    View Courses should open courses only for a checked programme.
+
+    If the currently highlighted item is not checked, the UI should fall back to
+    the first checked programme instead of opening the highlighted unchecked one.
+    """
+    app = _get_qapp()
+
+    courses_path = tmp_path / "courses.txt"
+    _write_courses_base(courses_path)
+
+    controller = DesktopController()
+    controller.load_courses(courses_path)
+
+    screen = ConfigScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen._refresh_programme_list()
+    app.processEvents()
+
+    item_83101 = _find_programme_item(screen, "83101")
+    item_83102 = _find_programme_item(screen, "83102")
+
+    item_83101.setCheckState(Qt.CheckState.Checked)
+    item_83102.setCheckState(Qt.CheckState.Unchecked)
+
+    # Highlight an unchecked programme.
+    screen._prog_list.setCurrentItem(item_83102)
+    app.processEvents()
+
+    opened_programmes: list[str] = []
+
+    class FakeProgrammeCoursesDialog:
+        def __init__(self, programme_id, controller, parent=None):
+            opened_programmes.append(programme_id)
+
+        def exec(self):
+            return None
+
+    monkeypatch.setattr(
+        "src.ui.programme_courses_dialog.ProgrammeCoursesDialog",
+        FakeProgrammeCoursesDialog,
+    )
+
+    screen._on_view_courses()
+
+    assert opened_programmes == ["83101"]
 
     screen.close()

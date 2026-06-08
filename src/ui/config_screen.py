@@ -23,6 +23,7 @@ periods_changed()           → after exam periods are (re)loaded
 import logging
 import multiprocessing
 import time
+from datetime import date, timedelta
 from pathlib import Path
 from queue import Empty as _QueueEmpty
 
@@ -30,6 +31,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QDialog,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -42,12 +44,14 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from src.controller import DesktopController, _run_generation_process
 from src.ui.assets.icons import BookIcon, CalendarIcon
+from src.ui.results_panel import _display_period_key
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
 
 logger = logging.getLogger(__name__)
@@ -82,6 +86,288 @@ def _card() -> QFrame:
     eff.setOffset(0, 4)
     f.setGraphicsEffect(eff)
     return f
+
+
+class ExamPeriodsEditorDialog(QDialog):
+    """Modal dialog for editing exam period dates before generation (SRS §2.4)."""
+
+    _STANDARD_PERIOD_ORDER: tuple[tuple[str, str], ...] = (
+        ("FALL", "Aleph"),
+        ("FALL", "Bet"),
+        ("SPRI", "Aleph"),
+        ("SPRI", "Bet"),
+        ("SUMM", "Aleph"),
+        ("SUMM", "Bet"),
+    )
+
+    def __init__(self, controller: "DesktopController", parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Edit Exam Periods")
+        self.setModal(True)
+        self.setMinimumSize(950, 560)
+
+        self._controller = controller
+        self._editors: dict[str, object] = {}
+        self._existing_period_keys: set[str] = {
+            period.get_key()
+            for period in self._controller.get_exam_periods()
+        }
+        self._activated_synthetic_period_keys: set[str] = set()
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+
+        tabs = QTabWidget()
+        tabs.setUsesScrollButtons(True)
+        tabs.setMovable(False)
+
+        # Important:
+        # The tabs already exist, but inactive tab text was almost white.
+        # This stylesheet makes all semester/moed tabs readable.
+        tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: none;
+                background: transparent;
+            }
+
+            QTabBar::tab {
+                background: transparent;
+                color: #374151;
+                padding: 8px 18px;
+                margin-right: 4px;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 500;
+                min-width: 110px;
+            }
+
+            QTabBar::tab:hover {
+                background: rgba(0, 90, 194, 0.08);
+                color: #005ac2;
+            }
+
+            QTabBar::tab:selected {
+                background: #9CA3AF;
+                color: #FFFFFF;
+                font-weight: 700;
+            }
+
+            QTabBar::tab:disabled {
+                color: #9CA3AF;
+            }
+        """)
+
+        from src.ui.date_editor import DateEditorWidget
+
+        self._tabs = tabs
+
+        for period in self._build_display_periods():
+            key = period.get_key()
+
+            if not period.date_ranges:
+                tabs.addTab(
+                    self._build_missing_period_tab(period),
+                    _display_period_key(key),
+                )
+                continue
+
+            editor = DateEditorWidget(period)
+            editor.period_changed.connect(lambda k=key: self._sync(k))
+
+            self._editors[key] = editor
+            tabs.addTab(editor, _display_period_key(key))
+
+        root.addWidget(tabs)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+
+        close_btn = QPushButton("Close")
+        close_btn.setFixedSize(110, 36)
+        close_btn.clicked.connect(self.accept)
+
+        close_row.addWidget(close_btn)
+        root.addLayout(close_row)
+
+    def _build_display_periods(self) -> list["ExamPeriod"]:
+        """
+        Build all semester/moed tabs shown in the pre-generation editor dialog.
+
+        Existing periods keep their real loaded dates.
+        Missing standard periods are shown as empty display-only periods.
+        They are not written into controller state until the user defines dates.
+        """
+        from src.domain.exam_period import ExamPeriod
+
+        existing_periods = list(self._controller.get_exam_periods())
+        existing_by_key = {
+            period.get_key(): period
+            for period in existing_periods
+        }
+
+        display_periods: list[ExamPeriod] = []
+
+        for semester, moed in self._STANDARD_PERIOD_ORDER:
+            key = f"{semester} - {moed}"
+
+            if key in existing_by_key:
+                display_periods.append(existing_by_key[key])
+            else:
+                display_periods.append(
+                    ExamPeriod(
+                        semester=semester,
+                        moed=moed,
+                        date_ranges=[],
+                        excluded_dates=set(),
+                    )
+                )
+
+        display_keys = {period.get_key() for period in display_periods}
+
+        for period in existing_periods:
+            if period.get_key() not in display_keys:
+                display_periods.append(period)
+
+        return display_periods
+
+    def _build_missing_period_tab(self, period: "ExamPeriod") -> QWidget:
+        """Create a tab for a missing exam period with an activation button."""
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        missing_lbl = QLabel(
+            "No exam period dates are defined for this semester/moed."
+        )
+        missing_lbl.setWordWrap(True)
+        missing_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        missing_lbl.setStyleSheet(
+            "background: #FEF3C7;"
+            "color: #92400E;"
+            "border: 1px solid #F59E0B;"
+            "border-radius: 8px;"
+            "padding: 10px 14px;"
+            "font-size: 12px;"
+            "font-weight: 600;"
+        )
+
+        create_btn = QPushButton("＋ Define exam period dates")
+        create_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        create_btn.setFixedHeight(36)
+        create_btn.setStyleSheet(
+            "QPushButton {"
+            " background: #005ac2;"
+            " color: white;"
+            " border: none;"
+            " border-radius: 8px;"
+            " padding: 8px 16px;"
+            " font-size: 12px;"
+            " font-weight: 700;"
+            "}"
+            "QPushButton:hover {"
+            " background: #004494;"
+            "}"
+        )
+        create_btn.clicked.connect(
+            lambda _=False, p=period: self._activate_missing_period(p)
+        )
+
+        layout.addWidget(missing_lbl)
+        layout.addWidget(create_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addStretch()
+
+        return wrapper
+
+    def _activate_missing_period(self, period: "ExamPeriod") -> None:
+        """Convert a missing display-only period into a real editable period."""
+        from src.domain.exam_period import ExamPeriod
+        from src.ui.date_editor import DateEditorWidget
+
+        key = period.get_key()
+        start = date.today()
+        end = start + timedelta(days=13)
+
+        new_period = ExamPeriod(
+            semester=period.semester,
+            moed=period.moed,
+            date_ranges=[(start, end)],
+            excluded_dates=set(),
+        )
+
+        self._activated_synthetic_period_keys.add(key)
+
+        editor = DateEditorWidget(new_period)
+        editor.period_changed.connect(lambda k=key: self._sync(k))
+        self._editors[key] = editor
+
+        tab_label = _display_period_key(key)
+        tab_index = -1
+
+        for i in range(self._tabs.count()):
+            if self._tabs.tabText(i) == tab_label:
+                tab_index = i
+                break
+
+        if tab_index == -1:
+            self._tabs.addTab(editor, tab_label)
+            self._tabs.setCurrentWidget(editor)
+        else:
+            self._tabs.removeTab(tab_index)
+            self._tabs.insertTab(tab_index, editor, tab_label)
+            self._tabs.setCurrentIndex(tab_index)
+
+        self._sync(key)
+
+    def _sync(self, changed_key: str | None = None) -> None:
+        """
+        Sync editor changes back to the controller.
+
+        Existing periods are always updated.
+        Synthetic standard periods are added only after the user edits that
+        specific synthetic tab.
+        """
+        if changed_key and changed_key not in self._existing_period_keys:
+            self._activated_synthetic_period_keys.add(changed_key)
+
+        edited_by_key = {
+            key: editor.get_exam_period()
+            for key, editor in self._editors.items()
+        }
+
+        updated = []
+
+        for period in self._controller.get_exam_periods():
+            key = period.get_key()
+            updated.append(edited_by_key.get(key, period))
+
+        existing_updated_keys = {period.get_key() for period in updated}
+
+        for semester, moed in self._STANDARD_PERIOD_ORDER:
+            key = f"{semester} - {moed}"
+
+            if (
+                key in self._activated_synthetic_period_keys
+                and key in edited_by_key
+                and key not in existing_updated_keys
+            ):
+                updated.append(edited_by_key[key])
+                existing_updated_keys.add(key)
+
+        deduped = []
+        seen_keys = set()
+
+        for period in updated:
+            key = period.get_key()
+
+            if key in seen_keys:
+                continue
+
+            deduped.append(period)
+            seen_keys.add(key)
+
+        self._controller.update_exam_periods(deduped)
 
 
 class ConfigScreen(QWidget):
@@ -217,6 +503,7 @@ class ConfigScreen(QWidget):
 
         cl.addLayout(top)
         cl.addWidget(self._build_prog_card())
+        cl.addWidget(self._build_periods_card())
 
         self._gen_btn = QPushButton("▶  Generate Schedule")
         self._gen_btn.setObjectName("generateBtn")
@@ -225,6 +512,7 @@ class ConfigScreen(QWidget):
         self._gen_btn.setFixedWidth(220)
         self._gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._gen_btn.clicked.connect(self._on_generate)
+
         cl.addWidget(self._gen_btn, 0, Qt.AlignmentFlag.AlignRight)
         cl.addStretch(1)
 
@@ -413,7 +701,7 @@ class ConfigScreen(QWidget):
         vl.addLayout(hdr)
 
         self._prog_placeholder = QLabel(
-            "Load a courses or programs file to see programmes here."
+            "Load a courses file to see programmes here."
         )
         self._prog_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._prog_placeholder.setStyleSheet(
@@ -444,9 +732,88 @@ class ConfigScreen(QWidget):
             QListWidget::indicator:checked { background: #004394; border-color: #004394; }
         """)
         self._prog_list.itemChanged.connect(self._on_programme_toggled)
+        self._prog_list.currentItemChanged.connect(self._on_prog_selection_changed)
 
         vl.addWidget(self._prog_list)
+
+        view_row = QHBoxLayout()
+        view_row.setContentsMargins(0, 4, 0, 0)
+
+        self._view_courses_btn = QPushButton("View Courses ▶")
+        self._view_courses_btn.setEnabled(False)
+        self._view_courses_btn.setFixedHeight(32)
+        self._view_courses_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._view_courses_btn.setStyleSheet(
+            "QPushButton { background:rgba(0,67,148,0.07);"
+            " border:1px solid rgba(0,67,148,0.2); border-radius:8px;"
+            " padding:0px 14px; font-size:12px; font-weight:600; color:#004394; }"
+            "QPushButton:hover { background:rgba(0,67,148,0.13);"
+            " border-color:#004394; }"
+            "QPushButton:disabled { color:#94A3B8; border-color:rgba(194,198,214,0.4);"
+            " background:transparent; }"
+        )
+        self._view_courses_btn.clicked.connect(self._on_view_courses)
+
+        view_row.addStretch()
+        view_row.addWidget(self._view_courses_btn)
+        vl.addLayout(view_row)
+
         return c
+
+    def _build_periods_card(self) -> QFrame:
+        c = _card()
+
+        vl = QVBoxLayout(c)
+        vl.setContentsMargins(20, 18, 20, 18)
+        vl.setSpacing(10)
+        vl.addWidget(_section_lbl("EXAM PERIODS"))
+
+        self._periods_summary_lbl = QLabel("No periods loaded")
+        self._periods_summary_lbl.setStyleSheet(
+            "font-size:12px; color:#42474e; background:transparent;"
+        )
+        vl.addWidget(self._periods_summary_lbl)
+
+        self._edit_periods_btn = QPushButton("Edit Exam Periods ▶")
+        self._edit_periods_btn.setEnabled(False)
+        self._edit_periods_btn.setFixedHeight(32)
+        self._edit_periods_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._edit_periods_btn.setStyleSheet(
+            "QPushButton { color:#004394; border:1px solid #004394;"
+            " border-radius:6px; padding:0 14px; font-size:12px; font-weight:600;"
+            " background:rgba(0,67,148,0.06); }"
+            "QPushButton:hover:enabled { background:rgba(0,67,148,0.12); }"
+            "QPushButton:disabled { color:#aaa; border-color:#ccc; }"
+        )
+        self._edit_periods_btn.clicked.connect(self._on_edit_periods)
+
+        vl.addWidget(self._edit_periods_btn)
+
+        return c
+
+    def _refresh_periods_card(self) -> None:
+        periods = self._controller.get_exam_periods()
+
+        if not periods:
+            self._periods_summary_lbl.setText("No periods loaded")
+            self._edit_periods_btn.setEnabled(False)
+            return
+
+        display_names = [
+            _display_period_key(period.get_key())
+            for period in periods
+        ]
+
+        self._periods_summary_lbl.setText(
+            "Loaded exam periods:\n" + ", ".join(display_names)
+        )
+        self._edit_periods_btn.setEnabled(True)
+
+    def _on_edit_periods(self) -> None:
+        dlg = ExamPeriodsEditorDialog(self._controller, parent=self)
+        dlg.exec()
+        self._refresh_periods_card()
+        self.periods_changed.emit()
 
     def _build_footer(self) -> QWidget:
         footer = QWidget()
@@ -540,6 +907,7 @@ class ConfigScreen(QWidget):
 
             self._set_status(f"✓  {count} exam period(s) loaded.")
             self._update_gen_btn()
+            self._refresh_periods_card()
             self.periods_changed.emit()
 
         except Exception:
@@ -568,6 +936,7 @@ class ConfigScreen(QWidget):
         self._prog_placeholder.setVisible(not has)
         self._prog_list.setVisible(has)
 
+        self._view_courses_btn.setEnabled(False)
         self._update_prog_label()
         self.courses_changed.emit(self._get_selected_ids())
 
@@ -588,6 +957,42 @@ class ConfigScreen(QWidget):
         self._update_prog_label()
         self._update_gen_btn()
         self.courses_changed.emit(self._get_selected_ids())
+        self._view_courses_btn.setEnabled(
+            self._count_checked() > 0 and self._controller.has_courses
+        )
+
+    def _on_prog_selection_changed(
+        self,
+        current: QListWidgetItem | None,
+        previous: QListWidgetItem | None,
+    ) -> None:
+        self._view_courses_btn.setEnabled(
+            self._count_checked() > 0 and self._controller.has_courses
+        )
+
+    def _on_view_courses(self) -> None:
+        item = self._prog_list.currentItem()
+
+        if item is not None and item.checkState() != Qt.CheckState.Checked:
+            item = None
+
+        if item is None:
+            for i in range(self._prog_list.count()):
+                candidate = self._prog_list.item(i)
+                if candidate.checkState() == Qt.CheckState.Checked:
+                    self._prog_list.setCurrentItem(candidate)
+                    item = candidate
+                    break
+
+        if item is None:
+            return
+
+        pid = item.data(Qt.ItemDataRole.UserRole)
+
+        from src.ui.programme_courses_dialog import ProgrammeCoursesDialog
+
+        dlg = ProgrammeCoursesDialog(pid, self._controller, parent=self)
+        dlg.exec()
 
     def _update_programme_colours(self) -> None:
         slot = 0

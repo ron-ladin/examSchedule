@@ -44,6 +44,53 @@ from src.domain.semester import display_semester
 
 logger = logging.getLogger(__name__)
 
+_STANDARD_PERIOD_ORDER: tuple[tuple[str, str], ...] = (
+    ("FALL", "Aleph"),
+    ("FALL", "Bet"),
+    ("SPRI", "Aleph"),
+    ("SPRI", "Bet"),
+    ("SUMM", "Aleph"),
+    ("SUMM", "Bet"),
+)
+
+
+def _standard_period_keys() -> list[str]:
+    return [
+        f"{semester} - {moed}"
+        for semester, moed in _STANDARD_PERIOD_ORDER
+    ]
+
+
+def _merge_period_keys(
+    controller: DesktopController,
+    schedules_by_period: dict[str, list[Schedule]],
+) -> list[str]:
+    """
+    Return the period tabs that should be shown in the results screen.
+
+    The standard semester/moed tabs are always shown for UI completeness, even
+    when there are no schedules and even when the controller has no loaded
+    periods. Controller periods and generated schedule keys are appended without
+    duplicates.
+    """
+    keys: list[str] = []
+
+    for key in _standard_period_keys():
+        if key not in keys:
+            keys.append(key)
+
+    for period in controller.get_exam_periods():
+        key = period.get_key()
+        if key not in keys:
+            keys.append(key)
+
+    for key in schedules_by_period:
+        if key not in keys:
+            keys.append(key)
+
+    return keys
+
+
 _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
@@ -154,6 +201,7 @@ def _make_data_table(headers: list[str]) -> QTableWidget:
 
 
 def _display_period_key(period_key: str) -> str:
+    # TODO: team decision — tab label format (current: "FALL — Aleph"; alternatives: Hebrew convention)
     if " - " not in period_key:
         return period_key
 
@@ -185,7 +233,6 @@ class _ResultsPanel(QWidget):
         self._prev_btns: dict[str, QPushButton] = {}
         self._next_btns: dict[str, QPushButton] = {}
         self._load_more_btns: dict[str, QPushButton] = {}
-        self._load_more_chunk_btns: dict[str, QPushButton] = {}
 
         self._lm_queues: dict[str, multiprocessing.Queue] = {}
         self._lm_chunk_sizes: dict[str, int | None] = {}
@@ -196,6 +243,7 @@ class _ResultsPanel(QWidget):
 
         self._total_by_period: dict[str, int] = {}
         self._cell_data: dict[str, dict[tuple[int, int], tuple]] = {}
+        self._empty_labels: dict[str, QLabel] = {}
 
         self._has_stale_results: bool = False
         self._stale_banner: QLabel = QLabel()
@@ -224,6 +272,12 @@ class _ResultsPanel(QWidget):
     ) -> None:
         self.clear_stale()
 
+        # Stop any in-flight Load More operation before rebuilding the results UI.
+        # A QTimer timeout may already be queued while a new generation/load starts,
+        # so cleanup must happen before old cards/widgets are removed.
+        for key in set(self._lm_procs) | set(self._lm_timers) | set(self._lm_queues):
+            self._cleanup_load_more_state(key, terminate=True)
+
         self._schedules_by_period = schedules_by_period
         self._courses_by_id = courses_by_id
         self._prog_color_map = prog_color_map
@@ -235,7 +289,7 @@ class _ResultsPanel(QWidget):
             if key not in self._truncated_periods:
                 self._total_by_period[key] = len(scheds)
 
-        all_period_keys = [p.get_key() for p in self._controller.get_exam_periods()]
+        all_period_keys = _merge_period_keys(self._controller, schedules_by_period)
         merged: dict[str, list[Schedule]] = {k: [] for k in all_period_keys}
         merged.update(schedules_by_period)
 
@@ -249,8 +303,8 @@ class _ResultsPanel(QWidget):
         self._prev_btns.clear()
         self._next_btns.clear()
         self._load_more_btns.clear()
-        self._load_more_chunk_btns.clear()
         self._cell_data.clear()
+        self._empty_labels.clear()
 
         for period_key in merged:
             self._period_tabs.addTab(
@@ -410,12 +464,20 @@ class _ResultsPanel(QWidget):
         """)
         layout.addWidget(table)
 
+        empty_lbl = QLabel("No exams scheduled for this period.")
+        empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_lbl.setStyleSheet(
+            "color: #72778c; font-size: 13px; padding: 24px; background: transparent;"
+        )
+        empty_lbl.setVisible(False)
+        layout.addWidget(empty_lbl)
+
         self._counter_labels[period_key] = counter
         self._cal_tables[period_key] = table
+        self._empty_labels[period_key] = empty_lbl
         self._prev_btns[period_key] = prev_btn
         self._next_btns[period_key] = next_btn
         self._load_more_btns[period_key] = chunk_btn
-        self._load_more_chunk_btns[period_key] = chunk_btn
 
         table.cellClicked.connect(
             lambda row, col, k=period_key: self._on_cell_clicked(k, row, col)
@@ -435,8 +497,14 @@ class _ResultsPanel(QWidget):
 
         if total == 0:
             nav_text = "0 / 0"
+            if period_key in self._empty_labels:
+                self._empty_labels[period_key].setVisible(True)
+                self._cal_tables[period_key].setVisible(False)
         else:
             nav_text = f"{idx + 1:,} / {display_total:,}"
+            if period_key in self._empty_labels:
+                self._empty_labels[period_key].setVisible(False)
+                self._cal_tables[period_key].setVisible(True)
 
         self._counter_labels[period_key].setText(nav_text)
         self._prev_btns[period_key].setEnabled(idx > 0)
@@ -444,9 +512,6 @@ class _ResultsPanel(QWidget):
 
         if period_key in self._load_more_btns:
             self._load_more_btns[period_key].setVisible(has_more)
-
-        if period_key in self._load_more_chunk_btns:
-            self._load_more_chunk_btns[period_key].setVisible(has_more)
 
         if schedules:
             self._populate_calendar(
@@ -502,9 +567,10 @@ class _ResultsPanel(QWidget):
         self._lm_ticks[period_key] = 0
         self._lm_chunk_sizes[period_key] = RESULT_BATCH_SIZE
 
-        btn = self._load_more_btns[period_key]
-        btn.setEnabled(False)
-        btn.setText(f"⠋  Loading {RESULT_BATCH_SIZE:,}…")
+        btn = self._load_more_btns.get(period_key)
+        if btn is not None:
+            btn.setEnabled(False)
+            btn.setText(f"⠋  Loading {RESULT_BATCH_SIZE:,}…")
 
         timer = QTimer(self)
         timer.timeout.connect(lambda: self._poll_load_more(period_key))
@@ -513,6 +579,13 @@ class _ResultsPanel(QWidget):
         self._lm_timers[period_key] = timer
 
     def _poll_load_more(self, period_key: str) -> None:
+        queue = self._lm_queues.get(period_key)
+        if queue is None:
+            # The results were rebuilt while this timer callback was already queued.
+            # Exit safely instead of raising KeyError on stale state.
+            self._cleanup_load_more_state(period_key, terminate=True)
+            return
+
         tick = self._lm_ticks.get(period_key, 0)
         spinner = _SPINNER_CHARS[tick % len(_SPINNER_CHARS)]
         self._lm_ticks[period_key] = tick + 1
@@ -522,8 +595,31 @@ class _ResultsPanel(QWidget):
             btn.setText(f"{spinner}  Loading {RESULT_BATCH_SIZE:,}…")
 
         try:
-            result = self._lm_queues[period_key].get_nowait()
-        except (_QueueEmpty, OSError):
+            result = queue.get_nowait()
+        except _QueueEmpty:
+            proc = self._lm_procs.get(period_key)
+
+            # If the subprocess already ended and no result arrived, recover the UI
+            # instead of leaving the button disabled forever.
+            if proc is not None and not proc.is_alive() and tick > 2:
+                if btn:
+                    btn.setEnabled(True)
+                    btn.setText("⚠  Load failed — retry")
+
+                logger.error(
+                    "Load more process ended without returning a result for %s",
+                    period_key,
+                )
+                self._cleanup_load_more_state(period_key, terminate=False)
+
+            return
+        except OSError as exc:
+            if btn:
+                btn.setEnabled(True)
+                btn.setText("⚠  Load failed — retry")
+
+            logger.error("Load more queue failed for %s: %s", period_key, exc)
+            self._cleanup_load_more_state(period_key, terminate=True)
             return
 
         timer = self._lm_timers.pop(period_key, None)
@@ -603,13 +699,14 @@ class _ResultsPanel(QWidget):
             try:
                 if terminate and proc.is_alive():
                     proc.terminate()
-                    proc.join(timeout=0.5)
+                    proc.join(timeout=0)
 
                     if proc.is_alive():
                         proc.kill()
-                        proc.join(timeout=0.5)
-
-                proc.join(timeout=0.1)
+                        proc.join(timeout=0)
+                else:
+                    # Non-blocking reap if the process already finished.
+                    proc.join(timeout=0)
             except Exception:
                 logger.debug("Failed cleaning up load-more process", exc_info=True)
 
@@ -681,8 +778,12 @@ class _ResultsPanel(QWidget):
         for course_id, exam_date in schedule.assignments.items():
             date_to_ids.setdefault(exam_date, []).append(course_id)
 
-        all_dates = sorted(date_to_ids)
-        start, end = all_dates[0], all_dates[-1]
+        if period_obj and period_obj.date_ranges:
+            start, end = period_obj.get_overall_date_boundaries()
+        else:
+            all_dates = sorted(date_to_ids)
+            start, end = all_dates[0], all_dates[-1]
+
         week_start = start - timedelta(days=start.weekday())
         last_sunday = end + timedelta(days=6 - end.weekday())
         num_weeks = (last_sunday - week_start).days // 7 + 1
@@ -774,21 +875,61 @@ class _ResultsPanel(QWidget):
         )
         dialog.exec()
 
+    def _show_message(
+        self,
+        title: str,
+        text: str,
+        icon: QMessageBox.Icon,
+    ) -> None:
+        """Show a readable dark-themed message box."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle(title)
+        msg.setIcon(icon)
+        msg.setText(text)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: #111827;
+            }
+
+            QMessageBox QLabel {
+                color: #FFFFFF;
+                font-size: 13px;
+                background: transparent;
+            }
+
+            QMessageBox QPushButton {
+                background-color: transparent;
+                color: #FFFFFF;
+                border: 1px solid #2563EB;
+                border-radius: 8px;
+                padding: 6px 18px;
+                min-width: 72px;
+                min-height: 28px;
+            }
+
+            QMessageBox QPushButton:hover {
+                background-color: #2563EB;
+                color: #FFFFFF;
+            }
+        """)
+        msg.exec()
+
     def _on_save(self) -> None:
         if self._has_stale_results:
-            QMessageBox.warning(
-                self,
+            self._show_message(
                 "Stale Schedules",
                 "Exam period dates have changed since the last generation.\n\n"
                 "Please click  ▶  Generate again before exporting.",
+                QMessageBox.Icon.Warning,
             )
             return
 
         if not self._schedules_by_period:
-            QMessageBox.warning(
-                self,
+            self._show_message(
                 "Nothing to Save",
                 "No schedules have been generated.",
+                QMessageBox.Icon.Warning,
             )
             return
 
@@ -809,24 +950,24 @@ class _ResultsPanel(QWidget):
         }
 
         if not selected:
-            QMessageBox.warning(
-                self,
+            self._show_message(
                 "Nothing to Save",
                 "No schedules are currently displayed.",
+                QMessageBox.Icon.Warning,
             )
             return
 
         try:
             self._controller.export(selected, Path(path))
-            QMessageBox.information(
-                self,
+            self._show_message(
                 "Saved",
                 f"Schedule saved to:\n{path}",
+                QMessageBox.Icon.Information,
             )
-        except Exception:
-            QMessageBox.critical(
-                self,
+        except Exception as exc:
+            logger.exception("Save failed")
+            self._show_message(
                 "Save Error",
                 "Could not save the schedule file. Please check the selected path and try again.",
+                QMessageBox.Icon.Critical,
             )
-            logger.exception("Save failed")
