@@ -527,19 +527,18 @@ class DateEditorWidget(QWidget):
 
         if new_start > new_end:
             self._showing_error = True
+            self._start_edit.blockSignals(True)
+            self._end_edit.blockSignals(True)
+
             QMessageBox.warning(
                 self,
                 "Invalid Date Range",
                 "The <b>Start Date</b> must be before the <b>End Date</b>.<br><br>"
                 "Please select a valid date range.",
             )
-            self._showing_error = False
 
             if self._period.date_ranges:
                 start_date, end_date = self._period.get_overall_date_boundaries()
-
-                self._start_edit.blockSignals(True)
-                self._end_edit.blockSignals(True)
 
                 self._start_edit.setDate(
                     QDate(start_date.year, start_date.month, start_date.day)
@@ -548,9 +547,9 @@ class DateEditorWidget(QWidget):
                     QDate(end_date.year, end_date.month, end_date.day)
                 )
 
-                self._start_edit.blockSignals(False)
-                self._end_edit.blockSignals(False)
-
+            self._start_edit.blockSignals(False)
+            self._end_edit.blockSignals(False)
+            self._showing_error = False
             return
 
         self._period.excluded_dates = {
