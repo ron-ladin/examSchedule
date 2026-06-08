@@ -21,6 +21,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QDate, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QAbstractSpinBox,
     QDateEdit,
     QFrame,
     QGridLayout,
@@ -147,6 +148,7 @@ class _DayButton(QPushButton):
             f"}}"
         )
         self.update()
+
 
 # ── Month widget ──────────────────────────────────────────────────────────────
 
@@ -318,19 +320,67 @@ class DateEditorWidget(QWidget):
             "QCalendarWidget QToolButton { color:#374151; background:transparent; }"
         )
 
+        _read_only_date_edit_style = (
+            "QDateEdit {"
+            " background:#F8FAFC;"
+            " color:#374151;"
+            " border:1px solid #D1D5DB;"
+            " border-radius:6px;"
+            " padding:3px 8px;"
+            "}"
+            "QDateEdit::drop-down {"
+            " width: 0px;"
+            " border: none;"
+            " background: transparent;"
+            "}"
+            "QDateEdit::down-arrow {"
+            " image: none;"
+            " width: 0px;"
+            " height: 0px;"
+            "}"
+            "QDateEdit:disabled {"
+            " background:#F8FAFC;"
+            " color:#374151;"
+            " border:1px solid #D1D5DB;"
+            "}"
+        )
+
         self._start_edit = QDateEdit()
-        self._start_edit.setCalendarPopup(True)
+        self._start_edit.setCalendarPopup(not self._read_only)
         self._start_edit.setDisplayFormat("dd/MM/yyyy")
         self._start_edit.setFixedWidth(160)
         self._start_edit.setMinimumWidth(160)
-        self._start_edit.setStyleSheet(_date_edit_style)
 
         self._end_edit = QDateEdit()
-        self._end_edit.setCalendarPopup(True)
+        self._end_edit.setCalendarPopup(not self._read_only)
         self._end_edit.setDisplayFormat("dd/MM/yyyy")
         self._end_edit.setFixedWidth(160)
         self._end_edit.setMinimumWidth(160)
-        self._end_edit.setStyleSheet(_date_edit_style)
+
+        date_edit_style = (
+            _read_only_date_edit_style
+            if self._read_only
+            else _date_edit_style
+        )
+        self._start_edit.setStyleSheet(date_edit_style)
+        self._end_edit.setStyleSheet(date_edit_style)
+
+        if self._read_only:
+            self._start_edit.setButtonSymbols(
+                QAbstractSpinBox.ButtonSymbols.NoButtons
+            )
+            self._end_edit.setButtonSymbols(
+                QAbstractSpinBox.ButtonSymbols.NoButtons
+            )
+            self._start_edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self._end_edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        else:
+            self._start_edit.setButtonSymbols(
+                QAbstractSpinBox.ButtonSymbols.UpDownArrows
+            )
+            self._end_edit.setButtonSymbols(
+                QAbstractSpinBox.ButtonSymbols.UpDownArrows
+            )
 
         if self._period.date_ranges:
             start_date, end_date = self._period.get_overall_date_boundaries()
@@ -376,6 +426,8 @@ class DateEditorWidget(QWidget):
             self._end_edit.setEnabled(False)
 
         if self._read_only:
+            self.setToolTip("Exam periods are read-only after schedule generation.")
+
             self._start_edit.setEnabled(False)
             self._end_edit.setEnabled(False)
 
