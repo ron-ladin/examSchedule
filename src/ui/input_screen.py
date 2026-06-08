@@ -85,24 +85,16 @@ _STANDARD_PERIOD_ORDER: tuple[tuple[str, str], ...] = (
     ("SUMM", "Bet"),
 )
 
-
 def _build_display_periods(controller: DesktopController) -> list[ExamPeriod]:
     """
     Build the list of exam periods shown in the UI editor tabs.
 
-    Important:
-    Missing standard periods are created for display only. This helper does not
-    mutate the controller state. The controller is updated only after the user
-    actually edits a DateEditorWidget and _sync_periods() is called.
+    Real loaded periods keep their real dates.
+    Missing standard periods are shown as empty display-only periods, without
+    copying dates from another semester/moed.
     """
     existing_periods = list(controller.get_exam_periods())
     existing_by_key = {period.get_key(): period for period in existing_periods}
-
-    if existing_periods:
-        fallback_start, fallback_end = existing_periods[0].get_overall_date_boundaries()
-    else:
-        fallback_start = date.today()
-        fallback_end = fallback_start + timedelta(days=13)
 
     display_periods: list[ExamPeriod] = []
 
@@ -117,17 +109,18 @@ def _build_display_periods(controller: DesktopController) -> list[ExamPeriod]:
             ExamPeriod(
                 semester=semester,
                 moed=moed,
-                date_ranges=[(fallback_start, fallback_end)],
+                date_ranges=[],
                 excluded_dates=set(),
             )
         )
 
+    display_keys = {period.get_key() for period in display_periods}
+
     for period in existing_periods:
-        if period.get_key() not in {p.get_key() for p in display_periods}:
+        if period.get_key() not in display_keys:
             display_periods.append(period)
 
     return display_periods
-
 
 class ResultsScreen(QWidget):
     """Screen 1: Course Details | Exam Periods | Schedule Results + loading pane."""
@@ -222,6 +215,34 @@ class ResultsScreen(QWidget):
 
         for period in _build_display_periods(self._controller):
             key = period.get_key()
+
+            if not period.date_ranges:
+                wrapper = QWidget()
+                wrapper_layout = QVBoxLayout(wrapper)
+                wrapper_layout.setContentsMargins(8, 8, 8, 8)
+                wrapper_layout.setSpacing(8)
+
+                missing_lbl = QLabel(
+                    "No exam period dates are defined for this semester/moed."
+                )
+                missing_lbl.setWordWrap(True)
+                missing_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                missing_lbl.setStyleSheet(
+                    "background: #FEF3C7;"
+                    "color: #92400E;"
+                    "border: 1px solid #F59E0B;"
+                    "border-radius: 8px;"
+                    "padding: 10px 14px;"
+                    "font-size: 12px;"
+                    "font-weight: 600;"
+                )
+
+                wrapper_layout.addWidget(missing_lbl)
+                wrapper_layout.addStretch()
+
+                self._periods_tabs.addTab(wrapper, _display_period_key(key))
+                continue
+
             editor = DateEditorWidget(period, read_only=True)
             self._date_editors[key] = editor
             self._periods_tabs.addTab(editor, _display_period_key(key))

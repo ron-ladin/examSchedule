@@ -186,8 +186,8 @@ class ExamPeriodsEditorDialog(QDialog):
         Build all semester/moed tabs shown in the pre-generation editor dialog.
 
         Existing periods keep their real loaded dates.
-        Missing standard periods are created for UI display only.
-        They are not written into controller state until the user edits that tab.
+        Missing standard periods are shown as empty display-only periods.
+        They are not written into controller state until the user defines dates.
         """
         from src.domain.exam_period import ExamPeriod
 
@@ -196,12 +196,6 @@ class ExamPeriodsEditorDialog(QDialog):
             period.get_key(): period
             for period in existing_periods
         }
-
-        if existing_periods:
-            fallback_start, fallback_end = existing_periods[0].get_overall_date_boundaries()
-        else:
-            fallback_start = date.today()
-            fallback_end = fallback_start + timedelta(days=13)
 
         display_periods: list[ExamPeriod] = []
 
@@ -215,7 +209,7 @@ class ExamPeriodsEditorDialog(QDialog):
                     ExamPeriod(
                         semester=semester,
                         moed=moed,
-                        date_ranges=[(fallback_start, fallback_end)],
+                        date_ranges=[],
                         excluded_dates=set(),
                     )
                 )
