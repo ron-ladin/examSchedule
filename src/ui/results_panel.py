@@ -44,6 +44,53 @@ from src.domain.semester import display_semester
 
 logger = logging.getLogger(__name__)
 
+_STANDARD_PERIOD_ORDER: tuple[tuple[str, str], ...] = (
+    ("FALL", "Aleph"),
+    ("FALL", "Bet"),
+    ("SPRI", "Aleph"),
+    ("SPRI", "Bet"),
+    ("SUMM", "Aleph"),
+    ("SUMM", "Bet"),
+)
+
+
+def _standard_period_keys() -> list[str]:
+    return [
+        f"{semester} - {moed}"
+        for semester, moed in _STANDARD_PERIOD_ORDER
+    ]
+
+
+def _merge_period_keys(
+    controller: DesktopController,
+    schedules_by_period: dict[str, list[Schedule]],
+) -> list[str]:
+    """
+    Return the period tabs that should be shown in the results screen.
+
+    The standard semester/moed tabs are always shown for UI completeness, even
+    when there are no schedules and even when the controller has no loaded
+    periods. Controller periods and generated schedule keys are appended without
+    duplicates.
+    """
+    keys: list[str] = []
+
+    for key in _standard_period_keys():
+        if key not in keys:
+            keys.append(key)
+
+    for period in controller.get_exam_periods():
+        key = period.get_key()
+        if key not in keys:
+            keys.append(key)
+
+    for key in schedules_by_period:
+        if key not in keys:
+            keys.append(key)
+
+    return keys
+
+
 _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
@@ -237,7 +284,7 @@ class _ResultsPanel(QWidget):
             if key not in self._truncated_periods:
                 self._total_by_period[key] = len(scheds)
 
-        all_period_keys = [p.get_key() for p in self._controller.get_exam_periods()]
+        all_period_keys = _merge_period_keys(self._controller, schedules_by_period)
         merged: dict[str, list[Schedule]] = {k: [] for k in all_period_keys}
         merged.update(schedules_by_period)
 
@@ -699,8 +746,12 @@ class _ResultsPanel(QWidget):
         for course_id, exam_date in schedule.assignments.items():
             date_to_ids.setdefault(exam_date, []).append(course_id)
 
-        all_dates = sorted(date_to_ids)
-        start, end = all_dates[0], all_dates[-1]
+        if period_obj and period_obj.date_ranges:
+            start, end = period_obj.get_overall_date_boundaries()
+        else:
+            all_dates = sorted(date_to_ids)
+            start, end = all_dates[0], all_dates[-1]
+
         week_start = start - timedelta(days=start.weekday())
         last_sunday = end + timedelta(days=6 - end.weekday())
         num_weeks = (last_sunday - week_start).days // 7 + 1
