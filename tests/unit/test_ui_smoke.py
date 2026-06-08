@@ -278,7 +278,7 @@ def test_edit_exam_periods_dialog_does_not_add_missing_periods_to_controller_unt
 def test_editing_synthetic_exam_period_tab_adds_it_to_controller():
     """
     A missing standard period should be added to the controller only after the
-    user actually edits that synthetic tab.
+    user defines dates for that synthetic tab and edits it.
     """
     app = _get_qapp()
 
@@ -288,6 +288,7 @@ def test_editing_synthetic_exam_period_tab_adds_it_to_controller():
     ])
 
     from src.ui.config_screen import ExamPeriodsEditorDialog
+    from src.ui.date_editor import DateEditorWidget
 
     dialog = ExamPeriodsEditorDialog(controller)
     dialog.show()
@@ -297,12 +298,27 @@ def test_editing_synthetic_exam_period_tab_adds_it_to_controller():
     labels = [tabs.tabText(i) for i in range(tabs.count())]
 
     spring_bet_index = labels.index("SPRING — Bet")
+    missing_tab = tabs.widget(spring_bet_index)
+
+    # Missing periods are first shown as a wrapper with a Define button.
+    define_btn = None
+    for btn in missing_tab.findChildren(QtWidgets.QPushButton):
+        if "Define exam period dates" in btn.text():
+            define_btn = btn
+            break
+
+    assert define_btn is not None
+
+    # Simulate the user defining dates for the missing period.
+    define_btn.click()
+    app.processEvents()
+
     editor = tabs.widget(spring_bet_index)
 
-    # Simulate a user edit on the synthetic tab.
-    # Direct method call is acceptable here because this is a lightweight
-    # UI-controller integration smoke test, not full mouse automation.
-    editor._on_day_toggled(date(2026, 1, 29))
+    assert isinstance(editor, DateEditorWidget)
+
+    # Simulate a user edit on the newly activated real editor.
+    editor._on_day_toggled(date.today())
     app.processEvents()
 
     period_keys = [period.get_key() for period in controller.get_exam_periods()]
