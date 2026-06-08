@@ -10,7 +10,6 @@ Failure          : generation_failed   → hide spinner + back to Config + error
 """
 
 import logging
-from datetime import date, timedelta
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -223,7 +222,8 @@ class ResultsScreen(QWidget):
                 wrapper_layout.setSpacing(8)
 
                 missing_lbl = QLabel(
-                    "No exam period dates are defined for this semester/moed."
+                    "No exam period dates are defined for this semester/moed. "
+                    "Use Edit Exam Periods before generation to define it."
                 )
                 missing_lbl.setWordWrap(True)
                 missing_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -409,43 +409,6 @@ class ResultsScreen(QWidget):
     def reset_results_state(self) -> None:
         self._results_loaded = False
 
-    def _sync_periods(self, changed_key: str | None = None) -> None:
-        """
-        Sync edited periods back into the controller.
-
-        Existing periods are updated normally. Synthetic tabs that were added
-        only for UI completeness are not inserted into controller state unless
-        the user actually edits that specific tab.
-        """
-        if changed_key and changed_key not in self._period_editor_existing_keys:
-            self._activated_synthetic_period_keys.add(changed_key)
-
-        edited_by_key = {
-            key: editor.get_exam_period()
-            for key, editor in self._date_editors.items()
-        }
-
-        updated = []
-
-        for period in self._controller.get_exam_periods():
-            key = period.get_key()
-            updated.append(edited_by_key.get(key, period))
-
-        for semester, moed in _STANDARD_PERIOD_ORDER:
-            key = f"{semester} - {moed}"
-            if key in self._activated_synthetic_period_keys and key in edited_by_key:
-                updated.append(edited_by_key[key])
-
-        updated_keys = {period.get_key() for period in updated}
-        for key in sorted(self._activated_synthetic_period_keys):
-            if key not in updated_keys and key in edited_by_key:
-                updated.append(edited_by_key[key])
-                updated_keys.add(key)
-
-        self._controller.update_exam_periods(updated)
-
-        if self._results_loaded:
-            self._results_panel.mark_stale()
 
     def _tick_spinner(self) -> None:
         self._spinner_lbl.setText(_SPINNER[self._spin_tick % len(_SPINNER)])
