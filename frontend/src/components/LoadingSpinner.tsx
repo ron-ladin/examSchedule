@@ -15,7 +15,7 @@ const spinnerSizeClasses: Record<NonNullable<LoadingSpinnerProps['size']>, strin
   large: 'h-16 w-16 border-4',
 };
 /**
- * LoadingSpinner - A reusable, accessible functional component that renders 
+ * LoadingSpinner - A reusable, accessible functional component that renders
  * an animated loading indicator styled with custom Tailwind design tokens.
  */
 

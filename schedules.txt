@@ -5,4 +5,3 @@ Schedule #1:
   [FALL - Bet]
   - Physics 1 | Course ID: 83102 | Date: 10-04-2026 | Instructor: Prof. O. Some
   - Calculus 1 | Course ID: 83112 | Date: 16-04-2026 | Instructor: Dr. Erez Scheiner
-

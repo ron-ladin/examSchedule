@@ -30,12 +30,12 @@ module.exports = {
           validDate: '#dbeafe',  // Light blue background for active open days on the calendar
         }
       },
-      
+
       // 2. Typography Standard (Font family token)
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'], // Professional, clean font style
       },
-      
+
       // 3. Layout Spacing Tokens (Matches the Python layout spacing values)
       spacing: {
         'calendar-cell': '30px',  // The exact 30px size for calendar day cells from Python
