@@ -38,16 +38,18 @@ from src.domain.exam_period import ExamPeriod
 from src.ui.tokens import (
     COLOR_CAL_ACTIVE_BG as _ACTIVE_BG,
     COLOR_CAL_ACTIVE_FG as _ACTIVE_FG,
-    COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG,
-    COLOR_CAL_EXCLUDED_FG as _EXCLUDED_FG,
 )
 
 
 _ARROW_SVG = (Path(__file__).parent / "assets" / "arrow_down_white.svg").as_posix()
 
 # ── Colour palette ────────────────────────────────────────────────────────────
-_SAT_BG, _SAT_FG = "#f3f4f6", "#9ca3af"       # Saturday (auto-excluded)
-_OUT_BG, _OUT_FG = "#FEF2F2", "#EF4444"       # outside range — red to signal unavailability
+_SAT_BG, _SAT_FG = "#f3f4f6", "#9ca3af"       # Saturday
+_OUT_BG, _OUT_FG = "#FEF2F2", "#EF4444"       # outside range
+
+_EXCLUDED_BG = "#FEE2E2"                      # stronger red background
+_EXCLUDED_FG = "#B91C1C"                      # dark red text
+_EXCLUDED_BORDER = "#DC2626"                  # red border
 
 
 def _build_legend() -> QWidget:
@@ -120,22 +122,31 @@ class _DayButton(QPushButton):
     def _refresh_style(self) -> None:
         if self._is_saturday:
             bg, fg = _SAT_BG, _SAT_FG
+            border = "none"
         elif not self._in_range:
             bg, fg = _OUT_BG, _OUT_FG
+            border = "none"
         elif self._excluded:
             bg, fg = _EXCLUDED_BG, _EXCLUDED_FG
+            border = f"2px solid {_EXCLUDED_BORDER}"
         else:
             bg, fg = _ACTIVE_BG, _ACTIVE_FG
+            border = "none"
 
         self.setStyleSheet(
             f"QPushButton {{"
-            f"  background: {bg}; color: {fg};"
-            f"  border: none; border-radius: 6px; font-size: 13px; font-weight: bold;"
+            f"  background: {bg};"
+            f"  color: {fg};"
+            f"  border: {border};"
+            f"  border-radius: 6px;"
+            f"  font-size: 13px;"
+            f"  font-weight: bold;"
             f"}}"
-            f"QPushButton:hover:enabled {{ border: 2px solid {fg}; }}"
+            f"QPushButton:hover:enabled {{"
+            f"  border: 2px solid {fg};"
+            f"}}"
         )
         self.update()
-
 
 # ── Month widget ──────────────────────────────────────────────────────────────
 
@@ -239,7 +250,12 @@ class DateEditorWidget(QWidget):
     period_changed = pyqtSignal()
     _multi_range_notice: QLabel
 
-    def __init__(self, exam_period: ExamPeriod, parent=None):
+    def __init__(
+        self,
+        exam_period: ExamPeriod,
+        parent=None,
+        read_only: bool = False,
+    ):
         super().__init__(parent)
 
         self._period = copy.deepcopy(exam_period)
@@ -247,6 +263,7 @@ class DateEditorWidget(QWidget):
         self._building = False
         self._showing_error = False
         self._multi_range: bool = len(self._period.date_ranges) > 1
+        self._read_only = read_only
 
         self._setup_ui()
 
@@ -358,6 +375,13 @@ class DateEditorWidget(QWidget):
             self._start_edit.setEnabled(False)
             self._end_edit.setEnabled(False)
 
+        if self._read_only:
+            self._start_edit.setEnabled(False)
+            self._end_edit.setEnabled(False)
+
+            for btn in self._day_buttons.values():
+                btn.setEnabled(False)
+
     def _rebuild_calendar(self) -> None:
         """Recreate all month widgets from the current period state."""
         self._building = True
@@ -415,6 +439,9 @@ class DateEditorWidget(QWidget):
 
     def _on_day_toggled(self, d: date) -> None:
         """§2.4.2 — Toggle one date between active and excluded."""
+        if self._read_only:
+            return
+
         if d in self._period.excluded_dates:
             self._period.excluded_dates.discard(d)
         else:
@@ -429,7 +456,7 @@ class DateEditorWidget(QWidget):
 
     def _on_range_changed(self) -> None:
         """§2.4.3 — Sync the period date range with the QDateEdit values."""
-        if self._multi_range or self._building or self._showing_error:
+        if self._read_only or self._multi_range or self._building or self._showing_error:
             return
 
         start_qdate = self._start_edit.date()

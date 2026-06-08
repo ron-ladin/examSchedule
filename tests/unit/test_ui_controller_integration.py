@@ -387,12 +387,15 @@ def test_programme_selection_signal_updates_visible_course_table(tmp_path):
     screen.close()
 
 
-# ── Date exclusions propagate to generation ────────────────────────
+# ── Results Exam Periods are read-only ─────────────────────────────
 
-def test_date_editor_exclusion_propagates_to_controller_generation(tmp_path):
+def test_results_exam_periods_are_read_only_and_do_not_update_controller(tmp_path):
     """
-    Excluding a date through DateEditorWidget should update controller periods,
-    and the next generation should not assign exams to the excluded date.
+    The ResultsScreen Exam Periods tab is view-only.
+
+    Date changes are allowed only from the home/config screen. After generation,
+    the Exam Periods tab should display the periods but must not allow changing
+    exclusions or date ranges through DateEditorWidget.
     """
     app = _get_qapp()
 
@@ -420,16 +423,7 @@ def test_date_editor_exclusion_propagates_to_controller_generation(tmp_path):
     app.processEvents()
 
     updated_period = controller.get_exam_periods()[0]
-    assert excluded in updated_period.excluded_dates
-
-    schedules_by_period, _, truncated = controller.generate()
-
-    assert truncated == set()
-    assert schedules_by_period
-
-    for schedules in schedules_by_period.values():
-        for schedule in schedules:
-            assert excluded not in schedule.assignments.values()
+    assert excluded not in updated_period.excluded_dates
 
     screen.close()
 

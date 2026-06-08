@@ -10,6 +10,7 @@ Failure          : generation_failed   → hide spinner + back to Config + error
 """
 
 import logging
+from datetime import date, timedelta
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -29,6 +30,7 @@ from PyQt6.QtWidgets import (
 
 from src.controller import DesktopController
 from src.domain.course import Course
+from src.domain.exam_period import ExamPeriod
 from src.domain.schedule import Schedule
 from src.ui.config_screen import ConfigScreen
 from src.ui.date_editor import DateEditorWidget
@@ -71,7 +73,60 @@ _TAB_INACTIVE_STYLE = (
     " background: rgba(0, 90, 194, 0.04);"
     " color: #005ac2;"
     "}"
+
 )
+
+_STANDARD_PERIOD_ORDER: tuple[tuple[str, str], ...] = (
+    ("FALL", "Aleph"),
+    ("FALL", "Bet"),
+    ("SPRI", "Aleph"),
+    ("SPRI", "Bet"),
+    ("SUMM", "Aleph"),
+    ("SUMM", "Bet"),
+)
+
+
+def _build_display_periods(controller: DesktopController) -> list[ExamPeriod]:
+    """
+    Build the list of exam periods shown in the UI editor tabs.
+
+    Important:
+    Missing standard periods are created for display only. This helper does not
+    mutate the controller state. The controller is updated only after the user
+    actually edits a DateEditorWidget and _sync_periods() is called.
+    """
+    existing_periods = list(controller.get_exam_periods())
+    existing_by_key = {period.get_key(): period for period in existing_periods}
+
+    if existing_periods:
+        fallback_start, fallback_end = existing_periods[0].get_overall_date_boundaries()
+    else:
+        fallback_start = date.today()
+        fallback_end = fallback_start + timedelta(days=13)
+
+    display_periods: list[ExamPeriod] = []
+
+    for semester, moed in _STANDARD_PERIOD_ORDER:
+        key = f"{semester} - {moed}"
+
+        if key in existing_by_key:
+            display_periods.append(existing_by_key[key])
+            continue
+
+        display_periods.append(
+            ExamPeriod(
+                semester=semester,
+                moed=moed,
+                date_ranges=[(fallback_start, fallback_end)],
+                excluded_dates=set(),
+            )
+        )
+
+    for period in existing_periods:
+        if period.get_key() not in {p.get_key() for p in display_periods}:
+            display_periods.append(period)
+
+    return display_periods
 
 
 class ResultsScreen(QWidget):
@@ -83,6 +138,8 @@ class ResultsScreen(QWidget):
         super().__init__(parent)
         self._controller = controller
         self._date_editors: dict[str, DateEditorWidget] = {}
+        self._period_editor_existing_keys: set[str] = set()
+        self._activated_synthetic_period_keys: set[str] = set()
         self._spin_tick = 0
         self._spin_timer = QTimer(self)
         self._spin_timer.timeout.connect(self._tick_spinner)
@@ -148,6 +205,11 @@ class ResultsScreen(QWidget):
     def refresh_periods(self) -> None:
         self._periods_tabs.clear()
         self._date_editors.clear()
+        self._period_editor_existing_keys = {
+            period.get_key()
+            for period in self._controller.get_exam_periods()
+        }
+        self._activated_synthetic_period_keys.clear()
 
         periods = self._controller.get_exam_periods()
         if not periods:
@@ -158,10 +220,9 @@ class ResultsScreen(QWidget):
         self._no_periods_hint.setVisible(False)
         self._periods_tabs.setVisible(True)
 
-        for period in periods:
+        for period in _build_display_periods(self._controller):
             key = period.get_key()
-            editor = DateEditorWidget(period)
-            editor.period_changed.connect(self._sync_periods)
+            editor = DateEditorWidget(period, read_only=True)
             self._date_editors[key] = editor
             self._periods_tabs.addTab(editor, _display_period_key(key))
 
@@ -327,10 +388,40 @@ class ResultsScreen(QWidget):
     def reset_results_state(self) -> None:
         self._results_loaded = False
 
-    def _sync_periods(self) -> None:
-        self._controller.update_exam_periods(
-            [editor.get_exam_period() for editor in self._date_editors.values()]
-        )
+    def _sync_periods(self, changed_key: str | None = None) -> None:
+        """
+        Sync edited periods back into the controller.
+
+        Existing periods are updated normally. Synthetic tabs that were added
+        only for UI completeness are not inserted into controller state unless
+        the user actually edits that specific tab.
+        """
+        if changed_key and changed_key not in self._period_editor_existing_keys:
+            self._activated_synthetic_period_keys.add(changed_key)
+
+        edited_by_key = {
+            key: editor.get_exam_period()
+            for key, editor in self._date_editors.items()
+        }
+
+        updated = []
+
+        for period in self._controller.get_exam_periods():
+            key = period.get_key()
+            updated.append(edited_by_key.get(key, period))
+
+        for semester, moed in _STANDARD_PERIOD_ORDER:
+            key = f"{semester} - {moed}"
+            if key in self._activated_synthetic_period_keys and key in edited_by_key:
+                updated.append(edited_by_key[key])
+
+        updated_keys = {period.get_key() for period in updated}
+        for key in sorted(self._activated_synthetic_period_keys):
+            if key not in updated_keys and key in edited_by_key:
+                updated.append(edited_by_key[key])
+                updated_keys.add(key)
+
+        self._controller.update_exam_periods(updated)
 
         if self._results_loaded:
             self._results_panel.mark_stale()
