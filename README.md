@@ -79,7 +79,9 @@ flowchart TD
 > **University exam scheduler** — given a course catalog, exam windows, and a set of study programs, generates every valid conflict-free timetable using a backtracking CSP solver with an MCV heuristic.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-191%20passed-2ecc71?style=flat-square)
+![Tests](https://img.shields.io/badge/Tests-210%20passed-2ecc71?style=flat-square)
+![Coverage](https://img.shields.io/badge/Coverage-90%25-2ecc71?style=flat-square)
+![Release](https://img.shields.io/badge/Release-Part%202-4a90d9?style=flat-square)
 ![Architecture](https://img.shields.io/badge/Architecture-Clean%20%2F%20Ports%20%26%20Adapters-c678dd?style=flat-square)
 ![Algorithm](https://img.shields.io/badge/Algorithm-Backtracking%20%2B%20MCV-e5a22e?style=flat-square)
 ![UI](https://img.shields.io/badge/UI-PyQt6%20Desktop-4a90d9?style=flat-square)
@@ -98,8 +100,6 @@ flowchart TD
 - [Input File Formats](#input-file-formats)
 - [Output Format](#output-format)
 - [Testing](#testing)
-- [All Diagrams](#all-diagrams)
-
 ---
 
 ## Overview
@@ -435,7 +435,7 @@ examSchedule/
 │   ├── unit/                        # Unit tests for domain, engine, adapters, readers, controller logic
 │   ├── e2e/                         # End-to-end desktop and pipeline flows
 │   └── ui/                          # PyQt6 smoke and UI-controller tests
-└── diagrams.md                      # Full Mermaid diagram set
+└── requirements-dev.txt             # Dev dependencies (pytest, pylint, pre-commit)
 ```
 
 ---
@@ -639,10 +639,7 @@ No valid schedules found.
 
 ## Testing
 
-The test scope matches the current **PyQt6 desktop application** architecture.
-
-HTTP/API testing is not part of the current project scope.
-There are no FastAPI endpoint tests, no HTTP integration tests, and no `pytest-asyncio` API tests.
+The test scope covers the **PyQt6 desktop application** — domain, engine, adapters, and UI layers.
 
 ```bash
 # Full suite (requires PyQt6 + system libs above)
@@ -658,7 +655,7 @@ python -m pytest tests/e2e/ -v
 QT_QPA_PLATFORM=offscreen python -m pytest tests/unit/test_ui_smoke.py tests/unit/test_ui_controller_integration.py -v
 ```
 
-**191 tests · all passing**
+**210 tests · all passing · 90% coverage**
 
 | Suite | Scope |
 |---|---|
@@ -695,20 +692,19 @@ QT_QPA_PLATFORM=offscreen python -m pytest tests/unit/test_ui_smoke.py tests/uni
 | Results screen | Generated schedules are displayed and can be browsed |
 | Export flow | Export creates a readable output file and blocks invalid or stale state |
 
-### Out of Scope
-
-The following test types are intentionally excluded from the current scope:
-
-- HTTP endpoint tests
-- FastAPI tests
-- API integration tests
-- `pytest-asyncio` based API tests
-- Backend service tests that do not apply to the desktop app
-
 ---
 
-## All Diagrams
+## Part 2 — What's New
 
-Full diagram set — architecture layers, sequence diagrams, conflict logic, data flow, test architecture:
+This release delivers the full PyQt6 desktop UI on top of the Part 1 scheduling engine.
 
-[diagrams.md](./diagrams.md)
+| Area | Changes |
+|---|---|
+| **Desktop UI** | Full PyQt6 app — config screen, exam period editor, paginated results calendar |
+| **Per-programme drill-down** | "View Courses ▶" button per programme row |
+| **Period utils** | Centralised `period_utils.py` — single source of truth for period ordering across all screens |
+| **Stale results guard** | Export blocked when results are out of date; user notified |
+| **Date editor** | Multi-range date editor widget with excluded-days support |
+| **Read-only results view** | Exam periods in results panel are read-only; edits only via pre-generation dialog |
+| **Tests** | 210 tests, 90% coverage (was 15 tests in Part 1) |
+| **CI** | GitHub Actions with 85% coverage gate + pylint ≥ 8.5 |

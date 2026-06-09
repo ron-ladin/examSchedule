@@ -55,8 +55,9 @@ No environment variables or servers needed.
 
 | File | Purpose |
 |------|---------|
-| `CourseDB.txt` | Course records, one per `$$$$`-delimited block |
-| `ExamDates.txt` | Exam period records, one per `$$$$`-delimited block |
+| `courses.txt` | Course records, one per `$$$$`-delimited block |
+| `dates.txt` | Exam period records, one per `$$$$`-delimited block |
+| `programs.txt` | Programme IDs to include in schedule generation |
 
 ---
 
