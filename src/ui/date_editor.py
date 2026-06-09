@@ -155,7 +155,7 @@ class _DayButton(QPushButton):
 class _MonthWidget(QFrame):
     """Mini-calendar for a single month (§2.4.1)."""
 
-    _HEADERS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+    _HEADERS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
 
     def __init__(
         self,
@@ -208,7 +208,7 @@ class _MonthWidget(QFrame):
             header.setFixedSize(44, 26)
             grid.addWidget(header, 1, col)
 
-        first_weekday = date(self._year, self._month, 1).weekday()
+        first_weekday = (date(self._year, self._month, 1).weekday() + 1) % 7
         num_days = calendar.monthrange(self._year, self._month)[1]
 
         row, col = 2, first_weekday
