@@ -494,8 +494,14 @@ pip install -r requirements-dev.txt
 
 ### 4. Run the desktop app
 
+macOS/Linux:
 ```bash
 python main.py
+```
+
+Windows:
+```bash
+py main.py
 ```
 
 ---
