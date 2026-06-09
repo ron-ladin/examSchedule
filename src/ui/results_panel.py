@@ -431,7 +431,7 @@ class _ResultsPanel(QWidget):
 
         layout.addLayout(lm_row)
 
-        table = _make_data_table(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+        table = _make_data_table(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"])
         table.setMinimumHeight(220)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -776,9 +776,9 @@ class _ResultsPanel(QWidget):
             all_dates = sorted(date_to_ids)
             start, end = all_dates[0], all_dates[-1]
 
-        week_start = start - timedelta(days=start.weekday())
-        last_sunday = end + timedelta(days=6 - end.weekday())
-        num_weeks = (last_sunday - week_start).days // 7 + 1
+        week_start = start - timedelta(days=(start.weekday() + 1) % 7)
+        last_saturday = end + timedelta(days=(5 - end.weekday()) % 7)
+        num_weeks = (last_saturday - week_start).days // 7 + 1
 
         table.setRowCount(num_weeks)
 
