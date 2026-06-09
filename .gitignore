@@ -195,9 +195,9 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore
 #   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#   and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#   and can be added to the global gitignore or merged into this file. However, if you prefer,
 #   you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 # Temporary file for partial code execution
@@ -221,6 +221,7 @@ __marimo__/
 BUGS_AND_FIXES.md
 
 # Locally generated exam schedule output
+output/
 data/schedules.txt
 
 # VS Code Mermaid extension auto-generated files
@@ -229,4 +230,32 @@ data/schedules.txt
 # Local diagram drafts (committed version lives in diagrams.md)
 docs/
 
+# Claude Code local files
+.claude/
+.claude-flow/
+.mcp.json
+CLAUDE.md
 
+# Node
+node_modules/
+frontend/node_modules/
+
+# macOS
+.DS_Store
+
+# LibreOffice/OpenOffice lock files
+.~lock.*#
+
+# Kiro IDE
+.kiro/
+
+# Local design / blueprint docs (Part 2 reference — not for commit)
+Phase2_Engineering_Blueprint*.md
+SDD-foundation.md
+*.pdf
+
+.devcontainer/
+.devcontainer/devcontainer.json
+
+
+ECC/ 

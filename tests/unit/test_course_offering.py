@@ -67,5 +67,3 @@ def test_is_elective_true_for_elective():
 def test_is_elective_false_for_obligatory():
     offering = _make_offering(requirement="Obligatory")
     assert offering.is_elective() is False
-
-

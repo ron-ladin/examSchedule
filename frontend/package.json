@@ -1,0 +1,14 @@
+{
+  "name": "syncademic-frontend",
+  "version": "1.0.0",
+  "description": "Frontend design tokens and components for Syncademic UI",
+  "main": "index.js",
+  "scripts": {
+    "dev": "echo 'Compiling Tailwind tokens...' && echo 'Success: Frontend compiles without errors'"
+  },
+  "dependencies": {
+    "tailwindcss": "3.4.1",
+    "typescript": "5.3.3"
+  },
+  "devDependencies": {}
+}

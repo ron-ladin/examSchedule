@@ -100,5 +100,3 @@ def test_get_key_displays_normalized_semester():
         date_ranges=[(date(2026, 3, 1), date(2026, 3, 2))],
     )
     assert exam_period.get_key() == "SPRI - Bet"
-
-

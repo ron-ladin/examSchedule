@@ -18,18 +18,21 @@ Main method:
         5. For each ExamPeriod, filters courses relevant to the selected programs
            and evaluation_type == "Exam".
         6. Calls generator.generate_schedules(courses, period) — receives a lazy iterator.
-        7. Passes all period iterators to exporter.export_schedules().
+        7. Passes all period iterators (NOT lists) to exporter.export_schedules().
         8. Logs progress using the logging module — no print() calls.
 
 Notes:
     - Never import FileDataProvider, TextFileExporter, ExactConflictStrategy,
       or ScheduleGenerator here. This layer depends only on interfaces.
-    - The iterator from generate_schedules must flow through to the exporter
-      without being converted to a list.
+    - The iterator from generate_schedules MUST flow through to the exporter
+      without being converted to a list.  Calling list() here would silently
+      destroy the O(n) memory guarantee and break PaginatedExporter.
+    - schedules_by_period maps period keys to Iterator[Schedule], not List.
+      The exporter is responsible for consuming the iterator page by page.
 """
 
 import logging
-from typing import Dict, List
+from collections.abc import Iterator
 
 from src.domain.schedule import Schedule
 from src.interfaces.i_data_provider import IDataProvider
@@ -47,7 +50,7 @@ class AppController:
         data_provider: IDataProvider,
         exporter: IOutputExporter,
         generator: IScheduleGenerator,
-        selected_programs: List[str],
+        selected_programs: list[str],
     ) -> None:
         self._data_provider = data_provider
         self._exporter = exporter
@@ -66,7 +69,7 @@ class AppController:
 
         courses_by_id = {course.id: course for course in all_courses}
 
-        schedules_by_period: Dict[str, List[Schedule]] = {}
+        schedules_by_period: dict[str, Iterator[Schedule]] = {}
         seen_period_keys: set = set()
 
         for period in exam_periods:
@@ -90,8 +93,12 @@ class AppController:
             if not relevant_courses:
                 continue
 
-            schedules_by_period[period_key] = list(
-                self._generator.generate_schedules(relevant_courses, period)
+            # Pass the lazy iterator directly — do NOT call list() here.
+            # Converting to a list would materialise all schedules into RAM,
+            # destroying the O(PAGE_SIZE) memory guarantee of PaginatedExporter
+            # and defeating the entire purpose of the yield-based generator.
+            schedules_by_period[period_key] = self._generator.generate_schedules(
+                relevant_courses, period
             )
 
         self._exporter.export_schedules(schedules_by_period, courses_by_id)

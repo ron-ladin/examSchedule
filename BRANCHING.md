@@ -36,22 +36,22 @@ git push -u origin develop
 # Start a new feature
 git checkout develop
 git pull origin develop
-git checkout -b feature/new-api
-git push -u origin feature/new-api
+git checkout -b feature/desktop-tests
+git push -u origin feature/desktop-tests
 
 # ... do your work, then open a PR back into develop ...
 ```
 
 ## Typical Workflow
 
-```
+```text
 main
  └── develop
-       └── feature/new-api   ← work here, PR → develop
+       └── feature/desktop-tests   ← work here, PR → develop
 ```
 
 1. Branch off `develop` to start a feature.
 2. Commit your changes on the feature branch.
-3. Open a Pull Request from `feature/new-api` → `develop`.
+3. Open a Pull Request from `feature/desktop-tests` → `develop`.
 4. After review and testing, merge into `develop`.
 5. When `develop` is stable, open a Pull Request from `develop` → `main` to release.

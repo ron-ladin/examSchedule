@@ -11,11 +11,11 @@ flowchart TD
     classDef iface   fill:#111111,stroke:#555555,color:#aaaaaa,rx:4,stroke-dasharray:5 3
     classDef file    fill:#0d1117,stroke:#30363d,color:#8b949e,rx:4
 
-    CLI["⌨️  main.py\n─────────────\nCLI · argparse · wiring"]:::cli
+    CLI["⌨️  main.py\n─────────────\nDesktop entry point · argparse · wiring"]:::cli
 
     subgraph CORE["  Engine Layer  "]
         direction LR
-        Controller["AppController\n─────────────\norchestrates pipeline"]:::engine
+        Controller["AppController / DesktopController\n─────────────\norchestrates pipeline"]:::engine
         Generator["ScheduleGenerator\n─────────────\nbacktracking · MCV"]:::engine
     end
 
@@ -79,9 +79,10 @@ flowchart TD
 > **University exam scheduler** — given a course catalog, exam windows, and a set of study programs, generates every valid conflict-free timetable using a backtracking CSP solver with an MCV heuristic.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-84%20passed-2ecc71?style=flat-square)
+![Tests](https://img.shields.io/badge/Tests-191%20passed-2ecc71?style=flat-square)
 ![Architecture](https://img.shields.io/badge/Architecture-Clean%20%2F%20Ports%20%26%20Adapters-c678dd?style=flat-square)
 ![Algorithm](https://img.shields.io/badge/Algorithm-Backtracking%20%2B%20MCV-e5a22e?style=flat-square)
+![UI](https://img.shields.io/badge/UI-PyQt6%20Desktop-4a90d9?style=flat-square)
 
 ---
 
@@ -103,19 +104,26 @@ flowchart TD
 
 ## Overview
 
-`examSchedule` solves the exam timetabling problem as a **Constraint Satisfaction Problem (CSP)**:
+`examSchedule` solves the exam timetabling problem as a **Constraint Satisfaction Problem (CSP)**.
 
-- Reads courses, exam periods, and selected programs from plain-text files
-- Determines which courses conflict — two courses conflict when students in the same program, year, and semester are enrolled in both (unless both are elective)
+The current project scope is a **PyQt6 desktop application** with a file-based data model and optional headless CLI mode.
+
+Main capabilities:
+
+- Loads courses, exam periods, and selected programs from plain-text files
+- Allows the user to work through a desktop UI
+- Determines which courses conflict — two courses conflict when students in the same program, year, and semester are enrolled in both, unless both are elective
 - Runs a backtracking search over valid exam dates, using the **Most-Constrained-Variable (MCV)** heuristic to assign the hardest-to-place courses first
-- Yields every valid complete schedule **lazily** — no list of all schedules is ever held in memory
-- Writes results to a structured text file, grouped by semester and moed
+- Yields every valid complete schedule **lazily** — no list of all schedules is ever held in memory by the core generator
+- Displays generated schedules in the desktop results screen
+- Allows exporting schedules to a structured text file, grouped by semester and moed
 
 **Key design properties:**
 
 | Property | Implementation |
 |---|---|
 | Architecture | Clean Architecture — Ports & Adapters |
+| UI | PyQt6 desktop application |
 | Algorithm | Backtracking CSP + MCV heuristic |
 | Memory model | Lazy `Iterator[Schedule]` — O(n) stack depth |
 | Conflict graph | Built once O(n²), reused across all backtrack steps |
@@ -136,12 +144,16 @@ flowchart LR
     classDef adapter fill:#2a0f3a,stroke:#c678dd,color:#e0a8ff
     classDef domain  fill:#1a1a2e,stroke:#e05c5c,color:#ff9999
 
+    subgraph UI_LAYER["Desktop UI"]
+        UI["PyQt6 Screens"]:::cli
+    end
+
     subgraph CLI_LAYER["CLI"]
         main["main.py"]:::cli
     end
 
     subgraph ENGINE_LAYER["Engine"]
-        AC["AppController"]:::engine
+        AC["AppController / DesktopController"]:::engine
         SG["ScheduleGenerator"]:::engine
     end
 
@@ -165,6 +177,7 @@ flowchart LR
         S["Schedule"]:::domain
     end
 
+    UI --> AC
     main --> AC
     AC --> IDP & IOE & ISG
     SG --> ICS
@@ -182,8 +195,9 @@ flowchart LR
 
 | Layer | Responsibility |
 |---|---|
-| **CLI** | Parse arguments, wire all dependencies, call `controller.run()` |
-| **Engine** | `AppController` orchestrates the pipeline; `ScheduleGenerator` runs the algorithm |
+| **Desktop UI** | PyQt6 screens for loading data, selecting programs, editing exam dates, generating schedules, and exporting |
+| **CLI** | Optional headless entry point: parse arguments, wire dependencies, run the controller |
+| **Engine** | Controller orchestration and scheduling algorithm |
 | **Interfaces** | Abstract ports (ABCs) — the engine only ever imports these |
 | **Adapters** | Concrete implementations: file I/O, conflict detection, schedule export |
 | **Domain** | Pure data containers + domain rules — zero I/O |
@@ -367,30 +381,41 @@ flowchart LR
 ```
 
 **Conflict rule** — two courses conflict when there exists a shared offering where:
-- Same `program_id` · same `year` · same `semester`
-- **Not** both elective (two electives can share a date — students take only one)
 
-Only offerings from **selected programs** are evaluated — courses taken exclusively by unselected programs never conflict.
+- Same `program_id`
+- Same `year`
+- Same `semester`
+- Not both elective
+
+Only offerings from **selected programs** are evaluated. Courses that belong only to unselected programs are ignored by the conflict strategy.
 
 ---
 
 ## Project Structure
 
-```
+```text
 examSchedule/
-├── main.py                          # CLI entry point — argparse + dependency wiring
+├── main.py                          # Entry point — desktop app by default, or --cli for headless
 ├── data/
 │   ├── courses.txt                  # Course catalog with per-program offerings
 │   ├── dates.txt                    # Exam periods, date ranges, and exclusions
-│   └── programs.txt                 # Selected program IDs for this run
+│   └── programs.txt                 # Selected program IDs for CLI runs
 ├── src/
+│   ├── controller.py                # DesktopController — bridge between UI and engine
+│   ├── ui/                          # PyQt6 desktop application
+│   │   ├── app.py                   # QMainWindow entry point
+│   │   ├── input_screen.py          # Main widget: file loading, generation, results tabs
+│   │   ├── date_editor.py           # Inline date-range editor widget
+│   │   ├── style.py                 # QSS stylesheet loader
+│   │   ├── stylesheet.qss           # Design tokens and component styling
+│   │   └── tokens.py                # Colour and spacing constants
 │   ├── domain/                      # Pure data containers — zero I/O
 │   │   ├── course.py
 │   │   ├── course_offering.py
 │   │   ├── exam_period.py
 │   │   ├── schedule.py
 │   │   └── semester.py
-│   ├── interfaces/                  # Abstract ports (ABCs)
+│   ├── interfaces/                  # Abstract ports
 │   │   ├── i_data_provider.py
 │   │   ├── i_conflict_strategy.py
 │   │   ├── i_schedule_generator.py
@@ -407,8 +432,9 @@ examSchedule/
 │           ├── exam_period_file_reader.py
 │           └── program_selector_reader.py
 ├── tests/
-│   ├── unit/                        # 74 tests — isolated, no pipeline I/O
-│   └── e2e/                         # 10 tests — full pipeline, real + synthetic data
+│   ├── unit/                        # Unit tests for domain, engine, adapters, readers, controller logic
+│   ├── e2e/                         # End-to-end desktop and pipeline flows
+│   └── ui/                          # PyQt6 smoke and UI-controller tests
 └── diagrams.md                      # Full Mermaid diagram set
 ```
 
@@ -416,18 +442,88 @@ examSchedule/
 
 ## Setup
 
+### 1. System libraries (Linux only)
+
+PyQt6 requires several native graphics and display libraries. Install them before running `pip install`:
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install pytest
+sudo apt-get update
+sudo apt-get install -y \
+  libegl1 libgl1 libgl1-mesa-glx \
+  libxkbcommon0 libxkbcommon-x11-0 \
+  libfontconfig1 libfreetype6 \
+  libdbus-1-3 libglib2.0-0 \
+  libx11-6 libx11-xcb1 \
+  libxcb1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+  libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+  libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1
+```
+
+> **macOS / Windows:** these libraries are bundled with the PyQt6 wheel — no extra step needed.
+
+### 2. Python environment
+
+```bash
+cd examSchedule
+python -m venv venv
+```
+
+macOS/Linux:
+
+```bash
+source venv/bin/activate
+```
+
+Windows:
+
+```bash
+.\venv\Scripts\activate
+```
+
+### 3. Python dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+For development and tests:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+### 4. Run the desktop app
+
+```bash
+python main.py
 ```
 
 ---
 
 ## Usage
 
+### Desktop app
+
+The default mode launches the PyQt6 desktop application:
+
 ```bash
-python main.py \
+python main.py
+```
+
+The desktop app supports:
+
+- Loading course and date files
+- Selecting up to five study programs
+- Viewing selected program information
+- Editing exam-period date exclusions
+- Generating schedules
+- Browsing generated schedules
+- Exporting a selected schedule or result set to a readable text file
+
+### Headless CLI
+
+```bash
+python main.py --cli \
   --programs data/programs.txt \
   --courses  data/courses.txt \
   --periods  data/dates.txt \
@@ -438,13 +534,29 @@ python main.py \
 
 ## Input File Formats
 
-**`programs.txt`** — comma-separated 5-digit program IDs:
-```
+### `programs.txt`
+
+Comma-separated 5-digit program IDs:
+
+```text
 83101, 83102, 83108
 ```
 
-**`courses.txt`** — records delimited by `$$$$`. Each record: name, ID, instructor, one or more offering lines, evaluation type:
-```
+### `courses.txt`
+
+Records are delimited by `$$$$`.
+
+Each record contains:
+
+1. Course name
+2. Course ID
+3. Instructor
+4. One or more offering lines
+5. Evaluation type
+
+Example:
+
+```text
 $$$$
 Calculus 1
 83112
@@ -455,10 +567,23 @@ Exam
 $$$$
 ```
 
-Evaluation types: `Exam` · `Project` · `Attendance` — only `Exam` courses are scheduled.
+Evaluation types:
 
-**`dates.txt`** — exam period records delimited by `$$$$`. Excluded lines prefixed with `-`:
+```text
+Exam
+Project
+Attendance
 ```
+
+Only `Exam` courses are scheduled.
+
+### `dates.txt`
+
+Exam-period records are delimited by `$$$$`.
+
+Example:
+
+```text
 $$$$
 FALL, Aleph
 29-01-2026, 11-03-2026
@@ -467,7 +592,23 @@ FALL, Aleph
 $$$$
 ```
 
-Semesters: `FALL` · `SPRI` · `SUMM` — Moeds: `Aleph` · `Bet` · `Gimel` — Saturdays excluded automatically.
+Semesters:
+
+```text
+FALL
+SPRI
+SUMM
+```
+
+Moeds:
+
+```text
+Aleph
+Bet
+Gimel
+```
+
+Saturdays are excluded automatically.
 
 ---
 
@@ -475,7 +616,7 @@ Semesters: `FALL` · `SPRI` · `SUMM` — Moeds: `Aleph` · `Bet` · `Gimel` —
 
 Results are written to the specified output file, grouped by semester then moed. Courses within each schedule are sorted chronologically.
 
-```
+```text
 === SEMESTER: FALL ===
 --- Moed: Aleph ---
 
@@ -488,43 +629,86 @@ Schedule #2:
   - Calculus 1 | Course ID: 83112 | Date: 01-02-2026 | Instructor: Dr. Erez Scheiner
 ```
 
-If a period produces no valid schedules, the block reads `No valid schedules found.`
+If a period produces no valid schedules, the block reads:
+
+```text
+No valid schedules found.
+```
 
 ---
 
 ## Testing
 
+The test scope matches the current **PyQt6 desktop application** architecture.
+
+HTTP/API testing is not part of the current project scope.
+There are no FastAPI endpoint tests, no HTTP integration tests, and no `pytest-asyncio` API tests.
+
 ```bash
-# Full suite
-python -m pytest tests/ -v
+# Full suite (requires PyQt6 + system libs above)
+QT_QPA_PLATFORM=offscreen python -m pytest tests/ -v
 
 # Unit tests only
 python -m pytest tests/unit/ -v
 
 # E2E tests only
 python -m pytest tests/e2e/ -v
+
+# UI tests only (requires PyQt6)
+QT_QPA_PLATFORM=offscreen python -m pytest tests/unit/test_ui_smoke.py tests/unit/test_ui_controller_integration.py -v
 ```
 
-**84 test functions · 89 pytest runs · all passing**
+**191 tests · all passing**
 
-| Suite | Tests | Scope |
-|---|---|---|
-| Unit | 74 | Per-class, isolated — no file I/O, no pipeline |
-| E2E | 10 | Full pipeline — real data files + synthetic edge cases |
+| Suite | Scope |
+|---|---|
+| Unit tests | Domain objects, readers, adapters, scheduling logic, conflict strategy, and controller-level behavior |
+| UI smoke tests | Verify the PyQt6 app launches, the configuration screen is shown, and the main controls are rendered |
+| UI-controller integration tests | Verify UI actions update controller state and trigger generation/export behavior |
+| E2E desktop flow tests | Full user flows such as loading files, selecting programs, generating schedules, browsing results, and exporting |
+| Edge-case tests | Empty files, invalid data, more than five selected programs, repeated navigation, stale state prevention |
 
-| Unit Module | Tests | What it covers |
-|---|---|---|
-| `test_course.py` | 12 | Lifecycle, evaluation type, semester filtering |
-| `test_course_offering.py` | 10 | Relevance, elective flag, same-PYS match |
-| `test_exam_period.py` | 9 | Valid dates, Saturday exclusion, holiday ranges |
-| `test_conflict_strategy.py` | 7 · 1×6 runs | Parametrized conflict matrix |
-| `test_schedule_generator.py` | 12 | MCV ordering, backtracking, lazy iterator |
-| `test_file_data_provider.py` | 15 | Parsing, validation, error messages |
-| `test_text_file_exporter.py` | 7 | Output format, overwrite, semester display |
-| `test_schedule.py` | 2 | Equality, multi-assignment storage |
+### Unit Test Coverage
+
+| Module | What it covers |
+|---|---|
+| `test_course.py` | Course lifecycle, evaluation type, semester filtering |
+| `test_course_offering.py` | Relevance, elective flag, same program-year-semester match |
+| `test_exam_period.py` | Valid dates, Saturday exclusion, holiday ranges, multi-range periods |
+| `test_conflict_strategy.py` | Conflict matrix, selected-program filtering, elective behavior |
+| `test_schedule_generator.py` | MCV ordering, backtracking, lazy iterator, impossible cases |
+| `test_file_data_provider.py` | Parsing, validation, duplicate IDs, malformed input |
+| `test_text_file_exporter.py` | Output format, overwrite behavior, semester display |
+| `test_schedule.py` | Schedule construction and assignment storage |
+| `test_controller.py` | Desktop controller state, generation flow, export protection |
+
+### Desktop UI Test Coverage
+
+| Area | What it verifies |
+|---|---|
+| App launch | The PyQt6 application starts without crashing |
+| Config screen | File inputs, program selection controls, and generate button are visible |
+| File loading | Replace/update flows load data into controller state correctly |
+| Program selection | Selected programs filter courses and schedules correctly |
+| Date editing | Excluded dates are respected by generated schedules |
+| Generation flow | Spinner/progress state appears during generation and results appear after success |
+| Results screen | Generated schedules are displayed and can be browsed |
+| Export flow | Export creates a readable output file and blocks invalid or stale state |
+
+### Out of Scope
+
+The following test types are intentionally excluded from the current scope:
+
+- HTTP endpoint tests
+- FastAPI tests
+- API integration tests
+- `pytest-asyncio` based API tests
+- Backend service tests that do not apply to the desktop app
 
 ---
 
 ## All Diagrams
 
-Full diagram set — architecture layers, sequence diagrams, conflict logic, data flow, test architecture: [diagrams.md](./diagrams.md)
+Full diagram set — architecture layers, sequence diagrams, conflict logic, data flow, test architecture:
+
+[diagrams.md](./diagrams.md)
