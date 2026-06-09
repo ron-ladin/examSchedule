@@ -41,17 +41,9 @@ from src.controller import DesktopController, RESULT_BATCH_SIZE
 from src.domain.course import Course
 from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
+from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
 
 logger = logging.getLogger(__name__)
-
-_STANDARD_PERIOD_ORDER: tuple[tuple[str, str], ...] = (
-    ("FALL", "Aleph"),
-    ("FALL", "Bet"),
-    ("SPRI", "Aleph"),
-    ("SPRI", "Bet"),
-    ("SUMM", "Aleph"),
-    ("SUMM", "Bet"),
-)
 
 
 def _standard_period_keys() -> list[str]:

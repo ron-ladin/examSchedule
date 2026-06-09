@@ -163,15 +163,12 @@ def _patch_file_dialog(monkeypatch, paths: list[Path]) -> None:
     monkeypatch.setattr(QFileDialog, "getOpenFileName", fake_get_open_file_name)
 
 
-def _find_programme_item(screen: ConfigScreen, programme_id: str):
-    """Find a programme QListWidgetItem by stored programme id."""
-    for row in range(screen._prog_list.count()):
-        item = screen._prog_list.item(row)
-
-        if item.data(Qt.ItemDataRole.UserRole) == programme_id:
-            return item
-
-    raise AssertionError(f"Programme item not found: {programme_id}")
+def _find_programme_row(screen: ConfigScreen, programme_id: str):
+    """Find a _ProgrammeRow by programme id."""
+    row = screen._prog_rows.get(programme_id)
+    if row is None:
+        raise AssertionError(f"Programme row not found: {programme_id}")
+    return row
 
 
 # ── File loading modes update controller state ─────────────────────
@@ -200,14 +197,14 @@ def test_config_screen_replace_courses_updates_controller_state(tmp_path, monkey
 
     assert [course.id for course in controller.courses] == ["11111"]
     assert controller.get_programme_ids() == ["83101"]
-    assert screen._prog_list.count() == 1
+    assert len(screen._prog_rows) == 1
     assert "courses_first.txt" in screen._courses_label.text()
 
     screen._load_courses()
 
     assert [course.id for course in controller.courses] == ["33333"]
     assert controller.get_programme_ids() == ["83108"]
-    assert screen._prog_list.count() == 1
+    assert len(screen._prog_rows) == 1
     assert "courses_second.txt" in screen._courses_label.text()
 
     screen.close()
@@ -256,7 +253,7 @@ def test_config_screen_update_courses_merges_into_controller_state(
     assert ("83108", 1, "FALL", "Elective") in offering_keys
 
     assert set(controller.get_programme_ids()) == {"83101", "83108"}
-    assert screen._prog_list.count() == 2
+    assert len(screen._prog_rows) == 2
     assert "courses_update.txt" in screen._courses_label.text()
 
     screen.close()
@@ -367,17 +364,17 @@ def test_programme_selection_signal_updates_visible_course_table(tmp_path):
     screen._config._refresh_programme_list()
     app.processEvents()
 
-    item_83101 = _find_programme_item(screen._config, "83101")
-    item_83101.setCheckState(Qt.CheckState.Checked)
+    row_83101 = _find_programme_row(screen._config, "83101")
+    row_83101._checkbox.setChecked(True)
     app.processEvents()
 
     assert screen._results._course_table.rowCount() == 1
     assert screen._results._course_table.item(0, 1).text() == "11111"
     assert "Calculus" in screen._results._course_table.item(0, 0).text()
 
-    item_83102 = _find_programme_item(screen._config, "83102")
-    item_83101.setCheckState(Qt.CheckState.Unchecked)
-    item_83102.setCheckState(Qt.CheckState.Checked)
+    row_83102 = _find_programme_row(screen._config, "83102")
+    row_83101._checkbox.setChecked(False)
+    row_83102._checkbox.setChecked(True)
     app.processEvents()
 
     assert screen._results._course_table.rowCount() == 1
@@ -544,15 +541,13 @@ def test_generation_failed_signal_returns_to_config_screen(monkeypatch):
     screen.close()
 
 
-def test_view_courses_uses_checked_programme_not_unchecked_highlighted_item(
+def test_view_courses_button_opens_correct_programme(
     tmp_path,
     monkeypatch,
 ):
     """
-    View Courses should open courses only for a checked programme.
-
-    If the currently highlighted item is not checked, the UI should fall back to
-    the first checked programme instead of opening the highlighted unchecked one.
+    Each programme row has its own View Courses button.
+    Clicking a row's button opens the dialog for that specific programme.
     """
     app = _get_qapp()
 
@@ -569,14 +564,11 @@ def test_view_courses_uses_checked_programme_not_unchecked_highlighted_item(
     screen._refresh_programme_list()
     app.processEvents()
 
-    item_83101 = _find_programme_item(screen, "83101")
-    item_83102 = _find_programme_item(screen, "83102")
+    row_83101 = _find_programme_row(screen, "83101")
+    row_83102 = _find_programme_row(screen, "83102")
 
-    item_83101.setCheckState(Qt.CheckState.Checked)
-    item_83102.setCheckState(Qt.CheckState.Unchecked)
-
-    # Highlight an unchecked programme.
-    screen._prog_list.setCurrentItem(item_83102)
+    row_83101.set_checked(True)
+    row_83102.set_checked(False)
     app.processEvents()
 
     opened_programmes: list[str] = []
@@ -593,8 +585,10 @@ def test_view_courses_uses_checked_programme_not_unchecked_highlighted_item(
         FakeProgrammeCoursesDialog,
     )
 
-    screen._on_view_courses()
-
+    screen._on_view_courses_for("83101")
     assert opened_programmes == ["83101"]
+
+    screen._on_view_courses_for("83102")
+    assert opened_programmes == ["83101", "83102"]
 
     screen.close()

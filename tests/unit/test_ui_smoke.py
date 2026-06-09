@@ -129,9 +129,9 @@ def test_config_screen_renders_programme_selection_area():
     screen.show()
     app.processEvents()
 
-    assert isinstance(screen._prog_list, QListWidget)
-    assert screen._prog_list.count() == 0
-    assert screen._prog_list.isVisible() is False
+    assert isinstance(screen._prog_rows, dict)
+    assert len(screen._prog_rows) == 0
+    assert screen._prog_scroll.isVisible() is False
 
     assert screen._prog_placeholder.isVisible() is True
     assert "Load a courses file" in screen._prog_placeholder.text()
