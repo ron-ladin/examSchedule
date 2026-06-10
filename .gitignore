@@ -269,3 +269,12 @@ SDD-foundation.md
 
 
 ECC/ 
+# Migration scripts and archived data (one-time use)
+scripts/
+archived_issues.json
+archived_prs.json
+
+# Migration scripts and archived data (one-time use)
+scripts/
+archived_issues.json
+archived_prs.json
