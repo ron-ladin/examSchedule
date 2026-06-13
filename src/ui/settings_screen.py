@@ -27,8 +27,6 @@ Usage:
 import logging
 
 from PyQt6.QtCore import Qt, pyqtSignal
-
-_log = logging.getLogger(__name__)
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -42,6 +40,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+_log = logging.getLogger(__name__)
 
 from src.domain.settings import Settings
 from src.domain.sorting import SortCriterion, SortRule, SortingConfig
@@ -210,7 +210,8 @@ class SettingsScreen(QDialog):
         return ThresholdSettings(entries=tuple(entries))
 
     def _build_sorting_config(self) -> SortingConfig:
-        assert self._sort_list is not None
+        if self._sort_list is None:
+            raise RuntimeError("_sort_list was not initialized — call _build_ui() first")
         rules: list[SortRule] = []
         priority = 1
         for i in range(self._sort_list.count()):

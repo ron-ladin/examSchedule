@@ -68,11 +68,11 @@ class ThresholdEntry:
     k: int
 
 
-@dataclass
+@dataclass(frozen=True)
 class ThresholdSettings:
     """The parsed THRESHOLD block: a collection of ThresholdEntry objects."""
 
-    entries: List[ThresholdEntry] = field(default_factory=list)
+    entries: tuple[ThresholdEntry, ...] = ()
 
     def for_criterion(self, criterion: Criterion) -> Optional[ThresholdEntry]:
         """Return the entry for the given criterion, or None if absent."""

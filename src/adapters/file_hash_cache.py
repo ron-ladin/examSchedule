@@ -15,18 +15,17 @@ Strategy:
 
 Cache layout (under <cache_dir>/, default: .cache/):
     manifest.json   — {"hash": "<hex>", "created_at": "<iso8601>"}
-    data.pkl        — pickled dict of domain objects keyed by type name
+    data.json       — JSON dict of domain objects keyed by type name
 
 Notes:
   - Cache directory is created on first write; ignored if unwritable.
-  - Pickle is used for speed; never unpickle data from untrusted sources.
+  - JSON is used for safe, human-readable serialization (no code execution on load).
   - Thread-safety: single-process desktop app — no locking needed.
 """
 
 import hashlib
 import json
 import logging
-import pickle
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -34,17 +33,15 @@ from typing import Any, Dict, Optional
 _log = logging.getLogger(__name__)
 
 
-# TODO (SCRUM-§6.1): decide whether to use pickle or a structured format
-#   (e.g. JSON + custom serialisers) for better forward-compatibility.
 _MANIFEST_FILE = "manifest.json"
-_DATA_FILE = "data.pkl"
+_DATA_FILE = "data.json"
 
 
 class FileHashCache:
     """Read-through cache keyed on the combined SHA-256 of watched files."""
 
     def __init__(self, cache_dir: Path, watched_files: list[Path]) -> None:
-        # cache_dir: where manifest.json and data.pkl are stored
+        # cache_dir: where manifest.json and data.json are stored
         # watched_files: ordered list of paths whose content governs validity
         self._cache_dir = cache_dir
         self._watched = watched_files
@@ -117,10 +114,10 @@ class FileHashCache:
     def _read_data(self) -> Optional[Dict[str, Any]]:
         data_file = self._cache_dir / _DATA_FILE
         try:
-            return pickle.loads(data_file.read_bytes())  # noqa: S301
-        except (OSError, pickle.UnpicklingError):
+            return json.loads(data_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
             return None
 
     def _write_data(self, data: Dict[str, Any]) -> None:
         data_file = self._cache_dir / _DATA_FILE
-        data_file.write_bytes(pickle.dumps(data))
+        data_file.write_text(json.dumps(data), encoding="utf-8")
