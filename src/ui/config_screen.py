@@ -1083,6 +1083,7 @@ class ConfigScreen(QWidget):
                 selected,
             ),
             kwargs={
+                "settings": self._controller.settings,
                 "cap": None,
             },
             daemon=True,
@@ -1093,6 +1094,7 @@ class ConfigScreen(QWidget):
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_result)
         self._poll_timer.start(150)
+
 
     def _poll_result(self) -> None:
         elapsed = int(time.monotonic() - self._gen_start_time)
@@ -1143,6 +1145,9 @@ class ConfigScreen(QWidget):
             _, schedules_by_period, courses_by_id, truncated_periods = result
 
             self._controller.on_generation_succeeded(truncated_periods)
+            schedules_by_period = self._controller.cache_generated_results(
+                schedules_by_period
+            )
 
             self._notify_settings_state(False)
             self._gen_btn.setEnabled(True)
@@ -1160,6 +1165,7 @@ class ConfigScreen(QWidget):
         else:
             logger.error("Generation failed or returned invalid result: %s", result)
             self._fail("Generation failed. Please check the input files and try again.")
+
 
     def _fail(self, msg: str) -> None:
         self._reset_progress()
