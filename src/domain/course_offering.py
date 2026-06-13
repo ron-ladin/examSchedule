@@ -4,10 +4,13 @@ Domain Entity: CourseOffering
 Represents a single program's enrollment in a course.
 
 Fields:
-    - program_id  (str)  : 5-digit program code (e.g. "83101")
-    - year        (int)  : study year within the program (e.g. 1, 2, 3)
-    - semester    (str)  : internal format: "FALL" | "SPRI" | "SUMM"
-    - requirement (str)  : "Obligatory" | "Elective"
+    - program_id    (str)            : 5-digit program code (e.g. "83101")
+    - year          (int)            : study year within the program (e.g. 1, 2, 3)
+    - semester      (str)            : internal format: "FALL" | "SPRI" | "SUMM"
+    - requirement   (str)            : "Obligatory" | "Elective"
+    - student_count (Optional[int])  : students enrolling from this program
+                                       (Feature 4, courses.txt index 4). None when
+                                       absent — keeps the field backward-compatible.
 
 Notes:
     - Use @dataclass or Pydantic BaseModel.
@@ -17,7 +20,7 @@ Notes:
 """
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 from src.domain.semester import normalize_semester
 
@@ -28,6 +31,7 @@ class CourseOffering:
     year: int
     semester: str
     requirement: str  # Obligatory / Elective
+    student_count: Optional[int] = None  # Feature 4 (SCRUM-285); None when absent
 
     def is_relevant(self, selected_programs: List[str], semester: str) -> bool:
         return (
