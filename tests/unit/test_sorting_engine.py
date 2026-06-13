@@ -366,6 +366,86 @@ class TestMultiLevelSort:
         result = SortingEngine.sort([sched_a, sched_b], [c1, c2, c3], config)
         assert len(result) == 2
 
+    def test_rules_given_out_of_order_still_sorted_by_priority_value(self):
+        """
+        Rules provided as (priority=2, priority=1) must still apply priority=1 first.
+
+        sched_a: mandatory gap = 10 (Jan5→Jan15)  max exams/day = 1
+        sched_b: mandatory gap = 0  (Jan5 for both) max exams/day = 2
+
+        If list order were used (MAX_EXAMS_PER_DAY first):  sched_b would rank first (2 > 1).
+        If priority value is used (MIN_DAYS_MANDATORY first): sched_a ranks first (10 > 0).
+        """
+        c1, c2 = _mandatory("11111"), _mandatory("22222")
+
+        sched_a = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 15),
+        })
+        sched_b = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 5),
+        })
+
+        # Rules intentionally given in reverse priority order
+        config = SortingConfig(
+            rules=(
+                SortRule(priority=2, criterion=SortCriterion.SORT_MAX_EXAMS_PER_DAY),
+                SortRule(priority=1, criterion=SortCriterion.SORT_MIN_DAYS_MANDATORY),
+            )
+        )
+        result = SortingEngine.sort([sched_b, sched_a], [c1, c2], config)
+        assert result[0] is sched_a
+
+
+# ---------------------------------------------------------------------------
+# Multiple offerings: a course offered in more than one (program, year) group
+# ---------------------------------------------------------------------------
+
+class TestMultipleOfferings:
+    """Scorers must handle courses with multiple offerings without crashing or skewing results."""
+
+    def test_course_with_two_offerings_counted_in_each_group(self):
+        """
+        Course "11111" is mandatory in PROGRAM_A yr1 AND PROGRAM_B yr2.
+        Course "22222" is mandatory in PROGRAM_A yr1 only.
+        Course "33333" is mandatory in PROGRAM_B yr2 only.
+
+        Group (PROGRAM_A, yr1): [11111, 22222]
+        Group (PROGRAM_B, yr2): [11111, 33333]
+
+        sched_a: 11111=Jan5, 22222=Jan15, 33333=Jan15 → both groups gap=10
+        sched_b: 11111=Jan5, 22222=Jan8,  33333=Jan8  → both groups gap=3
+
+        Scorer must handle multi-offering course and still rank sched_a first.
+        """
+        cross_course = Course(
+            id="11111",
+            name="Course 11111",
+            instructor="Prof. X",
+            evaluation_type="Exam",
+        )
+        cross_course.add_offering(_offering(PROGRAM_A, 1, "Obligatory"))
+        cross_course.add_offering(_offering(PROGRAM_B, 2, "Obligatory"))
+
+        c2 = _mandatory("22222", PROGRAM_A, 1)
+        c3 = _mandatory("33333", PROGRAM_B, 2)
+
+        sched_a = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 15),
+            "33333": date(2026, 1, 15),
+        })
+        sched_b = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 8),
+            "33333": date(2026, 1, 8),
+        })
+
+        config = _config_single(SortCriterion.SORT_MIN_DAYS_MANDATORY)
+        result = SortingEngine.sort([sched_b, sched_a], [cross_course, c2, c3], config)
+        assert result[0] is sched_a
+
 
 # ---------------------------------------------------------------------------
 # Edge cases

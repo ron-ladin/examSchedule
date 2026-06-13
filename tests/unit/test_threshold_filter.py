@@ -414,3 +414,68 @@ class TestMultipleCriteriaActive:
             "22222": date(2026, 1, 5),
         })
         assert ThresholdFilter.is_valid(schedule, courses, ThresholdSettings()) is True
+
+
+# ---------------------------------------------------------------------------
+# Multiple offerings: a course offered in more than one (program, year) group
+# ---------------------------------------------------------------------------
+
+class TestMultipleOfferings:
+    """Criterion checks must be scoped per (program, year) group, not across all offerings."""
+
+    def test_course_with_two_offerings_fails_when_collision_in_one_group(self):
+        """
+        Course "11111" is mandatory in both PROGRAM_A yr1 and PROGRAM_B yr2.
+        Course "22222" is mandatory in PROGRAM_A yr1 only.
+        Course "33333" is mandatory in PROGRAM_B yr2 only.
+
+        Schedule: 11111=Jan5, 22222=Jan15, 33333=Jan5
+          (PROGRAM_A, yr1): 11111(Jan5), 22222(Jan15) → gap=10 → passes k=5
+          (PROGRAM_B, yr2): 11111(Jan5), 33333(Jan5) → gap=0  → FAILS k=5
+
+        is_valid must return False because group PROGRAM_B yr2 violates 2.1.
+        """
+        cross_course = Course(
+            id="11111",
+            name="Course 11111",
+            instructor="Prof. X",
+            evaluation_type="Exam",
+        )
+        cross_course.add_offering(_offering(PROGRAM_A, 1, "Obligatory"))
+        cross_course.add_offering(_offering(PROGRAM_B, 2, "Obligatory"))
+
+        c2 = _mandatory("22222", PROGRAM_A, 1)
+        c3 = _mandatory("33333", PROGRAM_B, 2)
+
+        schedule = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 15),
+            "33333": date(2026, 1, 5),
+        })
+        settings = _settings_only(Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS, k=5)
+        assert ThresholdFilter.is_valid(schedule, [cross_course, c2, c3], settings) is False
+
+    def test_course_with_two_offerings_passes_when_both_groups_satisfy_threshold(self):
+        """
+        Course "11111" is mandatory in both PROGRAM_A yr1 and PROGRAM_B yr2.
+        Both groups have a large enough gap → is_valid must return True.
+        """
+        cross_course = Course(
+            id="11111",
+            name="Course 11111",
+            instructor="Prof. X",
+            evaluation_type="Exam",
+        )
+        cross_course.add_offering(_offering(PROGRAM_A, 1, "Obligatory"))
+        cross_course.add_offering(_offering(PROGRAM_B, 2, "Obligatory"))
+
+        c2 = _mandatory("22222", PROGRAM_A, 1)
+        c3 = _mandatory("33333", PROGRAM_B, 2)
+
+        schedule = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 15),  # (PROGRAM_A, yr1) gap = 10
+            "33333": date(2026, 1, 15),  # (PROGRAM_B, yr2) gap = 10
+        })
+        settings = _settings_only(Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS, k=5)
+        assert ThresholdFilter.is_valid(schedule, [cross_course, c2, c3], settings) is True
