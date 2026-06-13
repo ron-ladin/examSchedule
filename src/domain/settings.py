@@ -18,7 +18,7 @@ from src.domain.sorting import SortingConfig
 from src.domain.threshold import ThresholdSettings
 
 
-@dataclass
+@dataclass(frozen=True)
 class Settings:
     """The full parsed settings.txt: threshold criteria plus sorting rules."""
 
