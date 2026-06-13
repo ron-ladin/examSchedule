@@ -62,7 +62,7 @@ class SortRule:
 class SortingConfig:
     """The parsed SORT block: an immutable, ordered collection of sort rules."""
 
-    rules: Tuple[SortRule, ...] = ()
+    rules: tuple[SortRule, ...] = ()
 
     def criteria_in_order(self) -> List[SortCriterion]:
         """Return the sort criteria from primary to least significant."""

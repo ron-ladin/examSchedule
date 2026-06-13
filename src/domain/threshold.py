@@ -72,7 +72,7 @@ class ThresholdEntry:
 class ThresholdSettings:
     """The parsed THRESHOLD block: an immutable collection of ThresholdEntry objects."""
 
-    entries: Tuple[ThresholdEntry, ...] = ()
+    entries: tuple[ThresholdEntry, ...] = ()
 
     def for_criterion(self, criterion: Criterion) -> Optional[ThresholdEntry]:
         """Return the entry for the given criterion, or None if absent."""
