@@ -4,16 +4,18 @@ Integration Tests: DesktopController × Sprint 3 (thresholds + sorting)
 Proves the Sprint 3 engine logic is actually invoked by generation:
   - generate() drops schedules that violate enabled thresholds (spec 2.x)
   - generate() returns schedules ordered by the active SortingConfig (spec 3.x)
+  - _run_generation_process() also applies thresholds/sorting for the GUI path
   - resort() re-ranks cached valid results WITHOUT regenerating
 
 These fail before the controller wiring exists and pass after.
 """
 
 from pathlib import Path
+from queue import Queue
 
 import pytest
 
-from src.controller import DesktopController
+from src.controller import DesktopController, _run_generation_process
 from src.domain.settings import Settings
 from src.domain.sorting import SortCriterion, SortingConfig, SortRule
 from src.domain.threshold import Criterion, ThresholdEntry, ThresholdSettings
@@ -58,6 +60,7 @@ def _mandatory_gap(schedule) -> int:
 def _make_controller(tmp_path: Path) -> DesktopController:
     cp = tmp_path / "courses.txt"
     dp = tmp_path / "dates.txt"
+
     _write_two_mandatory_courses(cp)
     _write_three_day_period(dp)
 
@@ -65,6 +68,7 @@ def _make_controller(tmp_path: Path) -> DesktopController:
     ctrl.load_courses(cp)
     ctrl.load_periods(dp)
     ctrl.set_selected_programs(["83101"])
+
     return ctrl
 
 
@@ -85,12 +89,15 @@ def test_generate_keeps_all_schedules_when_thresholds_off(tmp_path):
 
 def test_generate_rejects_schedules_violating_enabled_threshold(tmp_path):
     ctrl = _make_controller(tmp_path)
+
     ctrl.apply_settings(
         Settings(
             thresholds=ThresholdSettings(
                 entries=(
                     ThresholdEntry(
-                        Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS, enabled=True, k=2
+                        Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+                        enabled=True,
+                        k=2,
                     ),
                 )
             ),
@@ -103,26 +110,85 @@ def test_generate_rejects_schedules_violating_enabled_threshold(tmp_path):
 
     # Only the gap >= 2 schedules survive (2 of the original 6).
     assert len(surviving) == 2
-    assert all(_mandatory_gap(s) >= 2 for s in surviving)
+    assert all(_mandatory_gap(schedule) >= 2 for schedule in surviving)
 
 
 # ── sorting application ───────────────────────────────────────────────────────
 
 def test_generate_sorts_descending_by_active_config(tmp_path):
     ctrl = _make_controller(tmp_path)
+
     ctrl.apply_settings(
         Settings(
             thresholds=ThresholdSettings(),
             sorting=SortingConfig(
-                rules=(SortRule(priority=1, criterion=SortCriterion.SORT_MIN_DAYS_MANDATORY),)
+                rules=(
+                    SortRule(
+                        priority=1,
+                        criterion=SortCriterion.SORT_MIN_DAYS_MANDATORY,
+                    ),
+                )
             ),
         )
     )
 
     schedules_by_period, _, _ = ctrl.generate()
-    gaps = [_mandatory_gap(s) for s in _all_schedules(schedules_by_period)]
+    gaps = [
+        _mandatory_gap(schedule)
+        for schedule in _all_schedules(schedules_by_period)
+    ]
 
     # Descending: each schedule's mandatory gap is >= the next one's.
+    assert gaps == sorted(gaps, reverse=True)
+
+
+# ── GUI subprocess generation path ────────────────────────────────────────────
+
+def test_generation_process_applies_thresholds_and_sorting_settings(tmp_path):
+    """The GUI subprocess target must not bypass Sprint 3 settings."""
+    ctrl = _make_controller(tmp_path)
+
+    settings = Settings(
+        thresholds=ThresholdSettings(
+            entries=(
+                ThresholdEntry(
+                    Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+                    enabled=True,
+                    k=2,
+                ),
+            )
+        ),
+        sorting=SortingConfig(
+            rules=(
+                SortRule(
+                    priority=1,
+                    criterion=SortCriterion.SORT_MIN_DAYS_MANDATORY,
+                ),
+            )
+        ),
+    )
+
+    result_queue = Queue()
+
+    _run_generation_process(
+        result_queue,
+        ctrl.courses,
+        ctrl.get_exam_periods(),
+        ["83101"],
+        settings=settings,
+        cap=None,
+    )
+
+    ok, schedules_by_period, _courses_by_id, truncated_periods = (
+        result_queue.get_nowait()
+    )
+    schedules = _all_schedules(schedules_by_period)
+    gaps = [_mandatory_gap(schedule) for schedule in schedules]
+
+    assert ok is True
+    assert truncated_periods == set()
+    assert len(schedules) == 2
+    assert all(gap >= 2 for gap in gaps)
     assert gaps == sorted(gaps, reverse=True)
 
 
@@ -138,17 +204,26 @@ def test_resort_reorders_cached_results_without_regenerating(tmp_path):
     # Re-sort only — must return the SAME schedules, re-ranked, no regeneration.
     resorted = ctrl.resort(
         SortingConfig(
-            rules=(SortRule(priority=1, criterion=SortCriterion.SORT_MIN_DAYS_MANDATORY),)
+            rules=(
+                SortRule(
+                    priority=1,
+                    criterion=SortCriterion.SORT_MIN_DAYS_MANDATORY,
+                ),
+            )
         )
     )
     after = _all_schedules(resorted)
 
     assert len(after) == len(before)
+
     # Same Schedule objects re-ranked, proving no regeneration occurred.
-    assert {id(s) for s in after} == {id(s) for s in before}
-    gaps = [_mandatory_gap(s) for s in after]
+    assert {id(schedule) for schedule in after} == {
+        id(schedule) for schedule in before
+    }
+
+    gaps = [_mandatory_gap(schedule) for schedule in after]
     assert gaps == sorted(gaps, reverse=True)
-    assert ctrl.results_stale is False  # re-sort does not invalidate results
+    assert ctrl.results_stale is False
 
 
 def test_resort_raises_when_no_cached_results():
