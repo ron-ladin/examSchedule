@@ -38,6 +38,12 @@ def test_student_count_zero_is_distinct_from_none():
     assert offering.student_count is not None
 
 
+# A negative student_count is rejected.
+def test_student_count_rejects_negative():
+    with pytest.raises(ValueError):
+        CourseOffering("83101", 1, "FALL", "Obligatory", student_count=-5)
+
+
 # --- SCRUM-286: Classroom --------------------------------------------------
 
 # A valid classroom keeps its room id and capacity.
@@ -70,6 +76,12 @@ def test_classroom_rejects_empty_room_id():
         Classroom(room_id="   ", capacity=50)
 
 
+# A non-string room id (e.g. None) yields a clean ValueError, not AttributeError.
+def test_classroom_rejects_non_string_room_id():
+    with pytest.raises(ValueError):
+        Classroom(room_id=None, capacity=50)  # type: ignore[arg-type]
+
+
 # The classroom is immutable.
 def test_classroom_is_immutable():
     room = Classroom(room_id="A-101", capacity=50)
@@ -83,6 +95,12 @@ def test_classroom_is_immutable():
 def test_time_slot_holds_time():
     slot = TimeSlot(time(9, 0))
     assert slot.time == time(9, 0)
+
+
+# A time with sub-minute precision is rejected (slots are HH:MM, spec 2.3).
+def test_time_slot_rejects_non_whole_minute():
+    with pytest.raises(ValueError):
+        TimeSlot(time(3, 0, 15))
 
 
 # A valid ascending sequence with >= 4h gaps passes.
@@ -106,6 +124,13 @@ def test_validate_sequence_rejects_small_gap():
 def test_validate_sequence_rejects_descending():
     with pytest.raises(ValueError):
         TimeSlot.validate_sequence([TimeSlot(time(13, 0)), TimeSlot(time(9, 0))])
+
+
+# An out-of-order slot in the middle is reported as an ordering error.
+def test_validate_sequence_rejects_unsorted_middle():
+    slots = [TimeSlot(time(9, 0)), TimeSlot(time(6, 0)), TimeSlot(time(13, 0))]
+    with pytest.raises(ValueError, match="ascending"):
+        TimeSlot.validate_sequence(slots)
 
 
 # More than 3 slots per day is rejected (spec 2.3.3).
@@ -197,6 +222,31 @@ def test_classroom_assignment_rejects_negative_proctor_count():
             date=date(2026, 6, 1),
             students_assigned=10,
             proctor_count=-1,
+        )
+
+
+# bool is a subclass of int, but is not a valid count for either field.
+def test_classroom_assignment_rejects_bool_students():
+    with pytest.raises(ValueError):
+        ClassroomAssignment(
+            exam=CourseOffering("83101", 1, "FALL", "Obligatory"),
+            room=Classroom(room_id="A-101", capacity=50),
+            slot=TimeSlot(time(9, 0)),
+            date=date(2026, 6, 1),
+            students_assigned=True,
+            proctor_count=1,
+        )
+
+
+def test_classroom_assignment_rejects_bool_proctor_count():
+    with pytest.raises(ValueError):
+        ClassroomAssignment(
+            exam=CourseOffering("83101", 1, "FALL", "Obligatory"),
+            room=Classroom(room_id="A-101", capacity=50),
+            slot=TimeSlot(time(9, 0)),
+            date=date(2026, 6, 1),
+            students_assigned=10,
+            proctor_count=True,
         )
 
 

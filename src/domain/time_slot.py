@@ -27,15 +27,22 @@ MAX_SLOTS_PER_DAY = 3  # at most 3 slots may be defined per day (spec 2.3.3)
 class TimeSlot:
     time: dt_time
 
+    def __post_init__(self) -> None:
+        # Slots are HH:MM points (spec 2.3), so sub-minute precision is invalid.
+        if self.time.second or self.time.microsecond:
+            raise ValueError(f"Time slot must be a whole HH:MM minute: {self.time}")
+
     @staticmethod
     def validate_sequence(slots: List["TimeSlot"]) -> None:
         """
         Validate a day's slots: at most MAX_SLOTS_PER_DAY of them (spec 2.3.3),
-        in ascending order with at least MIN_GAP_HOURS between each consecutive
-        pair (spec 2.3.4).
+        in strictly ascending order with at least MIN_GAP_HOURS between each
+        consecutive pair (spec 2.3.4).
 
-        Raises ValueError on the first violation. An empty or single-slot
-        sequence is trivially valid.
+        Raises ValueError on the first violation, distinguishing an ordering
+        error from a gap error. An empty or single-slot sequence is trivially
+        valid. The list is checked as given (not sorted), because the spec
+        requires slots to be entered in ascending order.
         """
         if len(slots) > MAX_SLOTS_PER_DAY:
             raise ValueError(
@@ -45,12 +52,18 @@ class TimeSlot:
         minimum_gap = MIN_GAP_HOURS * MINUTES_PER_HOUR
 
         for current, following in zip(slots, slots[1:]):
-            gap = TimeSlot._minutes(following.time) - TimeSlot._minutes(current.time)
+            current_minutes = TimeSlot._minutes(current.time)
+            following_minutes = TimeSlot._minutes(following.time)
 
-            if gap < minimum_gap:
+            if following_minutes <= current_minutes:
                 raise ValueError(
-                    "Time slots must be ascending and at least "
-                    f"{MIN_GAP_HOURS} hours apart: {current.time} -> {following.time}"
+                    f"Time slots must be in ascending order: {current.time} -> {following.time}"
+                )
+
+            if following_minutes - current_minutes < minimum_gap:
+                raise ValueError(
+                    f"Time slots must be at least {MIN_GAP_HOURS} hours apart: "
+                    f"{current.time} -> {following.time}"
                 )
 
     @staticmethod

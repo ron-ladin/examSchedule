@@ -13,7 +13,6 @@ Fields:
                                        absent — keeps the field backward-compatible.
 
 Notes:
-    - Use @dataclass or Pydantic BaseModel.
     - No file I/O here — pure data container.
     - Semester values are compared using normalize_semester(), so both
       "SPRI" and "SPRING" are accepted and treated as "SPRI" internally.
@@ -32,6 +31,12 @@ class CourseOffering:
     semester: str
     requirement: str  # Obligatory / Elective
     student_count: Optional[int] = None  # Feature 4 (SCRUM-285); None when absent
+
+    def __post_init__(self) -> None:
+        # student_count is optional; when present it is a count, so 0 is valid
+        # (spec 2.1.5) but a negative value is not.
+        if self.student_count is not None and self.student_count < 0:
+            raise ValueError(f"student_count cannot be negative: {self.student_count}")
 
     def is_relevant(self, selected_programs: List[str], semester: str) -> bool:
         return (

@@ -39,13 +39,16 @@ class ClassroomAssignment:
     proctor_count: int
 
     def __post_init__(self) -> None:
-        if self.students_assigned < 0:
+        # bool is a subclass of int, so reject it explicitly on both counts.
+        if isinstance(self.students_assigned, bool) or self.students_assigned < 0:
             raise ValueError(
-                f"students_assigned cannot be negative: {self.students_assigned}"
+                f"students_assigned must be a non-negative integer: {self.students_assigned}"
             )
 
-        if self.proctor_count < 0:
-            raise ValueError(f"proctor_count cannot be negative: {self.proctor_count}")
+        if isinstance(self.proctor_count, bool) or self.proctor_count < 0:
+            raise ValueError(
+                f"proctor_count must be a non-negative integer: {self.proctor_count}"
+            )
 
         # A room cannot hold more students than its capacity (spec 6.2.4).
         if self.students_assigned > self.room.capacity:

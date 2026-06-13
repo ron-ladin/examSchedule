@@ -24,8 +24,8 @@ class Classroom:
     capacity: int
 
     def __post_init__(self) -> None:
-        if not self.room_id.strip():
-            raise ValueError("Classroom room_id must not be empty")
+        if not isinstance(self.room_id, str) or not self.room_id.strip():
+            raise ValueError(f"Classroom room_id must be a non-empty string: {self.room_id!r}")
 
         # Capacity is the number of seats, so it must be a positive integer (spec 2.2.4).
         # bool is a subclass of int, so reject it explicitly (True would pass as 1).
