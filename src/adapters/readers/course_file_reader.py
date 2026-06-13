@@ -11,7 +11,7 @@ Responsible only for:
 """
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
@@ -107,10 +107,12 @@ class CourseFileReader:
             for part in line.split(",")
         ]
 
-        if len(parts) != 4:
+        # The 5th field (StudentCount) is optional, so 4 or 5 parts are valid
+        # (specv4 §2.1.1 / §2.1.2). 4-part lines stay backward-compatible.
+        if len(parts) not in (4, 5):
             raise ValueError(f"Invalid course offering line: {line}")
 
-        program_id, year_text, semester, requirement = parts
+        program_id, year_text, semester, requirement = parts[:4]
 
         if not self._is_valid_program_id(program_id):
             raise ValueError(f"Invalid program id in offering: {program_id}")
@@ -125,13 +127,31 @@ class CourseFileReader:
 
         semester = normalize_semester(semester)
         requirement = self._normalize_requirement(requirement)
+        student_count = self._parse_student_count(parts)
 
         return CourseOffering(
             program_id=program_id,
             year=year,
             semester=semester,
             requirement=requirement,
+            student_count=student_count,
         )
+
+    def _parse_student_count(self, parts: List[str]) -> Optional[int]:
+        # Absent field -> None, keeping pre-Feature-4 files valid (specv4 §2.1.1).
+        # Whether a relevant Exam course is *required* to carry the count is a
+        # feature-gated upload check (specv4 §2.1.4 / §3.3), not the reader's job.
+        if len(parts) == 4:
+            return None
+
+        count_text = parts[4]
+
+        # isdigit() rejects negatives, decimals and empties; 0 is allowed and
+        # means the course is skipped for room assignment (specv4 §2.1.5 / §7.5).
+        if not count_text.isdigit():
+            raise ValueError(f"Invalid student count in offering: {count_text}")
+
+        return int(count_text)
 
     def _normalize_requirement(self, requirement: str) -> str:
         key = requirement.strip().lower()
