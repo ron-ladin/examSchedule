@@ -1016,7 +1016,7 @@ class ConfigScreen(QWidget):
         is_running = (
             self._gen_process is not None and self._gen_process.is_alive()
         )
-        if self._settings_dialog is None or not self._settings_dialog.isVisible():
+        if self._settings_dialog is None:
             self._settings_dialog = SettingsScreen(
                 self._controller.settings,
                 is_generating=is_running,
@@ -1024,10 +1024,10 @@ class ConfigScreen(QWidget):
             )
             self._settings_dialog.settings_changed.connect(self._on_settings_changed)
             self._settings_dialog.sort_order_changed.connect(self._controller.apply_sort)
-            self._settings_dialog.show()
-        else:
-            self._settings_dialog.raise_()
-            self._settings_dialog.activateWindow()
+
+        self._settings_dialog.show()
+        self._settings_dialog.raise_()
+        self._settings_dialog.activateWindow()
 
     def _on_settings_changed(self, new_settings: Settings) -> None:
         """Persist the full settings (thresholds + sort) from the dialog OK path."""

@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -216,8 +217,6 @@ class SettingsScreen(QDialog):
         self.sort_order_changed.emit(config)
 
     def _on_accept(self) -> None:
-        from PyQt6.QtWidgets import QMessageBox
-
         try:
             new_settings = self._build_settings()
         except ValueError as exc:
