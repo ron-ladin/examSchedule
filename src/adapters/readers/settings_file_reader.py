@@ -127,7 +127,7 @@ class SettingsFileReader:
             seen.add(entry.criterion)
             entries.append(entry)
 
-        return ThresholdSettings(entries=entries)
+        return ThresholdSettings(entries=tuple(entries))
 
     def _parse_threshold_line(self, line: str) -> ThresholdEntry:
         parts = [
@@ -187,7 +187,7 @@ class SettingsFileReader:
 
         self._validate_sequential_priorities(rules)
 
-        return SortingConfig(rules=rules)
+        return SortingConfig(rules=tuple(rules))
 
     def _parse_sort_line(self, line: str) -> SortRule:
         parts = [

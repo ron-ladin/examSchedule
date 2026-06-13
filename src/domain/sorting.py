@@ -58,11 +58,11 @@ class SortRule:
     criterion: SortCriterion
 
 
-@dataclass
+@dataclass(frozen=True)
 class SortingConfig:
     """The parsed SORT block: ordered sort rules (all applied descending)."""
 
-    rules: List[SortRule] = field(default_factory=list)
+    rules: tuple[SortRule, ...] = ()
 
     def criteria_in_order(self) -> List[SortCriterion]:
         """Return the sort criteria from primary to least significant."""
