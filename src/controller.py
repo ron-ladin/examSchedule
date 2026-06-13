@@ -27,11 +27,15 @@ from src.adapters.in_memory_data_provider import InMemoryDataProvider
 from src.adapters.readers.course_file_reader import CourseFileReader
 from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
 from src.adapters.readers.program_selector_reader import ProgramSelectorReader
+from src.adapters.readers.settings_file_reader import SettingsFileReader
 from src.adapters.text_file_exporter import TextFileExporter
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
 from src.domain.schedule import Schedule
 from src.domain.semester import normalize_semester
+from src.domain.settings import Settings
+from src.domain.sorting import SortingConfig
+from src.domain.threshold import ThresholdSettings
 from src.engine.app_controller import AppController as _EngineController
 from src.engine.schedule_generator import ScheduleGenerator
 from src.interfaces.i_output_exporter import IOutputExporter
@@ -182,6 +186,36 @@ class DesktopController:
         self._has_more_schedules: dict[str, bool] = {}
         self._iterator_overflows: dict[str, Schedule] = {}
         self._results_stale: bool = False
+        self._settings: Settings = Settings(
+            thresholds=ThresholdSettings(),
+            sorting=SortingConfig(),
+        )
+
+    @property
+    def settings(self) -> Settings:
+        return self._settings
+
+    def apply_sort(self, config: SortingConfig) -> None:
+        """Store a new sort config immediately on sort-list change (§281).
+
+        Preserves existing thresholds. Called live — does NOT restart generation.
+        """
+        self._settings = Settings(thresholds=self._settings.thresholds, sorting=config)
+        logger.info("apply_sort: %d active rules", len(config.rules))
+
+    def apply_settings(self, settings: Settings) -> None:
+        """Persist the full settings object (thresholds + sort) from the dialog OK path."""
+        self._settings = settings
+        logger.info(
+            "apply_settings: thresholds=%d active, sort=%d rules",
+            sum(1 for e in settings.thresholds.entries if e.enabled),
+            len(settings.sorting.rules),
+        )
+
+    def load_settings(self, path: Path) -> None:
+        """Load settings from a file and apply them (§1.1 CLI path)."""
+        settings = SettingsFileReader(Path(path)).read()
+        self.apply_settings(settings)
 
     def load_courses(self, path: Path, mode: str = "replace") -> int:
         """
