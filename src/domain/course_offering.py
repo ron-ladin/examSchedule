@@ -33,13 +33,12 @@ class CourseOffering:
     student_count: Optional[int] = None  # Feature 4 (SCRUM-285); None when absent
 
     def __post_init__(self) -> None:
-        # student_count is optional; when present it must be a non-negative integer.
-        # bool is a subclass of int — reject it explicitly (True would pass as 1).
-        if self.student_count is not None:
-            if isinstance(self.student_count, bool) or self.student_count < 0:
-                raise ValueError(
-                    f"student_count must be a non-negative integer: {self.student_count}"
-                )
+        # student_count is optional; when present it is a count, so 0 is valid
+        # (spec 2.1.5) but a negative value is not.
+        if self.student_count is not None and (
+            isinstance(self.student_count, bool) or self.student_count < 0
+        ):
+            raise ValueError(f"student_count cannot be negative: {self.student_count}")
 
     def is_relevant(self, selected_programs: List[str], semester: str) -> bool:
         return (

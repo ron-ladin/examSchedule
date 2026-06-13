@@ -163,10 +163,10 @@ class SettingsFileReader:
 
     def _parse_k(self, k_text: str) -> int:
         text = k_text.strip()
-        digits = text[1:] if text.startswith("-") else text
 
-        if not digits.isdigit():
-            raise ValueError(f"Invalid k value (must be an integer): {k_text}")
+        # isdigit() returns False for negative numbers ('-' is not a digit), so negatives are implicitly rejected
+        if not text.isdigit():
+            raise ValueError(f"Invalid k value (must be a non-negative integer): {k_text}")
 
         return int(text)
 

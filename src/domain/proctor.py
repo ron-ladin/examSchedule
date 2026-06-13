@@ -23,8 +23,7 @@ class ProctorConfig:
     def __post_init__(self) -> None:
         if isinstance(self.students_per_proctor, bool) or self.students_per_proctor < 1:
             raise ValueError(
-                f"students_per_proctor must be a positive integer >= 1, "
-                f"got: {self.students_per_proctor!r}"
+                f"students_per_proctor must be a positive integer: {self.students_per_proctor}"
             )
 
     def proctors_for(self, student_count: int) -> int:

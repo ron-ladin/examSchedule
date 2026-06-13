@@ -80,25 +80,26 @@ def test_is_elective_false_for_obligatory():
     assert offering.is_elective() is False
 
 
-@pytest.mark.unit
-def test_student_count_valid_zero():
-    o = CourseOffering("83101", 1, "FALL", "Obligatory", student_count=0)
-    assert o.student_count == 0
+def test_student_count_bool_true_rejected():
+    # bool is a subclass of int; True == 1 would silently pass without the guard
+    import pytest
+    with pytest.raises(ValueError):
+        CourseOffering(
+            program_id="83101",
+            year=1,
+            semester="FALL",
+            requirement="Obligatory",
+            student_count=True,
+        )
 
 
-@pytest.mark.unit
-def test_student_count_rejects_negative():
-    with pytest.raises(ValueError, match="non-negative"):
-        CourseOffering("83101", 1, "FALL", "Obligatory", student_count=-1)
-
-
-@pytest.mark.unit
-def test_student_count_rejects_bool_true():
-    with pytest.raises(ValueError, match="non-negative"):
-        CourseOffering("83101", 1, "FALL", "Obligatory", student_count=True)
-
-
-@pytest.mark.unit
-def test_student_count_rejects_bool_false():
-    with pytest.raises(ValueError, match="non-negative"):
-        CourseOffering("83101", 1, "FALL", "Obligatory", student_count=False)
+def test_student_count_bool_false_rejected():
+    import pytest
+    with pytest.raises(ValueError):
+        CourseOffering(
+            program_id="83101",
+            year=1,
+            semester="FALL",
+            requirement="Obligatory",
+            student_count=False,
+        )

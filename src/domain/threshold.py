@@ -20,7 +20,7 @@ Notes:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, Optional, Tuple
 
 
 class Criterion(Enum):
@@ -70,7 +70,7 @@ class ThresholdEntry:
 
 @dataclass(frozen=True)
 class ThresholdSettings:
-    """The parsed THRESHOLD block: a collection of ThresholdEntry objects."""
+    """The parsed THRESHOLD block: an immutable collection of ThresholdEntry objects."""
 
     entries: tuple[ThresholdEntry, ...] = ()
 
