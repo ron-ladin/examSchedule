@@ -48,15 +48,10 @@ class SlotsFileReader:
         return slots
 
     def _read_slots_line(self) -> str:
-        content = self.slots_path.read_text(encoding="utf-8")
-
         # Drop the $$$$ markers, then keep the non-empty content lines (specv4 §2.3.6).
-        lines = [
-            line.strip()
-            for chunk in content.split("$$$$")
-            for line in chunk.splitlines()
-            if line.strip()
-        ]
+        content = self.slots_path.read_text(encoding="utf-8").replace("$$$$", "")
+
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
 
         # Exactly one comma-separated line of times is expected (specv4 §2.3.6).
         if len(lines) != 1:

@@ -67,9 +67,10 @@ class ClassroomFileReader:
 
         room_id, capacity_text = record
 
-        # Capacity is a positive integer; isdigit() rejects negatives/decimals,
-        # and Classroom() rejects 0 (specv4 §2.2.4).
-        if not capacity_text.isdigit():
+        # Capacity must be a positive integer (specv4 §2.2.4). isdigit() rejects
+        # negatives/decimals; the explicit > 0 check rejects "0" here at the
+        # adapter boundary rather than deferring to the Classroom invariant.
+        if not capacity_text.isdigit() or int(capacity_text) <= 0:
             raise ValueError(f"Classroom capacity must be a positive integer: {capacity_text}")
 
         return Classroom(room_id=room_id, capacity=int(capacity_text))
