@@ -369,3 +369,125 @@ def test_run_skips_periods_with_no_relevant_exam_courses_but_still_exports():
 
     assert exporter.called is True
     assert list(exporter.materialized_schedules.keys()) == ["FALL - Aleph"]
+
+
+# ---------------------------------------------------------------------------
+# ThresholdFilter wiring tests (SCRUM-261)
+# ---------------------------------------------------------------------------
+
+class _RejectAllFilter:
+    """Stub that rejects every schedule."""
+
+    @staticmethod
+    def is_valid(schedule, courses, settings) -> bool:  # noqa: ARG002
+        return False
+
+
+class _AcceptAllFilter:
+    """Stub that accepts every schedule."""
+
+    @staticmethod
+    def is_valid(schedule, courses, settings) -> bool:  # noqa: ARG002
+        return True
+
+
+def _threshold_settings_stub():
+    from src.domain.threshold import ThresholdSettings
+    return ThresholdSettings()
+
+
+def test_threshold_filter_drops_invalid_schedules_from_iterator():
+    """
+    When a threshold_filter is wired, schedules that fail is_valid should be
+    excluded from the lazy iterator before _MemoryExporter sees them.
+    """
+    course = _course(course_id="11111", semester="FALL")
+    period = _period("FALL", "Aleph")
+
+    provider = FakeDataProvider(courses=[course], exam_periods=[period])
+    generator = FakeGenerator()
+    exporter = FakeExporter()
+
+    controller = AppController(
+        data_provider=provider,
+        exporter=exporter,
+        generator=generator,
+        selected_programs=["83101"],
+        threshold_filter=_RejectAllFilter(),
+        threshold_settings=_threshold_settings_stub(),
+    )
+    controller.run()
+
+    assert exporter.materialized_schedules["FALL - Aleph"] == []
+
+
+def test_threshold_filter_accept_all_passes_every_schedule_through():
+    """
+    An accept-all filter should leave the schedule list unchanged.
+    """
+    course = _course(course_id="11111", semester="FALL")
+    period = _period("FALL", "Aleph")
+
+    provider = FakeDataProvider(courses=[course], exam_periods=[period])
+    generator = FakeGenerator()
+    exporter = FakeExporter()
+
+    controller = AppController(
+        data_provider=provider,
+        exporter=exporter,
+        generator=generator,
+        selected_programs=["83101"],
+        threshold_filter=_AcceptAllFilter(),
+        threshold_settings=_threshold_settings_stub(),
+    )
+    controller.run()
+
+    assert len(exporter.materialized_schedules["FALL - Aleph"]) == 1
+
+
+def test_no_threshold_filter_passes_all_schedules_unchanged():
+    """
+    When threshold_filter=None, the lazy iterator is passed through as-is.
+    """
+    course = _course(course_id="11111", semester="FALL")
+    period = _period("FALL", "Aleph")
+
+    provider = FakeDataProvider(courses=[course], exam_periods=[period])
+    generator = FakeGenerator()
+    exporter = FakeExporter()
+
+    controller = AppController(
+        data_provider=provider,
+        exporter=exporter,
+        generator=generator,
+        selected_programs=["83101"],
+    )
+    controller.run()
+
+    assert len(exporter.materialized_schedules["FALL - Aleph"]) == 1
+
+
+def test_threshold_filter_only_applied_when_both_filter_and_settings_provided():
+    """
+    When threshold_filter is provided but threshold_settings is None (or vice versa),
+    the filter must NOT be applied — both must be present to activate filtering.
+    """
+    course = _course(course_id="11111", semester="FALL")
+    period = _period("FALL", "Aleph")
+
+    provider = FakeDataProvider(courses=[course], exam_periods=[period])
+    generator = FakeGenerator()
+    exporter = FakeExporter()
+
+    # threshold_filter provided but threshold_settings=None → filter must be skipped.
+    controller = AppController(
+        data_provider=provider,
+        exporter=exporter,
+        generator=generator,
+        selected_programs=["83101"],
+        threshold_filter=_RejectAllFilter(),
+        threshold_settings=None,
+    )
+    controller.run()
+
+    assert len(exporter.materialized_schedules["FALL - Aleph"]) == 1

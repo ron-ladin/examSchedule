@@ -723,6 +723,114 @@ def test_rapid_generate_back_generate_again_does_not_corrupt_state(tmp_path):
     assert out_new.stat().st_size > 0
 
 
+# ── SCRUM-261: threshold filter + sort wiring ─────────────────────────────────
+
+def test_generate_applies_threshold_filter_and_excludes_invalid_schedules(tmp_path):
+    """
+    When an enabled threshold (MIN_DAYS_BETWEEN_MANDATORY_EXAMS=5) is configured,
+    generate() should return only schedules that satisfy it.
+
+    Two obligatory courses in the same programme + a 5-day window (Jan 5-9)
+    produces 20 raw schedules (5*4). With MIN_DAYS_BETWEEN_MANDATORY_EXAMS=5
+    only the pairs that are at least 5 days apart survive — but the window is
+    only 4 days wide so NO schedule satisfies the constraint.  We verify the
+    result is empty instead of 20.
+    """
+    from src.domain.settings import Settings
+    from src.domain.sorting import SortingConfig
+    from src.domain.threshold import Criterion, ThresholdEntry, ThresholdSettings
+
+    cp = tmp_path / "courses.txt"
+    dp = tmp_path / "dates.txt"
+
+    cp.write_text(
+        "Calculus\n11111\nDr. Cohen\n83101, 1, FALL, Obligatory\nExam\n$$$$\n"
+        "Algebra\n22222\nDr. Levi\n83101, 1, FALL, Obligatory\nExam\n",
+        encoding="utf-8",
+    )
+    dp.write_text("FALL, Aleph\n05-01-2026, 09-01-2026\n", encoding="utf-8")
+
+    ctrl = DesktopController()
+    ctrl.load_courses(cp)
+    ctrl.load_periods(dp)
+    ctrl.set_selected_programs(["83101"])
+
+    strict_settings = Settings(
+        thresholds=ThresholdSettings(
+            entries=(
+                ThresholdEntry(
+                    criterion=Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+                    enabled=True,
+                    k=5,
+                ),
+            )
+        ),
+        sorting=SortingConfig(),
+    )
+    ctrl.apply_settings(strict_settings)
+
+    schedules_by_period, _, _ = ctrl.generate()
+
+    period_key = next(iter(schedules_by_period))
+    assert schedules_by_period[period_key] == [], (
+        "All schedules should be filtered out when no pair is >= 5 days apart"
+    )
+
+
+def test_generate_sorting_orders_schedules_by_active_sort_rule(tmp_path):
+    """
+    When a sort rule is active, generate() should return schedules already
+    sorted (most-spread-apart first for SORT_MIN_DAYS_MANDATORY).
+
+    Two obligatory courses in a 3-day window produce 6 schedules (3*2).
+    With SORT_MIN_DAYS_MANDATORY the schedule with the largest gap should
+    appear first.
+    """
+    from src.domain.settings import Settings
+    from src.domain.sorting import SortCriterion, SortRule, SortingConfig
+    from src.domain.threshold import ThresholdSettings
+
+    cp = tmp_path / "courses.txt"
+    dp = tmp_path / "dates.txt"
+
+    cp.write_text(
+        "Calculus\n11111\nDr. Cohen\n83101, 1, FALL, Obligatory\nExam\n$$$$\n"
+        "Algebra\n22222\nDr. Levi\n83101, 1, FALL, Obligatory\nExam\n",
+        encoding="utf-8",
+    )
+    dp.write_text("FALL, Aleph\n05-01-2026, 07-01-2026\n", encoding="utf-8")
+
+    ctrl = DesktopController()
+    ctrl.load_courses(cp)
+    ctrl.load_periods(dp)
+    ctrl.set_selected_programs(["83101"])
+
+    sort_settings = Settings(
+        thresholds=ThresholdSettings(),
+        sorting=SortingConfig(rules=[SortRule(priority=1, criterion=SortCriterion.SORT_MIN_DAYS_MANDATORY)]),
+    )
+    ctrl.apply_settings(sort_settings)
+
+    schedules_by_period, courses_by_id, _ = ctrl.generate()
+
+    period_key = next(iter(schedules_by_period))
+    schedules = schedules_by_period[period_key]
+    courses = list(courses_by_id.values())
+
+    assert len(schedules) == 6
+
+    # Verify descending gap order: first schedule should have the largest gap.
+    from itertools import combinations
+    from datetime import date as _date
+
+    def _min_gap(sched) -> int:
+        dates = list(sched.assignments.values())
+        return min(abs((b - a).days) for a, b in combinations(dates, 2))
+
+    gaps = [_min_gap(s) for s in schedules]
+    assert gaps == sorted(gaps, reverse=True), "schedules should be sorted by descending min gap"
+
+
 def test_selecting_more_than_five_programmes_is_rejected_and_previous_selection_kept():
     """
     The 5-programme boundary must reject invalid input without corrupting the
