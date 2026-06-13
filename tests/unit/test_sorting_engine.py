@@ -402,3 +402,37 @@ class TestEdgeCases:
         result = SortingEngine.sort(original, [c1, c2], config)
         assert original == [sched_b, sched_a]  # unchanged
         assert result == [sched_a, sched_b]
+
+    def test_sort_rules_are_applied_by_priority_not_input_order(self):
+        """SortingConfig priority must win over the raw order of rules."""
+        c1, c2, c3 = _mandatory("11111"), _mandatory("22222"), _mandatory("33333")
+
+        # Better primary score for SORT_MIN_DAYS_MANDATORY, worse secondary day-load.
+        sched_better_gap = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 15),
+            "33333": date(2026, 1, 20),
+        })
+
+        # Worse primary score, better secondary score.
+        sched_better_day_load = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 8),
+            "33333": date(2026, 1, 5),
+        })
+
+        config = SortingConfig(
+            rules=(
+                # Intentionally out of order: priority 2 appears before priority 1.
+                SortRule(priority=2, criterion=SortCriterion.SORT_MAX_EXAMS_PER_DAY),
+                SortRule(priority=1, criterion=SortCriterion.SORT_MIN_DAYS_MANDATORY),
+            )
+        )
+
+        result = SortingEngine.sort(
+            [sched_better_day_load, sched_better_gap],
+            [c1, c2, c3],
+            config,
+        )
+
+        assert result[0] is sched_better_gap
