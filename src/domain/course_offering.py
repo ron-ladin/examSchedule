@@ -35,7 +35,9 @@ class CourseOffering:
     def __post_init__(self) -> None:
         # student_count is optional; when present it is a count, so 0 is valid
         # (spec 2.1.5) but a negative value is not.
-        if self.student_count is not None and self.student_count < 0:
+        if self.student_count is not None and (
+            isinstance(self.student_count, bool) or self.student_count < 0
+        ):
             raise ValueError(f"student_count cannot be negative: {self.student_count}")
 
     def is_relevant(self, selected_programs: List[str], semester: str) -> bool:

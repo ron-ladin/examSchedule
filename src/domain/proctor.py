@@ -20,6 +20,12 @@ from dataclasses import dataclass
 class ProctorConfig:
     students_per_proctor: int  # the X in the 1:X ratio (X > 0)
 
+    def __post_init__(self) -> None:
+        if isinstance(self.students_per_proctor, bool) or self.students_per_proctor < 1:
+            raise ValueError(
+                f"students_per_proctor must be a positive integer: {self.students_per_proctor}"
+            )
+
     def proctors_for(self, student_count: int) -> int:
         """
         Return the number of proctors required for a room with the given
