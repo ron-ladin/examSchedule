@@ -67,3 +67,20 @@ def test_is_elective_true_for_elective():
 def test_is_elective_false_for_obligatory():
     offering = _make_offering(requirement="Obligatory")
     assert offering.is_elective() is False
+
+
+def test_student_count_valid_zero():
+    o = CourseOffering("83101", 1, "FALL", "Obligatory", student_count=0)
+    assert o.student_count == 0
+
+
+def test_student_count_rejects_negative():
+    import pytest
+    with pytest.raises(ValueError, match="non-negative"):
+        CourseOffering("83101", 1, "FALL", "Obligatory", student_count=-1)
+
+
+def test_student_count_rejects_bool():
+    import pytest
+    with pytest.raises(ValueError, match="non-negative"):
+        CourseOffering("83101", 1, "FALL", "Obligatory", student_count=True)
