@@ -18,9 +18,9 @@ Notes:
     - Validation of k lives in the reader (SettingsFileReader).
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, Optional, Tuple
 
 
 class Criterion(Enum):
@@ -68,11 +68,11 @@ class ThresholdEntry:
     k: int
 
 
-@dataclass
+@dataclass(frozen=True)
 class ThresholdSettings:
-    """The parsed THRESHOLD block: a collection of ThresholdEntry objects."""
+    """The parsed THRESHOLD block: an immutable collection of ThresholdEntry objects."""
 
-    entries: List[ThresholdEntry] = field(default_factory=list)
+    entries: Tuple[ThresholdEntry, ...] = ()
 
     def for_criterion(self, criterion: Criterion) -> Optional[ThresholdEntry]:
         """Return the entry for the given criterion, or None if absent."""

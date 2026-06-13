@@ -127,7 +127,7 @@ class SettingsFileReader:
             seen.add(entry.criterion)
             entries.append(entry)
 
-        return ThresholdSettings(entries=entries)
+        return ThresholdSettings(entries=tuple(entries))
 
     def _parse_threshold_line(self, line: str) -> ThresholdEntry:
         parts = [
@@ -163,10 +163,9 @@ class SettingsFileReader:
 
     def _parse_k(self, k_text: str) -> int:
         text = k_text.strip()
-        digits = text[1:] if text.startswith("-") else text
 
-        if not digits.isdigit():
-            raise ValueError(f"Invalid k value (must be an integer): {k_text}")
+        if not text.isdigit():
+            raise ValueError(f"Invalid k value (must be a non-negative integer): {k_text}")
 
         return int(text)
 
@@ -187,7 +186,7 @@ class SettingsFileReader:
 
         self._validate_sequential_priorities(rules)
 
-        return SortingConfig(rules=rules)
+        return SortingConfig(rules=tuple(rules))
 
     def _parse_sort_line(self, line: str) -> SortRule:
         parts = [

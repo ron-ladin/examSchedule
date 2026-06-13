@@ -19,9 +19,9 @@ Notes:
     - Sorting may change at runtime; threshold requirements do not.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 
 class SortCriterion(Enum):
@@ -58,11 +58,11 @@ class SortRule:
     criterion: SortCriterion
 
 
-@dataclass
+@dataclass(frozen=True)
 class SortingConfig:
-    """The parsed SORT block: ordered sort rules (all applied descending)."""
+    """The parsed SORT block: an immutable, ordered collection of sort rules."""
 
-    rules: List[SortRule] = field(default_factory=list)
+    rules: Tuple[SortRule, ...] = ()
 
     def criteria_in_order(self) -> List[SortCriterion]:
         """Return the sort criteria from primary to least significant."""
