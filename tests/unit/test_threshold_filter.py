@@ -414,3 +414,25 @@ class TestMultipleCriteriaActive:
             "22222": date(2026, 1, 5),
         })
         assert ThresholdFilter.is_valid(schedule, courses, ThresholdSettings()) is True
+
+    def test_unassigned_courses_do_not_affect_threshold_validation(self):
+        """Courses not assigned in a schedule must not affect threshold checks."""
+        c1 = _mandatory("11111")
+        c2 = _mandatory("22222")
+        unrelated = _mandatory("99999")
+
+        schedule = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 10),
+        })
+
+        settings = _settings_only(
+            Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+            k=5,
+        )
+
+        assert ThresholdFilter.is_valid(
+            schedule,
+            [c1, c2, unrelated],
+            settings,
+        ) is True
