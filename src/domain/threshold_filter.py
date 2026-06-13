@@ -16,11 +16,12 @@ from itertools import combinations
 from typing import Dict, List, Tuple
 
 from src.domain.course import Course
+from src.domain.interfaces import IThresholdFilter
 from src.domain.schedule import Schedule
 from src.domain.threshold import Criterion, ThresholdSettings
 
 
-class ThresholdFilter:
+class ThresholdFilter(IThresholdFilter):
 
     @staticmethod
     def is_valid(
