@@ -75,7 +75,7 @@ def test_sort_block_optional(tmp_path):
     settings = SettingsFileReader(
         _write(tmp_path, "THRESHOLD\nMAX_EXAMS_PER_DAY, ON, 2\n")
     ).read()
-    assert settings.sorting.rules == []
+    assert settings.sorting.rules == ()
 
 
 # Sort rules are ordered by priority, not by their order in the file.
