@@ -7,6 +7,20 @@ from src.domain.semester import (
     display_semester,
     normalize_semester,
 )
+from src.domain.settings import Settings
+from src.domain.sorting import (
+    SortCriterion,
+    SortingConfig,
+    SortRule,
+    normalize_sort_criterion,
+)
+from src.domain.threshold import (
+    CRITERION_MIN_K,
+    Criterion,
+    ThresholdEntry,
+    ThresholdSettings,
+    normalize_criterion,
+)
 
 __all__ = [
     "Course",
@@ -16,4 +30,14 @@ __all__ = [
     "VALID_INTERNAL_SEMESTERS",
     "display_semester",
     "normalize_semester",
+    "CRITERION_MIN_K",
+    "Criterion",
+    "Settings",
+    "SortCriterion",
+    "SortingConfig",
+    "SortRule",
+    "ThresholdEntry",
+    "ThresholdSettings",
+    "normalize_criterion",
+    "normalize_sort_criterion",
 ]
