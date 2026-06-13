@@ -1019,12 +1019,12 @@ class ConfigScreen(QWidget):
         if self._settings_dialog is None:
             self._settings_dialog = SettingsScreen(
                 self._controller.settings,
-                is_generating=is_running,
                 parent=self,
             )
             self._settings_dialog.settings_changed.connect(self._on_settings_changed)
             self._settings_dialog.sort_order_changed.connect(self._controller.apply_sort)
 
+        self._settings_dialog.set_generation_state(is_running)
         self._settings_dialog.show()
         self._settings_dialog.raise_()
         self._settings_dialog.activateWindow()
