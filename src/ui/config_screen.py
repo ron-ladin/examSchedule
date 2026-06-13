@@ -49,6 +49,8 @@ from PyQt6.QtWidgets import (
 )
 
 from src.controller import DesktopController, _run_generation_process
+from src.domain.settings import Settings
+from src.ui.settings_screen import SettingsScreen
 from src.ui.assets.icons import BookIcon, CalendarIcon
 from src.ui.period_utils import (
     STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER,
@@ -422,6 +424,7 @@ class ConfigScreen(QWidget):
         self._pending_color_map: dict[str, str] = {}
         self._gen_start_time: float = 0.0
         self._dead_ticks: int = 0
+        self._settings_dialog: SettingsScreen | None = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -472,6 +475,21 @@ class ConfigScreen(QWidget):
         hl.addWidget(brand)
         hl.addWidget(tagline)
         hl.addStretch()
+
+        settings_btn = QPushButton("⚙  Settings")
+        settings_btn.setObjectName("settingsBtn")
+        settings_btn.setFixedHeight(32)
+        settings_btn.setStyleSheet(
+            "QPushButton#settingsBtn {"
+            " background: rgba(0,90,194,0.08); border: 1px solid rgba(0,90,194,0.25);"
+            " border-radius: 6px; padding: 0 14px;"
+            " font-size: 13px; font-weight: 600; color: #005ac2;"
+            "}"
+            "QPushButton#settingsBtn:hover { background: rgba(0,90,194,0.15); }"
+            "QPushButton#settingsBtn:pressed { background: rgba(0,90,194,0.25); }"
+        )
+        settings_btn.clicked.connect(self._on_open_settings)
+        hl.addWidget(settings_btn)
 
         return hdr
 
@@ -993,6 +1011,34 @@ class ConfigScreen(QWidget):
     def _update_prog_label(self) -> None:
         self._prog_count_lbl.setText(f"{self._count_checked()} / {_MAX_PROGS} selected")
 
+    def _on_open_settings(self) -> None:
+        """Open (or raise) the modeless SettingsScreen dialog."""
+        is_running = (
+            self._gen_process is not None and self._gen_process.is_alive()
+        )
+        if self._settings_dialog is None:
+            self._settings_dialog = SettingsScreen(
+                self._controller.settings,
+                parent=self,
+            )
+            self._settings_dialog.settings_changed.connect(self._on_settings_changed)
+            self._settings_dialog.sort_order_changed.connect(self._controller.apply_sort)
+
+        self._settings_dialog.set_generation_state(is_running)
+        self._settings_dialog.show()
+        self._settings_dialog.raise_()
+        self._settings_dialog.activateWindow()
+
+    def _on_settings_changed(self, new_settings: Settings) -> None:
+        """Persist the full settings (thresholds + sort) from the dialog OK path."""
+        self._controller.apply_settings(new_settings)
+        logger.info("Settings updated via SettingsScreen.")
+
+    def _notify_settings_state(self, is_running: bool) -> None:
+        """Propagate generation state to the settings dialog if it is open."""
+        if self._settings_dialog is not None and self._settings_dialog.isVisible():
+            self._settings_dialog.set_generation_state(is_running)
+
     def _on_generate(self) -> None:
         selected = self._get_selected_ids()
 
@@ -1006,6 +1052,7 @@ class ConfigScreen(QWidget):
         self.generation_started.emit((selected, self._pending_color_map))
 
         self._gen_btn.setEnabled(False)
+        self._notify_settings_state(True)
         self._set_status("Generating schedules…")
         self._progress_bar.setRange(0, 0)
         self._progress_bar.setStyleSheet(
@@ -1097,6 +1144,7 @@ class ConfigScreen(QWidget):
 
             self._controller.on_generation_succeeded(truncated_periods)
 
+            self._notify_settings_state(False)
             self._gen_btn.setEnabled(True)
             self._set_status("✓  Schedule generated.", ok=True)
 
@@ -1115,6 +1163,7 @@ class ConfigScreen(QWidget):
 
     def _fail(self, msg: str) -> None:
         self._reset_progress()
+        self._notify_settings_state(False)
 
         if self._poll_timer:
             self._poll_timer.stop()

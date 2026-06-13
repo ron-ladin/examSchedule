@@ -252,6 +252,7 @@ frontend/node_modules/
 # Local design / blueprint docs (Part 2 reference — not for commit)
 Phase2_Engineering_Blueprint*.md
 SDD-foundation.md
+sprint3_source_of_truth.md
 *.pdf
 
 .devcontainer/

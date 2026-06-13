@@ -11,17 +11,21 @@ Spec §6.2: no operation in this screen may block the UI thread.
 Layout (two tabs):
     Tab 1 — Thresholds
         For each criterion (2.1–2.5): [checkbox ON/OFF] [label] [spinbox k]
+        All controls lock while generation is active (§280 AC).
     Tab 2 — Sort Order
         Draggable list of sort criteria; user reorders to set priority.
         Checkbox per row to include/exclude a criterion from the sort.
+        Controls remain active during generation (§281 AC) — changes re-sort immediately.
 
 Signals emitted:
-    settings_changed(Settings) — emitted when the user clicks Apply/OK.
+    settings_changed(Settings)        — emitted on OK/Apply click (threshold commit).
+    sort_order_changed(SortingConfig) — emitted immediately whenever sort list changes.
 
-Usage:
-    dialog = SettingsScreen(current_settings, parent=self)
+Usage (modeless — dialog stays open while generation runs):
+    dialog = SettingsScreen(current_settings, is_generating=False, parent=self)
     dialog.settings_changed.connect(self._on_settings_changed)
-    dialog.exec()
+    dialog.sort_order_changed.connect(controller.apply_sort)
+    dialog.show()
 """
 
 import logging
@@ -35,13 +39,12 @@ from PyQt6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
-
-_log = logging.getLogger(__name__)
 
 from src.domain.settings import Settings
 from src.domain.sorting import SortCriterion, SortRule, SortingConfig
@@ -51,6 +54,8 @@ from src.domain.threshold import (
     ThresholdEntry,
     ThresholdSettings,
 )
+
+_log = logging.getLogger(__name__)
 
 # Human-readable labels for each criterion, shown in the UI.
 _THRESHOLD_LABELS: dict[Criterion, str] = {
@@ -74,15 +79,24 @@ _CRITERION_ROLE = Qt.ItemDataRole.UserRole
 
 
 class SettingsScreen(QDialog):
-    """Modal dialog for threshold + sort settings (spec §2 and §3)."""
+    """Modeless dialog for threshold + sort settings (spec §2 and §3)."""
 
-    # Emitted with the new Settings when the user accepts the dialog.
+    # Emitted on OK: full settings object (thresholds + sort).
     settings_changed = pyqtSignal(Settings)
 
-    def __init__(self, current: Settings, parent: QWidget | None = None) -> None:
+    # Emitted immediately whenever the sort list changes (drag or checkbox).
+    # Connect to controller.apply_sort() for live re-sort without restart.
+    sort_order_changed = pyqtSignal(SortingConfig)
+
+    def __init__(
+        self,
+        current: Settings,
+        is_generating: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Scheduling Settings")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(540)
 
         self._current = current
 
@@ -92,6 +106,10 @@ class SettingsScreen(QDialog):
 
         self._build_ui()
 
+        # Apply generation-lock state after widgets exist.
+        if is_generating:
+            self.set_generation_state(True)
+
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -99,10 +117,10 @@ class SettingsScreen(QDialog):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._build_threshold_tab(), "Thresholds (§2)")
-        tabs.addTab(self._build_sort_tab(), "Sort Order (§3)")
-        layout.addWidget(tabs)
+        self._tabs = QTabWidget()
+        self._tabs.addTab(self._build_threshold_tab(), "Thresholds (§2)")
+        self._tabs.addTab(self._build_sort_tab(), "Sort Order (§3)")
+        layout.addWidget(self._tabs)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -112,8 +130,6 @@ class SettingsScreen(QDialog):
         layout.addWidget(buttons)
 
     def _build_threshold_tab(self) -> QWidget:
-        # TODO (§6.2): add an "Apply" button so users can test threshold
-        #   changes without closing the dialog — keeps the UI feeling live.
         widget = QWidget()
         form = QFormLayout(widget)
         form.setSpacing(10)
@@ -121,6 +137,7 @@ class SettingsScreen(QDialog):
         for criterion in Criterion:
             entry = self._current.thresholds.for_criterion(criterion)
             enabled = entry.enabled if entry else False
+            # Source of truth §2.3: k >= 0 for elective collisions; k >= 1 for all others.
             k_value = entry.k if entry else CRITERION_MIN_K[criterion]
 
             checkbox = QCheckBox(_THRESHOLD_LABELS[criterion])
@@ -130,7 +147,7 @@ class SettingsScreen(QDialog):
             spinbox.setMinimum(CRITERION_MIN_K[criterion])
             spinbox.setMaximum(365)
             spinbox.setValue(k_value)
-            # Disable k input when the criterion is toggled OFF.
+            # k input follows toggle state.
             spinbox.setEnabled(enabled)
             checkbox.toggled.connect(spinbox.setEnabled)
 
@@ -140,27 +157,29 @@ class SettingsScreen(QDialog):
         return widget
 
     def _build_sort_tab(self) -> QWidget:
-        # TODO: enable drag-drop reordering (QListWidget.DragDropMode.InternalMove)
-        #   so users can drag rows to set priority visually — spec §3.
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.addWidget(QLabel(
-            "Check criteria to include. Top item = highest priority (primary sort)."
+            "Drag rows to reorder. Check to include. Top = highest priority."
         ))
 
         self._sort_list = QListWidget()
         self._sort_list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
 
-        # Insert currently active criteria in priority order first.
+        # Block signals during population so we don't emit sort_order_changed prematurely.
+        self._sort_list.blockSignals(True)
         seen: set[SortCriterion] = set()
         for rule in sorted(self._current.sorting.rules, key=lambda r: r.priority):
             self._add_sort_item(rule.criterion, checked=True)
             seen.add(rule.criterion)
-
-        # Then append the rest (unchecked).
         for criterion in SortCriterion:
             if criterion not in seen:
                 self._add_sort_item(criterion, checked=False)
+        self._sort_list.blockSignals(False)
+
+        # Live signals: checkbox toggle or drag-reorder → emit sort_order_changed.
+        self._sort_list.itemChanged.connect(self._on_sort_list_changed)
+        self._sort_list.model().rowsMoved.connect(self._on_sort_list_changed)
 
         layout.addWidget(self._sort_list)
         return widget
@@ -168,19 +187,41 @@ class SettingsScreen(QDialog):
     def _add_sort_item(self, criterion: SortCriterion, *, checked: bool) -> None:
         item = QListWidgetItem(_SORT_LABELS[criterion])
         item.setData(_CRITERION_ROLE, criterion)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
         self._sort_list.addItem(item)
 
     # ------------------------------------------------------------------
-    # Slot: accept
+    # Public API: generation-state locking
     # ------------------------------------------------------------------
+
+    def set_generation_state(self, is_running: bool) -> None:
+        """Lock threshold controls while generation is active; sort tab stays enabled.
+
+        Spec §280 AC: all threshold UI elements locked during generation.
+        Spec §281 AC: sort controls MUST remain active during generation.
+        """
+        for checkbox, spinbox in self._threshold_widgets.values():
+            checkbox.setEnabled(not is_running)
+            # Spinbox enabled only when not running AND its toggle is ON.
+            spinbox.setEnabled(not is_running and checkbox.isChecked())
+        # Sort list is intentionally unaffected — spec §3 allows mid-run sort changes.
+
+    # ------------------------------------------------------------------
+    # Slots
+    # ------------------------------------------------------------------
+
+    def _on_sort_list_changed(self, *_args) -> None:
+        """Emit sort_order_changed immediately so the controller can re-sort."""
+        config = self._build_sorting_config()
+        self.sort_order_changed.emit(config)
 
     def _on_accept(self) -> None:
         try:
             new_settings = self._build_settings()
         except ValueError as exc:
-            # TODO: surface this as an inline QLabel error instead of ignoring.
             _log.warning("SettingsScreen validation error: %s", exc)
+            QMessageBox.warning(self, "Invalid Settings", str(exc))
             return
 
         self.settings_changed.emit(new_settings)
