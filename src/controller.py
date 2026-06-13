@@ -116,11 +116,35 @@ class _MemoryExporter(IOutputExporter):
                 self.has_more_by_period[key] = False
 
 
+def _process_generated_schedules(
+    schedules_by_period: dict[str, list[Schedule]],
+    courses: list[Course],
+    settings: Settings,
+) -> dict[str, list[Schedule]]:
+    """Apply Sprint 3 threshold filtering first, then sorting."""
+    result: dict[str, list[Schedule]] = {}
+
+    for period_key, schedules in schedules_by_period.items():
+        valid = filter_schedules(
+            schedules,
+            courses,
+            settings.thresholds,
+        )
+        result[period_key] = SortingEngine.sort(
+            valid,
+            courses,
+            settings.sorting,
+        )
+
+    return result
+
+
 def _run_generation_process(
     result_queue,
     courses: "list[Course]",
     exam_periods: "list[ExamPeriod]",
     selected_programs: "list[str]",
+    settings: "Settings | None" = None,
     cap: "int | None" = None,
     period_key: "str | None" = None,
     offset: int = 0,
@@ -160,10 +184,21 @@ def _run_generation_process(
         )
         engine.run()
 
+        active_settings = settings or Settings(
+            thresholds=ThresholdSettings(),
+            sorting=SortingConfig(),
+        )
+
+        processed_schedules = _process_generated_schedules(
+            dict(memory_exporter.schedules_by_period),
+            list(courses),
+            active_settings,
+        )
+
         result_queue.put(
             (
                 True,
-                dict(memory_exporter.schedules_by_period),
+                processed_schedules,
                 dict(memory_exporter.courses_by_id),
                 memory_exporter.truncated_periods,
             )
@@ -192,8 +227,9 @@ class DesktopController:
             thresholds=ThresholdSettings(),
             sorting=SortingConfig(),
         )
+
         # Cache of the last threshold-valid results, kept so a sort-only change
-        # can re-rank in place (resort) instead of regenerating from scratch.
+        # can re-rank in place instead of regenerating from scratch.
         self._last_results: dict[str, list[Schedule]] | None = None
 
     @property
@@ -371,8 +407,6 @@ class DesktopController:
     def mark_results_stale(self) -> None:
         """Mark generated schedules as stale after input data was edited."""
         self._results_stale = True
-        # Cached results no longer reflect the inputs, so a sort-only re-rank
-        # would be misleading — drop the cache and force a regeneration.
         self._last_results = None
 
     def clear_results_stale(self) -> None:
@@ -493,16 +527,16 @@ class DesktopController:
         )
         engine.run()
 
+        processed = self._apply_threshold_and_sort(
+            dict(memory_exporter.schedules_by_period)
+        )
+        self._last_results = processed
+
         self.on_generation_succeeded(set())
 
         self._remaining_schedule_iterators.clear()
         self._has_more_schedules.clear()
         self._iterator_overflows.clear()
-
-        # Apply Sprint 3 thresholds (drop invalid) then sorting (rank valid).
-        # When thresholds/sorting are off this is a faithful pass-through.
-        processed = self._apply_threshold_and_sort(memory_exporter.schedules_by_period)
-        self._last_results = processed
 
         return (
             processed,
@@ -514,31 +548,15 @@ class DesktopController:
         self,
         schedules_by_period: dict[str, list[Schedule]],
     ) -> dict[str, list[Schedule]]:
-        """Filter each period's schedules by the active thresholds, then sort
-        the survivors by the active SortingConfig (descending).
-
-        Threshold filtering MUST precede sorting (spec 3: sorting ranks only the
-        schedules that passed section 2). Courses come from in-memory state; the
-        domain services ignore courses not present in a schedule's assignments.
-        """
-        courses = list(self._courses)
-        thresholds = self._settings.thresholds
-        sorting = self._settings.sorting
-
-        result: dict[str, list[Schedule]] = {}
-        for period_key, schedules in schedules_by_period.items():
-            valid = filter_schedules(schedules, courses, thresholds)
-            result[period_key] = SortingEngine.sort(valid, courses, sorting)
-        return result
+        """Filter each period's schedules by active thresholds, then sort them."""
+        return _process_generated_schedules(
+            schedules_by_period,
+            list(self._courses),
+            self._settings,
+        )
 
     def resort(self, config: SortingConfig) -> dict[str, list[Schedule]]:
-        """Re-rank the cached threshold-valid results by a new SortingConfig
-        WITHOUT regenerating (spec 3 runtime optimization).
-
-        Used when the user changes only the sort order: thresholds and input
-        data are unchanged, so the valid schedules are identical and only their
-        order differs. Raises if there are no cached results to re-sort.
-        """
+        """Re-rank cached threshold-valid results without regenerating schedules."""
         if self._last_results is None:
             raise ValueError(
                 "No results to re-sort. Generate schedules before changing sort order."
@@ -551,6 +569,28 @@ class DesktopController:
             period_key: SortingEngine.sort(schedules, courses, config)
             for period_key, schedules in self._last_results.items()
         }
+
+        self._last_results = resorted
+        return resorted
+
+    def cache_generated_results(
+        self,
+        schedules_by_period: dict[str, list[Schedule]],
+    ) -> dict[str, list[Schedule]]:
+        """Cache subprocess results and apply the current sort order before display.
+
+        The subprocess already receives a settings snapshot and applies thresholds.
+        The parent process re-applies the current sorting config before displaying,
+        because sort order may have changed while generation was running.
+        """
+        courses = list(self._courses)
+        sorting = self._settings.sorting
+
+        resorted = {
+            period_key: SortingEngine.sort(schedules, courses, sorting)
+            for period_key, schedules in schedules_by_period.items()
+        }
+
         self._last_results = resorted
         return resorted
 
@@ -594,6 +634,7 @@ class DesktopController:
                 list(self._selected_programs),
             ),
             kwargs={
+                "settings": self._settings,
                 "cap": RESULT_BATCH_SIZE,
                 "period_key": period_key,
                 "offset": already_loaded,
