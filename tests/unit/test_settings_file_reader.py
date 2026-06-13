@@ -189,3 +189,11 @@ def test_rejects_zero_priority(tmp_path):
     content = "THRESHOLD\nMAX_EXAMS_PER_DAY, ON, 2\nSORT\n0, SORT_MAX_EXAMS_PER_DAY\n"
     with pytest.raises(ValueError):
         SettingsFileReader(_write(tmp_path, content)).read()
+
+
+# A negative k value is rejected (SCRUM-260 behavioral fix).
+def test_rejects_negative_k(tmp_path):
+    with pytest.raises(ValueError):
+        SettingsFileReader(
+            _write(tmp_path, "THRESHOLD\nMAX_EXAMS_PER_DAY, ON, -3\n")
+        ).read()

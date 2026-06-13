@@ -117,3 +117,16 @@ def test_proctors_for_rejects_negative(tmp_path):
     config = ProctorConfig(students_per_proctor=20)
     with pytest.raises(ValueError):
         config.proctors_for(-1)
+
+
+# ProctorConfig with students_per_proctor=0 raises ValueError at construction,
+# preventing a ZeroDivisionError from proctors_for().
+def test_proctor_config_rejects_zero_students_per_proctor():
+    with pytest.raises(ValueError):
+        ProctorConfig(students_per_proctor=0)
+
+
+# bool is a subclass of int; True == 1 would silently pass without the guard.
+def test_proctor_config_rejects_bool_students_per_proctor():
+    with pytest.raises(ValueError):
+        ProctorConfig(students_per_proctor=True)

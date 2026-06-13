@@ -67,3 +67,28 @@ def test_is_elective_true_for_elective():
 def test_is_elective_false_for_obligatory():
     offering = _make_offering(requirement="Obligatory")
     assert offering.is_elective() is False
+
+
+def test_student_count_bool_true_rejected():
+    # bool is a subclass of int; True == 1 would silently pass without the guard
+    import pytest
+    with pytest.raises(ValueError):
+        CourseOffering(
+            program_id="83101",
+            year=1,
+            semester="FALL",
+            requirement="Obligatory",
+            student_count=True,
+        )
+
+
+def test_student_count_bool_false_rejected():
+    import pytest
+    with pytest.raises(ValueError):
+        CourseOffering(
+            program_id="83101",
+            year=1,
+            semester="FALL",
+            requirement="Obligatory",
+            student_count=False,
+        )
