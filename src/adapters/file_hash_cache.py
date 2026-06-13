@@ -25,10 +25,13 @@ Notes:
 
 import hashlib
 import json
+import logging
 import pickle
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+_log = logging.getLogger(__name__)
 
 
 # TODO (SCRUM-§6.1): decide whether to use pickle or a structured format
@@ -69,12 +72,12 @@ class FileHashCache:
         Silently skips if the cache directory is not writable.
         """
         try:
-            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            self._cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             self._write_manifest(self._compute_hash())
             self._write_data(data)
-        except OSError:
+        except OSError as exc:
             # Non-fatal: cache is a performance hint, not a requirement.
-            pass
+            _log.debug("FileHashCache: write skipped — %s", exc)
 
     def invalidate(self) -> None:
         """Delete the cached manifest so the next load() returns None."""

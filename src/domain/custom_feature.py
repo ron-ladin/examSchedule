@@ -48,10 +48,13 @@ STUB — replace once the feature spec (§4.2) is finalised
 ────────────────────────────────────────────────────────────────────────────────
 """
 
+from dataclasses import dataclass
+
 # TODO (§4.2): write docs/custom_feature_spec.md before touching this file.
 # TODO (§4.3): attach the spec to the version release PR.
 
 
+@dataclass(frozen=True)
 class CustomFeatureConfig:
     """Placeholder config object for the custom feature.
 
@@ -62,6 +65,7 @@ class CustomFeatureConfig:
     pass
 
 
+@dataclass(frozen=True)
 class CustomFeatureResult:
     """Placeholder result object produced by the custom feature engine.
 

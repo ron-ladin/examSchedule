@@ -24,7 +24,11 @@ Usage:
     dialog.exec()
 """
 
+import logging
+
 from PyQt6.QtCore import Qt, pyqtSignal
+
+_log = logging.getLogger(__name__)
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -176,7 +180,7 @@ class SettingsScreen(QDialog):
             new_settings = self._build_settings()
         except ValueError as exc:
             # TODO: surface this as an inline QLabel error instead of ignoring.
-            print(f"[SettingsScreen] validation error: {exc}")
+            _log.warning("SettingsScreen validation error: %s", exc)
             return
 
         self.settings_changed.emit(new_settings)
@@ -206,6 +210,7 @@ class SettingsScreen(QDialog):
         return ThresholdSettings(entries=tuple(entries))
 
     def _build_sorting_config(self) -> SortingConfig:
+        assert self._sort_list is not None
         rules: list[SortRule] = []
         priority = 1
         for i in range(self._sort_list.count()):
