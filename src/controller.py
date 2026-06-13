@@ -35,9 +35,11 @@ from src.domain.schedule import Schedule
 from src.domain.semester import normalize_semester
 from src.domain.settings import Settings
 from src.domain.sorting import SortingConfig
+from src.domain.sorting_engine import SortingEngine
 from src.domain.threshold import ThresholdSettings
 from src.engine.app_controller import AppController as _EngineController
 from src.engine.schedule_generator import ScheduleGenerator
+from src.engine.schedule_validator import filter_schedules
 from src.interfaces.i_output_exporter import IOutputExporter
 
 logger = logging.getLogger(__name__)
@@ -190,6 +192,9 @@ class DesktopController:
             thresholds=ThresholdSettings(),
             sorting=SortingConfig(),
         )
+        # Cache of the last threshold-valid results, kept so a sort-only change
+        # can re-rank in place (resort) instead of regenerating from scratch.
+        self._last_results: dict[str, list[Schedule]] | None = None
 
     @property
     def settings(self) -> Settings:
@@ -366,6 +371,9 @@ class DesktopController:
     def mark_results_stale(self) -> None:
         """Mark generated schedules as stale after input data was edited."""
         self._results_stale = True
+        # Cached results no longer reflect the inputs, so a sort-only re-rank
+        # would be misleading — drop the cache and force a regeneration.
+        self._last_results = None
 
     def clear_results_stale(self) -> None:
         """Mark generated schedules as fresh after successful regeneration."""
@@ -491,11 +499,60 @@ class DesktopController:
         self._has_more_schedules.clear()
         self._iterator_overflows.clear()
 
+        # Apply Sprint 3 thresholds (drop invalid) then sorting (rank valid).
+        # When thresholds/sorting are off this is a faithful pass-through.
+        processed = self._apply_threshold_and_sort(memory_exporter.schedules_by_period)
+        self._last_results = processed
+
         return (
-            memory_exporter.schedules_by_period,
+            processed,
             memory_exporter.courses_by_id,
             set(),
         )
+
+    def _apply_threshold_and_sort(
+        self,
+        schedules_by_period: dict[str, list[Schedule]],
+    ) -> dict[str, list[Schedule]]:
+        """Filter each period's schedules by the active thresholds, then sort
+        the survivors by the active SortingConfig (descending).
+
+        Threshold filtering MUST precede sorting (spec 3: sorting ranks only the
+        schedules that passed section 2). Courses come from in-memory state; the
+        domain services ignore courses not present in a schedule's assignments.
+        """
+        courses = list(self._courses)
+        thresholds = self._settings.thresholds
+        sorting = self._settings.sorting
+
+        result: dict[str, list[Schedule]] = {}
+        for period_key, schedules in schedules_by_period.items():
+            valid = filter_schedules(schedules, courses, thresholds)
+            result[period_key] = SortingEngine.sort(valid, courses, sorting)
+        return result
+
+    def resort(self, config: SortingConfig) -> dict[str, list[Schedule]]:
+        """Re-rank the cached threshold-valid results by a new SortingConfig
+        WITHOUT regenerating (spec 3 runtime optimization).
+
+        Used when the user changes only the sort order: thresholds and input
+        data are unchanged, so the valid schedules are identical and only their
+        order differs. Raises if there are no cached results to re-sort.
+        """
+        if self._last_results is None:
+            raise ValueError(
+                "No results to re-sort. Generate schedules before changing sort order."
+            )
+
+        self.apply_sort(config)
+
+        courses = list(self._courses)
+        resorted = {
+            period_key: SortingEngine.sort(schedules, courses, config)
+            for period_key, schedules in self._last_results.items()
+        }
+        self._last_results = resorted
+        return resorted
 
     def reset_generation_state(self) -> None:
         """Clear all iterator state after subprocess-based generation completes."""
