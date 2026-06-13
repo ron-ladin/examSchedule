@@ -106,7 +106,9 @@ class TestSortMinDaysMandatory:
         sched_b = _schedule({"11111": date(2026, 1, 6), "22222": date(2026, 1, 11)})
 
         result = SortingEngine.sort([sched_a, sched_b], [c1, c2], _config_single(self.CRITERION))
-        assert set(result) == {sched_a, sched_b}
+        assert len(result) == 2
+        assert sched_a in result
+        assert sched_b in result
 
     def test_descending_order_for_three_schedules(self):
         c1, c2 = _mandatory("11111"), _mandatory("22222")
