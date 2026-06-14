@@ -213,6 +213,7 @@ class DesktopController:
         self._classrooms: list[Classroom] = []
         self._time_slots: list[TimeSlot] = []
         self._proctor_config: ProctorConfig | None = None
+        self._feature4_enabled: bool = False
         self._remaining_schedule_iterators: dict[str, Iterator[Schedule]] = {}
         self._has_more_schedules: dict[str, bool] = {}
         self._iterator_overflows: dict[str, Schedule] = {}
@@ -294,6 +295,34 @@ class DesktopController:
         self._proctor_config = ProctorConfigReader(Path(path)).read()
         self.mark_results_stale()
         return self._proctor_config
+
+    def set_time_slots_from_text(self, text: str) -> int:
+        """
+        Parse comma-separated HH:MM slots typed in the GUI (spec 4.1).
+
+        The GUI provides slots as a text input, not a file; parsing and
+        validation are delegated to SlotsFileReader.parse_line so the rules
+        match the CLI file path exactly. Raises ValueError on invalid input.
+        """
+        self._time_slots = SlotsFileReader.parse_line(text)
+        self.mark_results_stale()
+        return len(self._time_slots)
+
+    def set_proctor_config_from_text(self, text: str) -> ProctorConfig:
+        """
+        Parse a '1:X' proctor ratio typed in the GUI (spec 4.1).
+
+        Delegates to ProctorConfigReader.parse_line so GUI and CLI enforce the
+        same '1:X' rule. Raises ValueError on invalid input.
+        """
+        self._proctor_config = ProctorConfigReader.parse_line(text)
+        self.mark_results_stale()
+        return self._proctor_config
+
+    def set_feature4_enabled(self, enabled: bool) -> None:
+        """Toggle Feature 4 on/off (spec 4.1 dedicated activation toggle)."""
+        self._feature4_enabled = enabled
+        self.mark_results_stale()
 
     def clear_classrooms(self) -> None:
         self._classrooms = []
@@ -458,29 +487,82 @@ class DesktopController:
         return self._proctor_config
 
     @property
-    def feature4_active(self) -> bool:
-        """Feature 4 activates automatically only when all inputs are valid."""
+    def feature4_enabled(self) -> bool:
+        """Whether the user turned the Feature 4 toggle on (spec 4.1)."""
+        return self._feature4_enabled
+
+    @property
+    def feature4_inputs_valid(self) -> bool:
+        """True when all three Feature 4 inputs have been loaded and validated."""
         return bool(self._classrooms and self._time_slots and self._proctor_config)
+
+    @property
+    def feature4_active(self) -> bool:
+        """
+        Feature 4 is active only when the toggle is on AND all inputs are valid
+        (spec 4.1 — activated via a dedicated toggle).
+        """
+        return self._feature4_enabled and self.feature4_inputs_valid
+
+    def feature4_missing_student_counts(self) -> bool:
+        """
+        True if any schedulable exam offering lacks a StudentCount (spec 4.3).
+
+        Only courses with evaluation_type == "Exam" are assigned rooms, so only
+        their offerings require a count.
+        """
+        return any(
+            offering.student_count is None
+            for course in self._courses
+            if course.has_exam()
+            for offering in course.offerings
+        )
+
+    def feature4_ready(self) -> bool:
+        """
+        True when Feature 4 may proceed to generation (spec 4.2): toggle on,
+        all three inputs valid, and every exam offering has a StudentCount.
+        """
+        return (
+            self._feature4_enabled
+            and self.feature4_inputs_valid
+            and not self.feature4_missing_student_counts()
+        )
+
+    def _exam_student_totals(self) -> dict[str, int]:
+        """
+        Total students per exam (spec 4.3): for each "Exam" course, sum the
+        StudentCount across all its program lines (offerings). Missing counts
+        contribute zero.
+        """
+        return {
+            course.id: sum(o.student_count or 0 for o in course.offerings)
+            for course in self._courses
+            if course.has_exam()
+        }
 
     def feature4_capacity_shortfall(self) -> tuple[int, int] | None:
         """
-        Return (total classroom capacity, total students) when capacity is low.
+        Pre-generation capacity warning (spec 4.4).
 
-        The pre-check is a soft warning and applies only while Feature 4 is
-        active. Missing student counts contribute zero to the total.
+        Returns (total classroom capacity, largest single-exam student count)
+        when the total capacity of ALL rooms is less than the StudentCount of
+        ANY single exam — because each exam occupies rooms in a single slot, so
+        the binding constraint is the largest single exam, not the sum of all
+        exams. Returns None when Feature 4 is inactive or capacity suffices.
         """
         if not self.feature4_active:
             return None
 
-        total_capacity = sum(room.capacity for room in self._classrooms)
-        total_students = sum(
-            offering.student_count or 0
-            for course in self._courses
-            for offering in course.offerings
-        )
+        exam_totals = self._exam_student_totals()
+        if not exam_totals:
+            return None
 
-        if total_capacity < total_students:
-            return total_capacity, total_students
+        total_capacity = sum(room.capacity for room in self._classrooms)
+        largest_exam = max(exam_totals.values())
+
+        if total_capacity < largest_exam:
+            return total_capacity, largest_exam
 
         return None
 

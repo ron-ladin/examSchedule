@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -842,7 +843,12 @@ class ConfigScreen(QWidget):
         self._edit_periods_btn.setEnabled(True)
 
     def _build_feature4_card(self) -> QFrame:
-        """Build the optional classroom-assignment input card."""
+        """Build the optional Feature 4 (classroom assignment) input card.
+
+        Per spec 4.1 the GUI exposes a dedicated activation toggle, a Browse
+        button for the classrooms file, and text inputs for the comma-separated
+        slots and the proctor ratio.
+        """
         c = _card()
         self._feature4_card = c
 
@@ -859,9 +865,15 @@ class ConfigScreen(QWidget):
         header.addWidget(self._feature4_status)
         vl.addLayout(header)
 
+        # Dedicated activation toggle (spec 4.1).
+        self._feature4_toggle = QCheckBox("Enable classroom & slot assignment")
+        self._feature4_toggle.setChecked(self._controller.feature4_enabled)
+        self._feature4_toggle.toggled.connect(self._on_feature4_toggled)
+        vl.addWidget(self._feature4_toggle)
+
         description = QLabel(
-            "Optional. Load all three valid files to assign classrooms, time slots, "
-            "and recommended proctor counts."
+            "When enabled, load a classrooms file and enter the exam time slots "
+            "and proctor ratio. All three are required before generation."
         )
         description.setWordWrap(True)
         description.setStyleSheet(
@@ -869,56 +881,65 @@ class ConfigScreen(QWidget):
         )
         vl.addWidget(description)
 
-        file_specs = [
-            (
-                "Classrooms",
-                "Load Classrooms",
-                "_load_classrooms_btn",
-                "_classrooms_label",
-                self._load_classrooms,
-            ),
-            (
-                "Time Slots",
-                "Load Slots",
-                "_load_slots_btn",
-                "_slots_label",
-                self._load_slots,
-            ),
-            (
-                "Proctor Config",
-                "Load Proctors",
-                "_load_proctors_btn",
-                "_proctors_label",
-                self._load_proctors,
-            ),
+        # Classrooms: file browse (spec 4.1).
+        self._classrooms_label = QLabel("Missing")
+        self._classrooms_label.setWordWrap(True)
+        self._classrooms_label.setStyleSheet(self._feature4_input_style("missing"))
+        self._load_classrooms_btn = QPushButton("Load Classrooms")
+        self._load_classrooms_btn.setFixedWidth(120)
+        self._load_classrooms_btn.clicked.connect(self._load_classrooms)
+        crow = QHBoxLayout()
+        crow.addWidget(self._feature4_row_title("Classrooms"))
+        crow.addWidget(self._load_classrooms_btn)
+        crow.addWidget(self._classrooms_label, 1)
+        vl.addLayout(crow)
+
+        # Time slots: text input (spec 4.1 — comma-separated HH:MM).
+        self._slots_input = QLineEdit()
+        self._slots_input.setPlaceholderText("e.g. 09:00, 13:00, 19:00")
+        self._slots_input.editingFinished.connect(self._on_slots_entered)
+        self._slots_label = QLabel("Missing")
+        self._slots_label.setWordWrap(True)
+        self._slots_label.setStyleSheet(self._feature4_input_style("missing"))
+        srow = QHBoxLayout()
+        srow.addWidget(self._feature4_row_title("Time Slots"))
+        srow.addWidget(self._slots_input, 1)
+        srow.addWidget(self._slots_label)
+        vl.addLayout(srow)
+
+        # Proctor ratio: text input (spec 4.1 — '1:X').
+        self._proctors_input = QLineEdit()
+        self._proctors_input.setPlaceholderText("e.g. 1:20")
+        self._proctors_input.editingFinished.connect(self._on_proctors_entered)
+        self._proctors_label = QLabel("Missing")
+        self._proctors_label.setWordWrap(True)
+        self._proctors_label.setStyleSheet(self._feature4_input_style("missing"))
+        prow = QHBoxLayout()
+        prow.addWidget(self._feature4_row_title("Proctor Ratio"))
+        prow.addWidget(self._proctors_input, 1)
+        prow.addWidget(self._proctors_label)
+        vl.addLayout(prow)
+
+        self._feature4_inputs = [
+            self._load_classrooms_btn,
+            self._slots_input,
+            self._proctors_input,
         ]
-
-        for title, btn_text, btn_attr, lbl_attr, handler in file_specs:
-            row = QHBoxLayout()
-            title_lbl = QLabel(title)
-            title_lbl.setMinimumWidth(105)
-            title_lbl.setStyleSheet(
-                "font-size:12px; font-weight:600; color:#171c20; background:transparent;"
-            )
-
-            btn = QPushButton(btn_text)
-            btn.setFixedWidth(120)
-            btn.clicked.connect(handler)
-
-            status = QLabel("Missing")
-            status.setWordWrap(True)
-            status.setStyleSheet(self._feature4_input_style("missing"))
-
-            setattr(self, btn_attr, btn)
-            setattr(self, lbl_attr, status)
-
-            row.addWidget(title_lbl)
-            row.addWidget(btn)
-            row.addWidget(status, 1)
-            vl.addLayout(row)
-
+        # Last text applied per input kind; lets us ignore the second
+        # editingFinished signal (Return then focus-out) for an unchanged value.
+        self._feature4_applied: dict[str, str] = {}
+        self._apply_feature4_enabled_state()
         self._refresh_feature4_status()
         return c
+
+    @staticmethod
+    def _feature4_row_title(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setMinimumWidth(105)
+        lbl.setStyleSheet(
+            "font-size:12px; font-weight:600; color:#171c20; background:transparent;"
+        )
+        return lbl
 
     @staticmethod
     def _feature4_input_style(state: str) -> str:
@@ -933,23 +954,58 @@ class ConfigScreen(QWidget):
             " border-radius:4px; padding:3px 7px;"
         )
 
-    def _refresh_feature4_status(self) -> None:
-        if self._controller.feature4_active:
-            self._feature4_status.setText("ACTIVE")
-            self._feature4_status.setStyleSheet(
-                "font-size:11px; font-weight:800; color:#047857; background:#D1FAE5;"
-                " border:1px solid #6EE7B7; border-radius:12px; padding:2px 10px;"
+    def _on_feature4_toggled(self, checked: bool) -> None:
+        self._controller.set_feature4_enabled(checked)
+        self._apply_feature4_enabled_state()
+        # Spec 4.3: surface an immediate error if exam courses lack StudentCount
+        # at the moment the feature is switched on (generation stays blocked).
+        if checked and self._controller.feature4_missing_student_counts():
+            QMessageBox.warning(
+                self,
+                "Missing Student Counts",
+                "Feature 4 requires a StudentCount for every exam course.\n\n"
+                "Generation stays disabled until the courses file provides them "
+                "(spec 4.3).",
             )
+        self._refresh_feature4_status()
+        self._update_gen_btn()
+
+    def _apply_feature4_enabled_state(self) -> None:
+        for widget in self._feature4_inputs:
+            widget.setEnabled(self._controller.feature4_enabled)
+
+    def _refresh_feature4_status(self) -> None:
+        ctrl = self._controller
+        active_style = (
+            "font-size:11px; font-weight:800; color:#047857; background:#D1FAE5;"
+            " border:1px solid #6EE7B7; border-radius:12px; padding:2px 10px;"
+        )
+        warn_style = (
+            "font-size:11px; font-weight:800; color:#B91C1C; background:#FEE2E2;"
+            " border:1px solid #FCA5A5; border-radius:12px; padding:2px 10px;"
+        )
+        idle_style = (
+            "font-size:11px; font-weight:700; color:#64748B; background:#F1F5F9;"
+            " border:1px solid #CBD5E1; border-radius:12px; padding:2px 10px;"
+        )
+
+        if not ctrl.feature4_enabled:
+            text, style = "DISABLED", idle_style
+        elif ctrl.feature4_ready():
+            text, style = "ACTIVE", active_style
+        elif ctrl.feature4_inputs_valid and ctrl.feature4_missing_student_counts():
+            text, style = "BLOCKED - missing student counts", warn_style
+        else:
+            text, style = "INCOMPLETE - enter all inputs", idle_style
+
+        self._feature4_status.setText(text)
+        self._feature4_status.setStyleSheet(style)
+        if ctrl.feature4_ready():
             self._feature4_card.setStyleSheet(
                 "QFrame { background:rgba(236,253,245,0.85);"
                 " border:1px solid #6EE7B7; border-radius:12px; }"
             )
         else:
-            self._feature4_status.setText("INACTIVE - optional inputs incomplete")
-            self._feature4_status.setStyleSheet(
-                "font-size:11px; font-weight:700; color:#64748B; background:#F1F5F9;"
-                " border:1px solid #CBD5E1; border-radius:12px; padding:2px 10px;"
-            )
             self._feature4_card.setStyleSheet(
                 "QFrame { background:rgba(255,255,255,0.75);"
                 " border:1px dashed #CBD5E1; border-radius:12px; }"
@@ -990,6 +1046,50 @@ class ConfigScreen(QWidget):
             )
 
         self._refresh_feature4_status()
+        self._update_gen_btn()
+
+    def _apply_feature4_text(
+        self,
+        text: str,
+        label: QLabel,
+        setter,
+        clearer,
+        success_text,
+        kind: str,
+    ) -> None:
+        """Validate and apply a Feature 4 text input (slots or proctor ratio)."""
+        text = text.strip()
+        # editingFinished fires on both Return and focus-out; skip re-applying an
+        # unchanged value so the cache is not invalidated spuriously.
+        if self._feature4_applied.get(kind) == text:
+            return
+        self._feature4_applied[kind] = text
+
+        if not text:
+            clearer()
+            label.setText("Missing")
+            label.setStyleSheet(self._feature4_input_style("missing"))
+            self._refresh_feature4_status()
+            self._update_gen_btn()
+            return
+
+        try:
+            result = setter(text)
+            label.setText(success_text(result))
+            label.setStyleSheet(self._feature4_input_style("valid"))
+        except ValueError as exc:
+            clearer()
+            label.setText("Invalid")
+            label.setStyleSheet(self._feature4_input_style("invalid"))
+            logger.warning("Invalid Feature 4 %s: %s", kind, exc)
+            QMessageBox.critical(
+                self,
+                "Invalid Feature 4 Input",
+                f"The {kind} entry is invalid.\n\nReason: {exc}",
+            )
+
+        self._refresh_feature4_status()
+        self._update_gen_btn()
 
     def _load_classrooms(self) -> None:
         self._load_feature4_file(
@@ -1000,22 +1100,24 @@ class ConfigScreen(QWidget):
             lambda count: f"{count} room(s)",
         )
 
-    def _load_slots(self) -> None:
-        self._load_feature4_file(
-            "Time Slots",
+    def _on_slots_entered(self) -> None:
+        self._apply_feature4_text(
+            self._slots_input.text(),
             self._slots_label,
-            self._controller.load_time_slots,
+            self._controller.set_time_slots_from_text,
             self._controller.clear_time_slots,
             lambda count: f"{count} slot(s)",
+            "time slots",
         )
 
-    def _load_proctors(self) -> None:
-        self._load_feature4_file(
-            "Proctor Config",
+    def _on_proctors_entered(self) -> None:
+        self._apply_feature4_text(
+            self._proctors_input.text(),
             self._proctors_label,
-            self._controller.load_proctor_config,
+            self._controller.set_proctor_config_from_text,
             self._controller.clear_proctor_config,
             lambda config: f"1:{config.students_per_proctor}",
+            "proctor ratio",
         )
 
     def _on_edit_periods(self) -> None:
@@ -1282,15 +1384,15 @@ class ConfigScreen(QWidget):
         if shortfall is None:
             return True
 
-        total_capacity, total_students = shortfall
+        total_capacity, largest_exam_students = shortfall
         response = QMessageBox.warning(
             self,
             "Insufficient Classroom Capacity",
-            "The total classroom capacity is lower than the total number of "
-            "students.\n\n"
-            f"Classroom capacity: {total_capacity:,}\n"
-            f"Students: {total_students:,}\n"
-            f"Missing seats: {total_students - total_capacity:,}\n\n"
+            "The total classroom capacity is lower than the number of students "
+            "in at least one exam.\n\n"
+            f"Total classroom capacity: {total_capacity:,}\n"
+            f"Largest exam: {largest_exam_students:,} students\n"
+            f"Shortfall: {largest_exam_students - total_capacity:,}\n\n"
             "Generation may reject schedules that cannot be assigned to rooms. "
             "Do you want to proceed anyway?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -1400,9 +1502,17 @@ class ConfigScreen(QWidget):
     def _update_gen_btn(self) -> None:
         running = self._gen_process is not None and self._gen_process.is_alive()
 
+        # When Feature 4 is enabled, generation is blocked until all its
+        # inputs and student counts are valid (spec 4.2).
+        feature4_ok = (
+            not self._controller.feature4_enabled
+            or self._controller.feature4_ready()
+        )
+
         self._gen_btn.setEnabled(
             not running
             and self._controller.has_courses
             and self._controller.has_periods
             and self._count_checked() >= 1
+            and feature4_ok
         )
