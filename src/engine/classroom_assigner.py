@@ -1,7 +1,7 @@
 """Assign rooms and time slots to every exam in a generated schedule."""
 
 import heapq
-import math
+from dataclasses import replace
 
 from src.domain.classroom import Classroom
 from src.domain.classroom_assignment import ClassroomAssignment
@@ -10,25 +10,18 @@ from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.time_slot import TimeSlot
 
-ROOM_UTILIZATION_RATIO = 0.75
-
-
-def usable_room_capacity(room: Classroom) -> int:
-    """Return the maximum students allowed after applying the spacing rule."""
-    return math.floor(room.capacity * ROOM_UTILIZATION_RATIO)
-
 
 def _balanced_distribution(
     rooms: list[Classroom],
     student_count: int,
 ) -> list[tuple[Classroom, int]] | None:
-    """Split students as evenly as possible without exceeding usable capacities."""
+    """Split students as evenly as possible without exceeding room capacities."""
     selected: list[Classroom] = []
     total_capacity = 0
 
     for room in rooms:
         selected.append(room)
-        total_capacity += usable_room_capacity(room)
+        total_capacity += room.capacity
         if total_capacity >= student_count:
             break
 
@@ -42,7 +35,7 @@ def _balanced_distribution(
     for _ in range(student_count):
         while heap:
             count, index = heapq.heappop(heap)
-            if count < usable_room_capacity(selected[index]):
+            if count < selected[index].capacity:
                 break
         else:
             return None
@@ -81,6 +74,11 @@ class ClassroomAssigner:
                     continue
                 return None
 
+            # Spec §4.4: only "Exam" evaluation types are assigned to rooms.
+            # Projects, Attendance, etc. keep their date but get no room.
+            if not course.has_exam():
+                continue
+
             offerings = course.get_relevant_offerings(
                 selected_programs,
                 schedule.period.semester,
@@ -113,7 +111,7 @@ class ClassroomAssigner:
                     for room in rooms
                     if room.room_id not in used_rooms.get(key, set())
                 ]
-                if sum(usable_room_capacity(room) for room in available) < student_count:
+                if sum(room.capacity for room in available) < student_count:
                     continue
 
                 allocated = []
@@ -147,6 +145,9 @@ class ClassroomAssigner:
 
             result[course_id] = allocated
 
-        schedule.classroom_assignments = result
-        schedule.unassigned_classroom_exams = unassigned
-        return schedule
+        # Return a new Schedule rather than mutating the input (immutability rule).
+        return replace(
+            schedule,
+            classroom_assignments=result,
+            unassigned_classroom_exams=unassigned,
+        )

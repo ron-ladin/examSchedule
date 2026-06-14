@@ -45,7 +45,6 @@ from src.domain.threshold import ThresholdSettings
 from src.domain.threshold_filter import ThresholdFilter
 from src.domain.time_slot import TimeSlot
 from src.engine.app_controller import AppController as _EngineController
-from src.engine.classroom_assigner import usable_room_capacity
 from src.engine.schedule_generator import ScheduleGenerator
 from src.interfaces.i_output_exporter import IOutputExporter
 

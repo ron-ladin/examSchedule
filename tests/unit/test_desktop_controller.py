@@ -75,7 +75,7 @@ def _active_feature4_controller(total_capacity: int, student_count: int) -> Desk
 def test_feature4_capacity_shortfall_returns_totals_when_capacity_is_low():
     ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
 
-    assert ctrl.feature4_capacity_shortfall() == (30, 75)
+    assert ctrl.feature4_capacity_shortfall() == (40, 75)
 
 
 def test_feature4_capacity_shortfall_is_none_when_capacity_is_sufficient():

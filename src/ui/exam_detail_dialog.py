@@ -22,7 +22,6 @@ from PyQt6.QtWidgets import (
 
 from src.domain.classroom_assignment import ClassroomAssignment
 from src.domain.course import Course
-from src.engine.classroom_assigner import usable_room_capacity
 from src.ui.assets.icons import CalendarIcon
 from src.ui.tokens import programme_display_name
 
@@ -108,7 +107,7 @@ class ExamDetailDialog(QDialog):
                 "Building",
                 "Room",
                 "Students",
-                "Exam Capacity (75%)",
+                "Room Capacity",
                 "Status",
                 "Requirement",
                 "Degree",
@@ -296,11 +295,11 @@ class ExamDetailDialog(QDialog):
                             building,
                             room,
                             str(assignment.students_assigned),
-                            str(usable_room_capacity(assignment.room)),
+                            str(assignment.room.capacity),
                             (
                                 "FULL"
                                 if assignment.students_assigned
-                                == usable_room_capacity(assignment.room)
+                                == assignment.room.capacity
                                 else "AVAILABLE"
                             ),
                             req_str,

@@ -48,9 +48,53 @@ def test_assigner_splits_exam_across_rooms_and_adds_proctor_counts():
     ]
     assert [item.proctor_count for item in rooms] == [2, 2]
     assert all(
-        item.students_assigned <= int(item.room.capacity * 0.75)
+        item.students_assigned <= item.room.capacity
         for item in rooms
     )
+
+
+def test_assigner_skips_non_exam_courses():
+    """Spec 4.4: evaluation types other than 'Exam' are never assigned rooms."""
+    project = Course(
+        "33333",
+        "Final Project",
+        "Dr. Test",
+        "Project",
+        [CourseOffering("83101", 1, "FALL", "Obligatory", 30)],
+    )
+    schedule = Schedule(_period(), {"33333": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [project],
+        ["83101"],
+        [Classroom("Room 1", 50)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    assert assigned is not None
+    assert "33333" not in assigned.classroom_assignments
+    assert "33333" not in assigned.unassigned_classroom_exams
+
+
+def test_assigner_does_not_mutate_input_schedule():
+    """Immutability rule: assign() returns a new Schedule, leaving input intact."""
+    course = _course("11111", 30)
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [course],
+        ["83101"],
+        [Classroom("Room 1", 50)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    assert assigned is not schedule
+    assert schedule.classroom_assignments == {}
+    assert assigned.classroom_assignments["11111"]
 
 
 def test_assigner_uses_later_slot_when_room_is_already_used():

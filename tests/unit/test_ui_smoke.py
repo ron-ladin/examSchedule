@@ -367,7 +367,7 @@ def test_feature4_room_and_slot_are_visible_in_calendar_and_detail_dialog():
 
     calendar_text = panel._cal_tables["FALL - Aleph"].item(0, 1).text()
     assert "09:00" in calendar_text
-    assert "Room 101 (30/30)" in calendar_text
+    assert "Room 101 (30/40)" in calendar_text
     assert "Degree: 83101 -" in calendar_text
 
     dialog = ExamDetailDialog(
@@ -382,14 +382,14 @@ def test_feature4_room_and_slot_are_visible_in_calendar_and_detail_dialog():
     assert table.horizontalHeaderItem(3).text() == "Building"
     assert table.horizontalHeaderItem(4).text() == "Room"
     assert table.horizontalHeaderItem(5).text() == "Students"
-    assert table.horizontalHeaderItem(6).text() == "Exam Capacity (75%)"
+    assert table.horizontalHeaderItem(6).text() == "Room Capacity"
     assert table.horizontalHeaderItem(7).text() == "Status"
     assert table.item(0, 2).text() == "09:00"
     assert table.item(0, 3).text() == "—"
     assert table.item(0, 4).text() == "Room 101"
     assert table.item(0, 5).text() == "30"
-    assert table.item(0, 6).text() == "30"
-    assert table.item(0, 7).text() == "FULL"
+    assert table.item(0, 6).text() == "40"
+    assert table.item(0, 7).text() == "AVAILABLE"
     assert table.item(0, 9).text().startswith("83101 -")
     assert dialog.windowFlags() & QtCore.Qt.WindowType.WindowMinMaxButtonsHint
 

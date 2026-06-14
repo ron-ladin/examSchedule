@@ -45,7 +45,6 @@ from src.controller import DesktopController, RESULT_BATCH_SIZE
 from src.domain.course import Course
 from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
-from src.engine.classroom_assigner import usable_room_capacity
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
 
 logger = logging.getLogger(__name__)
@@ -865,7 +864,7 @@ class _ResultsPanel(QWidget):
                         rooms_text = ", ".join(
                             f"{assignment.room.room_id} "
                             f"({assignment.students_assigned}/"
-                            f"{usable_room_capacity(assignment.room)})"
+                            f"{assignment.room.capacity})"
                             for assignment in room_assignments
                         )
                         course_lines.append(f"  {slot_text}  ·  {rooms_text}")
