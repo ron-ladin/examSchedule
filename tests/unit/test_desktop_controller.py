@@ -54,6 +54,7 @@ def _write_programs(path: Path, content: str = "83101,83102") -> None:
 
 def _active_feature4_controller(total_capacity: int, student_count: int) -> DesktopController:
     ctrl = DesktopController()
+    ctrl._feature4_enabled = True
     ctrl._classrooms = [Classroom("Room 1", total_capacity)]
     ctrl._time_slots = [TimeSlot(time(9, 0))]
     ctrl._proctor_config = ProctorConfig(20)
@@ -88,6 +89,45 @@ def test_feature4_capacity_shortfall_is_none_when_feature_is_inactive():
     ctrl.clear_proctor_config()
 
     assert ctrl.feature4_capacity_shortfall() is None
+
+
+def test_feature4_capacity_shortfall_is_none_when_toggle_disabled():
+    ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
+    ctrl.set_feature4_enabled(False)
+
+    assert ctrl.feature4_capacity_shortfall() is None
+
+
+def test_feature4_capacity_compares_largest_single_exam_not_sum():
+    """Spec 4.4: warn when capacity < ANY single exam, not the sum of exams."""
+    ctrl = _active_feature4_controller(total_capacity=120, student_count=80)
+    # Second exam: 100 students across two program lines (60 + 40).
+    ctrl._courses.append(
+        Course(
+            id="22222",
+            name="Physics",
+            instructor="Dr. Levi",
+            evaluation_type="Exam",
+            offerings=[
+                CourseOffering("83101", 1, "FALL", "Obligatory", 60),
+                CourseOffering("83102", 1, "FALL", "Obligatory", 40),
+            ],
+        )
+    )
+    # Sum of all students = 180 > 120, but the largest single exam is 100 < 120,
+    # so per spec 4.4 no warning should fire.
+    assert ctrl.feature4_capacity_shortfall() is None
+
+
+def test_feature4_ready_requires_student_counts_on_exam_courses():
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
+    assert ctrl.feature4_ready() is True
+
+    ctrl._courses[0].offerings[0] = CourseOffering(
+        "83101", 1, "FALL", "Obligatory", None
+    )
+    assert ctrl.feature4_missing_student_counts() is True
+    assert ctrl.feature4_ready() is False
 
 
 # ── load_courses ──────────────────────────────────────────────────────────────

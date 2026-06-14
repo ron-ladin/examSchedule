@@ -149,19 +149,25 @@ def test_config_screen_renders_programme_selection_area():
     screen.close()
 
 
-def test_config_screen_renders_optional_feature4_file_controls():
+def test_config_screen_renders_optional_feature4_controls():
     app = _get_qapp()
     screen = ConfigScreen(DesktopController())
     screen.show()
     app.processEvents()
 
+    # Spec 4.1: Browse button for classrooms, text inputs for slots + ratio.
     assert screen._load_classrooms_btn.text() == "Load Classrooms"
-    assert screen._load_slots_btn.text() == "Load Slots"
-    assert screen._load_proctors_btn.text() == "Load Proctors"
+    assert screen._slots_input.placeholderText().startswith("e.g.")
+    assert screen._proctors_input.placeholderText().startswith("e.g.")
     assert screen._classrooms_label.text() == "Missing"
     assert screen._slots_label.text() == "Missing"
     assert screen._proctors_label.text() == "Missing"
-    assert screen._feature4_status.text().startswith("INACTIVE")
+
+    # Toggle starts off, so the feature is disabled and inputs are locked.
+    assert screen._feature4_toggle.isChecked() is False
+    assert screen._feature4_status.text() == "DISABLED"
+    assert screen._slots_input.isEnabled() is False
+    assert screen._proctors_input.isEnabled() is False
 
     screen.close()
 
