@@ -522,8 +522,8 @@ class DesktopController:
         self._iterator_overflows.clear()
 
         return (
-            memory_exporter.schedules_by_period,
-            memory_exporter.courses_by_id,
+            dict(memory_exporter.schedules_by_period),
+            dict(memory_exporter.courses_by_id),
             set(),
         )
 

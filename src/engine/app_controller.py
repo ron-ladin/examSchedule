@@ -45,6 +45,20 @@ from src.interfaces.i_schedule_generator import IScheduleGenerator
 logger = logging.getLogger(__name__)
 
 
+def _apply_filter(
+    raw_iter: Iterator[Schedule],
+    threshold_filter,
+    threshold_settings,
+    courses: list,
+) -> Iterator[Schedule]:
+    # Accepts courses as a function argument so the value is captured
+    # eagerly at call time — not by reference to the enclosing loop variable.
+    return (
+        s for s in raw_iter
+        if threshold_filter.is_valid(s, courses, threshold_settings)
+    )
+
+
 class AppController:
 
     def __init__(
@@ -106,11 +120,11 @@ class AppController:
             raw_iter = self._generator.generate_schedules(relevant_courses, period)
 
             if self._threshold_filter is not None and self._threshold_settings is not None:
-                tf = self._threshold_filter
-                ts = self._threshold_settings
-                rc = relevant_courses
-                schedules_by_period[period_key] = (
-                    s for s in raw_iter if tf.is_valid(s, rc, ts)
+                schedules_by_period[period_key] = _apply_filter(
+                    raw_iter,
+                    self._threshold_filter,
+                    self._threshold_settings,
+                    relevant_courses,
                 )
             else:
                 schedules_by_period[period_key] = raw_iter
