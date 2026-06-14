@@ -141,6 +141,23 @@ def test_config_screen_renders_programme_selection_area():
     screen.close()
 
 
+def test_config_screen_renders_optional_feature4_file_controls():
+    app = _get_qapp()
+    screen = ConfigScreen(DesktopController())
+    screen.show()
+    app.processEvents()
+
+    assert screen._load_classrooms_btn.text() == "Load Classrooms"
+    assert screen._load_slots_btn.text() == "Load Slots"
+    assert screen._load_proctors_btn.text() == "Load Proctors"
+    assert screen._classrooms_label.text() == "Missing"
+    assert screen._slots_label.text() == "Missing"
+    assert screen._proctors_label.text() == "Missing"
+    assert screen._feature4_status.text().startswith("INACTIVE")
+
+    screen.close()
+
+
 def test_config_screen_renders_generate_button_disabled_initially():
     """
     Generate should be visible but disabled before courses, periods, and at

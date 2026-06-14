@@ -6,7 +6,7 @@ These tests run in offscreen mode and avoid heavy UI automation.
 
 import os
 import sys
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 
 import pytest
@@ -30,9 +30,13 @@ QFileDialog = QtWidgets.QFileDialog
 QMessageBox = QtWidgets.QMessageBox
 
 from src.controller import DesktopController
+from src.domain.classroom import Classroom
 from src.domain.course import Course
+from src.domain.course_offering import CourseOffering
 from src.domain.exam_period import ExamPeriod
+from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
+from src.domain.time_slot import TimeSlot
 from src.ui.config_screen import ConfigScreen
 from src.ui.input_screen import InputScreen
 
@@ -169,6 +173,145 @@ def _find_programme_row(screen: ConfigScreen, programme_id: str):
     if row is None:
         raise AssertionError(f"Programme row not found: {programme_id}")
     return row
+
+
+def _write_feature4_files(tmp_path: Path) -> tuple[Path, Path, Path]:
+    classrooms = tmp_path / "classrooms.txt"
+    classrooms.write_text("$$$$\nRoom 101\n40\n$$$$\nRoom 202\n60\n", encoding="utf-8")
+
+    slots = tmp_path / "slots.txt"
+    slots.write_text("$$$$\n09:00, 13:00, 19:00\n$$$$\n", encoding="utf-8")
+
+    proctors = tmp_path / "proctors.txt"
+    proctors.write_text("1:20\n", encoding="utf-8")
+    return classrooms, slots, proctors
+
+
+def test_feature4_activates_only_after_all_three_valid_files(tmp_path, monkeypatch):
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+    classrooms, slots, proctors = _write_feature4_files(tmp_path)
+    _patch_file_dialog(monkeypatch, [classrooms, slots, proctors])
+
+    screen._load_classrooms()
+    assert controller.feature4_active is False
+    assert "2 room(s)" in screen._classrooms_label.text()
+
+    screen._load_slots()
+    assert controller.feature4_active is False
+    assert "3 slot(s)" in screen._slots_label.text()
+
+    screen._load_proctors()
+    app.processEvents()
+
+    assert controller.feature4_active is True
+    assert controller.proctor_config.students_per_proctor == 20
+    assert screen._feature4_status.text() == "ACTIVE"
+    screen.close()
+
+
+def test_invalid_feature4_file_shows_inline_error_and_deactivates(
+    tmp_path,
+    monkeypatch,
+):
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+    classrooms, slots, proctors = _write_feature4_files(tmp_path)
+    invalid_slots = tmp_path / "invalid_slots.txt"
+    invalid_slots.write_text("09:00, 11:00\n", encoding="utf-8")
+    _patch_file_dialog(monkeypatch, [classrooms, slots, proctors, invalid_slots])
+    shown_errors = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda _parent, title, text: shown_errors.append((title, text)),
+    )
+
+    screen._load_classrooms()
+    screen._load_slots()
+    screen._load_proctors()
+    assert controller.feature4_active is True
+
+    screen._load_slots()
+    app.processEvents()
+
+    assert controller.feature4_active is False
+    assert controller.time_slots == []
+    assert screen._slots_label.text() == "invalid_slots.txt - Invalid file"
+    assert screen._feature4_status.text().startswith("INACTIVE")
+    assert shown_errors
+    assert shown_errors[0][0] == "Invalid Feature 4 File"
+    assert "invalid_slots.txt" in shown_errors[0][1]
+    assert "at least 4 hours apart" in shown_errors[0][1]
+    screen.close()
+
+
+def test_capacity_warning_cancel_prevents_generation(monkeypatch):
+    app = _get_qapp()
+    controller = DesktopController()
+    controller._classrooms = [Classroom("Room 1", 20)]
+    controller._time_slots = [TimeSlot(time(9, 0))]
+    controller._proctor_config = ProctorConfig(20)
+    controller._courses = [
+        Course(
+            "11111",
+            "Calculus",
+            "Dr. Cohen",
+            "Exam",
+            [CourseOffering("83101", 1, "FALL", "Obligatory", 50)],
+        )
+    ]
+    screen = ConfigScreen(controller)
+    started = []
+    screen.generation_started.connect(started.append)
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.No,
+    )
+
+    screen._on_generate()
+    app.processEvents()
+
+    assert started == []
+    assert screen._gen_process is None
+    screen.close()
+
+
+def test_capacity_warning_proceed_returns_true(monkeypatch):
+    app = _get_qapp()
+    controller = DesktopController()
+    controller._classrooms = [Classroom("Room 1", 20)]
+    controller._time_slots = [TimeSlot(time(9, 0))]
+    controller._proctor_config = ProctorConfig(20)
+    controller._courses = [
+        Course(
+            "11111",
+            "Calculus",
+            "Dr. Cohen",
+            "Exam",
+            [CourseOffering("83101", 1, "FALL", "Obligatory", 50)],
+        )
+    ]
+    screen = ConfigScreen(controller)
+    shown = []
+
+    def answer_yes(_parent, title, text, _buttons, _default):
+        shown.append((title, text))
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "warning", answer_yes)
+
+    assert screen._confirm_capacity_warning() is True
+    assert shown
+    assert "Classroom capacity: 20" in shown[0][1]
+    assert "Students: 50" in shown[0][1]
+    assert "Missing seats: 30" in shown[0][1]
+    app.processEvents()
+    screen.close()
 
 
 # ── File loading modes update controller state ─────────────────────

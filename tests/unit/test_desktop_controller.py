@@ -6,11 +6,17 @@ All file I/O uses tmp_path; no PyQt6 imports.
 """
 
 import logging
+from datetime import time
 from pathlib import Path
 
 import pytest
 
 from src.controller import DesktopController
+from src.domain.classroom import Classroom
+from src.domain.course import Course
+from src.domain.course_offering import CourseOffering
+from src.domain.proctor import ProctorConfig
+from src.domain.time_slot import TimeSlot
 
 
 # ── File-writing helpers (mirror test_file_data_provider.py patterns) ─────────
@@ -44,6 +50,44 @@ def _write_periods(path: Path) -> None:
 
 def _write_programs(path: Path, content: str = "83101,83102") -> None:
     path.write_text(content, encoding="utf-8")
+
+
+def _active_feature4_controller(total_capacity: int, student_count: int) -> DesktopController:
+    ctrl = DesktopController()
+    ctrl._classrooms = [Classroom("Room 1", total_capacity)]
+    ctrl._time_slots = [TimeSlot(time(9, 0))]
+    ctrl._proctor_config = ProctorConfig(20)
+    ctrl._courses = [
+        Course(
+            id="11111",
+            name="Calculus",
+            instructor="Dr. Cohen",
+            evaluation_type="Exam",
+            offerings=[
+                CourseOffering("83101", 1, "FALL", "Obligatory", student_count)
+            ],
+        )
+    ]
+    return ctrl
+
+
+def test_feature4_capacity_shortfall_returns_totals_when_capacity_is_low():
+    ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
+
+    assert ctrl.feature4_capacity_shortfall() == (40, 75)
+
+
+def test_feature4_capacity_shortfall_is_none_when_capacity_is_sufficient():
+    ctrl = _active_feature4_controller(total_capacity=80, student_count=75)
+
+    assert ctrl.feature4_capacity_shortfall() is None
+
+
+def test_feature4_capacity_shortfall_is_none_when_feature_is_inactive():
+    ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
+    ctrl.clear_proctor_config()
+
+    assert ctrl.feature4_capacity_shortfall() is None
 
 
 # ── load_courses ──────────────────────────────────────────────────────────────
