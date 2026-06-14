@@ -35,12 +35,17 @@ from PyQt6.QtWidgets import (
 )
 
 from src.ui.assets.animated_widgets import AnimatedPlaceholder
-from src.ui.tokens import COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG, PERIOD_TAB_STYLE
+from src.ui.tokens import (
+    COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG,
+    PERIOD_TAB_STYLE,
+    programme_display_name,
+)
 
 from src.controller import DesktopController, RESULT_BATCH_SIZE
 from src.domain.course import Course
 from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
+from src.engine.classroom_assigner import usable_room_capacity
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
 
 logger = logging.getLogger(__name__)
@@ -84,6 +89,17 @@ def _merge_period_keys(
 
 
 _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
+_NAV_REPEAT_DELAY_MS = 450
+_NAV_REPEAT_INTERVAL_MS = 120
+
+
+def _enable_press_and_hold(button: QPushButton) -> None:
+    """Repeat button clicks while it remains pressed."""
+    button.setAutoRepeat(True)
+    button.setAutoRepeatDelay(_NAV_REPEAT_DELAY_MS)
+    button.setAutoRepeatInterval(_NAV_REPEAT_INTERVAL_MS)
 
 
 class _CalendarCellDelegate(QStyledItemDelegate):
@@ -238,6 +254,7 @@ class _ResultsPanel(QWidget):
         self._empty_labels: dict[str, QLabel] = {}
 
         self._has_stale_results: bool = False
+        self._auto_load_results: bool = True
         self._stale_banner: QLabel = QLabel()
         self._save_btn: QPushButton = QPushButton()
 
@@ -311,6 +328,15 @@ class _ResultsPanel(QWidget):
         # Avoid opacity effects while rebuilding result widgets.
         # QGraphicsOpacityEffect caused QPainter warnings and visual flicker.
         self._content.setGraphicsEffect(None)
+
+        if self._auto_load_results:
+            QTimer.singleShot(0, self._start_automatic_loads)
+
+    def _start_automatic_loads(self) -> None:
+        """Continue loading every truncated period in the background."""
+        for period_key in list(self._truncated_periods):
+            if period_key not in self._lm_procs:
+                self._on_load_more(period_key)
 
     def _setup_ui(self) -> None:
         self.setStyleSheet("background: transparent;")
@@ -389,6 +415,7 @@ class _ResultsPanel(QWidget):
 
         prev_btn = QPushButton("◀  Prev")
         prev_btn.setFixedWidth(90)
+        _enable_press_and_hold(prev_btn)
         prev_btn.clicked.connect(lambda _=False, k=period_key: self._go_prev_period(k))
 
         counter = QLabel("Loading…")
@@ -402,6 +429,7 @@ class _ResultsPanel(QWidget):
 
         next_btn = QPushButton("Next  ▶")
         next_btn.setFixedWidth(90)
+        _enable_press_and_hold(next_btn)
         next_btn.clicked.connect(lambda _=False, k=period_key: self._go_next_period(k))
 
         nav.addWidget(prev_btn)
@@ -423,7 +451,7 @@ class _ResultsPanel(QWidget):
             "padding: 6px 12px; font-size: 11px; font-weight: 600;"
             "background: rgba(0, 90, 194, 0.06);"
         )
-        chunk_btn.setVisible(has_more)
+        chunk_btn.setVisible(has_more and not self._auto_load_results)
         chunk_btn.clicked.connect(lambda _=False, k=period_key: self._on_load_more(k))
 
         lm_row.addWidget(chunk_btn)
@@ -503,7 +531,9 @@ class _ResultsPanel(QWidget):
         self._next_btns[period_key].setEnabled(idx < total - 1 or has_more)
 
         if period_key in self._load_more_btns:
-            self._load_more_btns[period_key].setVisible(has_more)
+            self._load_more_btns[period_key].setVisible(
+                has_more and not self._auto_load_results
+            )
 
         if schedules:
             self._populate_calendar(
@@ -560,7 +590,7 @@ class _ResultsPanel(QWidget):
         self._lm_chunk_sizes[period_key] = RESULT_BATCH_SIZE
 
         btn = self._load_more_btns.get(period_key)
-        if btn is not None:
+        if btn is not None and not self._auto_load_results:
             btn.setEnabled(False)
             btn.setText(f"⠋  Loading {RESULT_BATCH_SIZE:,}…")
 
@@ -583,7 +613,7 @@ class _ResultsPanel(QWidget):
         self._lm_ticks[period_key] = tick + 1
 
         btn = self._load_more_btns.get(period_key)
-        if btn:
+        if btn and not self._auto_load_results:
             btn.setText(f"{spinner}  Loading {RESULT_BATCH_SIZE:,}…")
 
         try:
@@ -594,7 +624,7 @@ class _ResultsPanel(QWidget):
             # If the subprocess already ended and no result arrived, recover the UI
             # instead of leaving the button disabled forever.
             if proc is not None and not proc.is_alive() and tick > 2:
-                if btn:
+                if btn and not self._auto_load_results:
                     btn.setEnabled(True)
                     btn.setText("⚠  Load failed — retry")
 
@@ -606,7 +636,7 @@ class _ResultsPanel(QWidget):
 
             return
         except OSError as exc:
-            if btn:
+            if btn and not self._auto_load_results:
                 btn.setEnabled(True)
                 btn.setText("⚠  Load failed — retry")
 
@@ -632,7 +662,7 @@ class _ResultsPanel(QWidget):
                 else result
             )
 
-            if btn:
+            if btn and not self._auto_load_results:
                 btn.setEnabled(True)
                 btn.setText("⚠  Load failed — retry")
 
@@ -668,9 +698,12 @@ class _ResultsPanel(QWidget):
         self._cleanup_load_more_state(period_key)
         self._refresh_period_card(period_key)
 
-        if still_more and btn:
+        if still_more and btn and not self._auto_load_results:
             btn.setEnabled(True)
             btn.setText(f"⟳  +{RESULT_BATCH_SIZE:,} more options")
+
+        if self._auto_load_results and still_more and extra:
+            QTimer.singleShot(50, lambda k=period_key: self._on_load_more(k))
 
     def _cleanup_load_more_state(
         self,
@@ -812,8 +845,33 @@ class _ResultsPanel(QWidget):
                         first_prog = prog_id
 
                     course_lines.append(f"  {course.name[:18]}")
-                    prog_label = prog_id if prog_id else "—"
-                    course_lines.append(f"  {course_id}  ·  {req}  ·  {prog_label}")
+                    course_lines.append(f"  {course_id}  ·  {req}")
+
+                    relevant_programs = list(dict.fromkeys(
+                        offering.program_id
+                        for offering in course.offerings
+                        if offering.program_id in self._prog_color_map
+                    ))
+                    if relevant_programs:
+                        degree_label = "; ".join(
+                            programme_display_name(program_id)
+                            for program_id in relevant_programs
+                        )
+                        course_lines.append(f"  Degree: {degree_label}")
+
+                    room_assignments = schedule.classroom_assignments.get(course_id, [])
+                    if room_assignments:
+                        slot_text = room_assignments[0].slot.time.strftime("%H:%M")
+                        rooms_text = ", ".join(
+                            f"{assignment.room.room_id} "
+                            f"({assignment.students_assigned}/"
+                            f"{usable_room_capacity(assignment.room)})"
+                            for assignment in room_assignments
+                        )
+                        course_lines.append(f"  {slot_text}  ·  {rooms_text}")
+                    elif course_id in schedule.unassigned_classroom_exams:
+                        missing = schedule.unassigned_classroom_exams[course_id]
+                        course_lines.append(f"  NO CLASSROOM  ·  {missing} students")
 
                 date_header = current_date.strftime("%a %d/%m")
                 cell_text = (
@@ -841,6 +899,17 @@ class _ResultsPanel(QWidget):
                 self._cell_data[period_key][(week, dow)] = (
                     current_date,
                     list(course_ids),
+                    {
+                        course_id: list(
+                            schedule.classroom_assignments.get(course_id, [])
+                        )
+                        for course_id in course_ids
+                    },
+                    {
+                        course_id: schedule.unassigned_classroom_exams[course_id]
+                        for course_id in course_ids
+                        if course_id in schedule.unassigned_classroom_exams
+                    },
                 )
 
         table.resizeRowsToContents()
@@ -851,7 +920,7 @@ class _ResultsPanel(QWidget):
         if cell_info is None:
             return
 
-        exam_date, course_ids = cell_info
+        exam_date, course_ids, classroom_assignments, unassigned_exams = cell_info
 
         if not course_ids:
             return
@@ -863,6 +932,8 @@ class _ResultsPanel(QWidget):
             course_ids,
             self._courses_by_id,
             self._prog_color_map,
+            classroom_assignments,
+            unassigned_exams,
             parent=self,
         )
         dialog.exec()

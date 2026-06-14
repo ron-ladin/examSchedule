@@ -35,8 +35,12 @@ import logging
 from collections.abc import Iterator
 
 from src.domain.interfaces import IThresholdFilter
+from src.domain.classroom import Classroom
+from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.threshold import ThresholdSettings
+from src.domain.time_slot import TimeSlot
+from src.engine.classroom_assigner import ClassroomAssigner
 from src.interfaces.i_data_provider import IDataProvider
 from src.interfaces.i_output_exporter import IOutputExporter
 from src.interfaces.i_schedule_generator import IScheduleGenerator
@@ -59,6 +63,29 @@ def _apply_filter(
     )
 
 
+def _apply_classroom_assignment(
+    raw_iter: Iterator[Schedule],
+    courses: list,
+    selected_programs: list[str],
+    classrooms: list[Classroom],
+    slots: list[TimeSlot],
+    proctor_config: ProctorConfig,
+    allow_unassigned: bool,
+) -> Iterator[Schedule]:
+    for schedule in raw_iter:
+        assigned = ClassroomAssigner.assign(
+            schedule,
+            courses,
+            selected_programs,
+            classrooms,
+            slots,
+            proctor_config,
+            allow_unassigned=allow_unassigned,
+        )
+        if assigned is not None:
+            yield assigned
+
+
 class AppController:
 
     def __init__(
@@ -69,6 +96,10 @@ class AppController:
         selected_programs: list[str],
         threshold_filter: IThresholdFilter | None = None,
         threshold_settings: ThresholdSettings | None = None,
+        classrooms: list[Classroom] | None = None,
+        time_slots: list[TimeSlot] | None = None,
+        proctor_config: ProctorConfig | None = None,
+        allow_unassigned_classrooms: bool = False,
     ) -> None:
         self._data_provider = data_provider
         self._exporter = exporter
@@ -76,6 +107,10 @@ class AppController:
         self._selected_programs = selected_programs
         self._threshold_filter = threshold_filter
         self._threshold_settings = threshold_settings
+        self._classrooms = classrooms or []
+        self._time_slots = time_slots or []
+        self._proctor_config = proctor_config
+        self._allow_unassigned_classrooms = allow_unassigned_classrooms
 
     def run(self) -> None:
         logger.info("Starting exam schedule generation")
@@ -119,15 +154,27 @@ class AppController:
             # and defeating the entire purpose of the yield-based generator.
             raw_iter = self._generator.generate_schedules(relevant_courses, period)
 
+            schedule_iter = raw_iter
             if self._threshold_filter is not None and self._threshold_settings is not None:
-                schedules_by_period[period_key] = _apply_filter(
+                schedule_iter = _apply_filter(
                     raw_iter,
                     self._threshold_filter,
                     self._threshold_settings,
                     relevant_courses,
                 )
-            else:
-                schedules_by_period[period_key] = raw_iter
+
+            if self._classrooms and self._time_slots and self._proctor_config:
+                schedule_iter = _apply_classroom_assignment(
+                    schedule_iter,
+                    relevant_courses,
+                    self._selected_programs,
+                    self._classrooms,
+                    self._time_slots,
+                    self._proctor_config,
+                    self._allow_unassigned_classrooms,
+                )
+
+            schedules_by_period[period_key] = schedule_iter
 
         self._exporter.export_schedules(schedules_by_period, courses_by_id)
         logger.info("Export complete")

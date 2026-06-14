@@ -56,3 +56,9 @@ PROGRAM_NAMES_MAPPING: dict[str, str] = {
     "83115": "הנדסת חשמל – מגמת הנדסה ביו-רפואית",
     "83182": "הנדסת חשמל – מגמת הנדסה קוונטית",
 }
+
+
+def programme_display_name(program_id: str) -> str:
+    """Return a programme code together with its official degree name."""
+    name = PROGRAM_NAMES_MAPPING.get(program_id)
+    return f"{program_id} - {name}" if name else program_id

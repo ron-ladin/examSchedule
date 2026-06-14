@@ -45,14 +45,14 @@ from src.domain.threshold import ThresholdSettings
 from src.domain.threshold_filter import ThresholdFilter
 from src.domain.time_slot import TimeSlot
 from src.engine.app_controller import AppController as _EngineController
+from src.engine.classroom_assigner import usable_room_capacity
 from src.engine.schedule_generator import ScheduleGenerator
 from src.interfaces.i_output_exporter import IOutputExporter
 
 logger = logging.getLogger(__name__)
 
 
-# Kept for backward compatibility with existing UI/tests that import this name.
-# Full generation uses cap=None, so this value is only used by legacy helpers.
+# Initial UI generation and each Load More request use this batch size.
 RESULT_BATCH_SIZE: int = 1000
 RESULT_CAP: int = RESULT_BATCH_SIZE
 
@@ -142,6 +142,10 @@ def _run_generation_process(
     cap: "int | None" = None,
     period_key: "str | None" = None,
     offset: int = 0,
+    classrooms: "list[Classroom] | None" = None,
+    time_slots: "list[TimeSlot] | None" = None,
+    proctor_config: "ProctorConfig | None" = None,
+    allow_unassigned_classrooms: bool = False,
 ) -> None:
     """
     Entry point for multiprocessing.Process-based schedule generation.
@@ -183,6 +187,10 @@ def _run_generation_process(
             selected_programs=selected_programs,
             threshold_filter=ThresholdFilter(),
             threshold_settings=active_settings.thresholds,
+            classrooms=classrooms,
+            time_slots=time_slots,
+            proctor_config=proctor_config,
+            allow_unassigned_classrooms=allow_unassigned_classrooms,
         )
         engine.run()
 
@@ -213,6 +221,7 @@ class DesktopController:
         self._classrooms: list[Classroom] = []
         self._time_slots: list[TimeSlot] = []
         self._proctor_config: ProctorConfig | None = None
+        self._allow_unassigned_classrooms: bool = False
         self._remaining_schedule_iterators: dict[str, Iterator[Schedule]] = {}
         self._has_more_schedules: dict[str, bool] = {}
         self._iterator_overflows: dict[str, Schedule] = {}
@@ -306,6 +315,10 @@ class DesktopController:
     def clear_proctor_config(self) -> None:
         self._proctor_config = None
         self.mark_results_stale()
+
+    def set_allow_unassigned_classrooms(self, allow: bool) -> None:
+        """Preserve the user's soft-warning choice for subsequent result batches."""
+        self._allow_unassigned_classrooms = bool(allow)
 
     def _update_merge_courses(self, new_courses: list[Course]) -> None:
         """Update mode: merge offerings into existing courses; add unknown courses."""
@@ -472,7 +485,7 @@ class DesktopController:
         if not self.feature4_active:
             return None
 
-        total_capacity = sum(room.capacity for room in self._classrooms)
+        total_capacity = sum(usable_room_capacity(room) for room in self._classrooms)
         total_students = sum(
             offering.student_count or 0
             for course in self._courses
@@ -589,6 +602,9 @@ class DesktopController:
             selected_programs=self._selected_programs,
             threshold_filter=ThresholdFilter(),
             threshold_settings=self._settings.thresholds,
+            classrooms=self._classrooms,
+            time_slots=self._time_slots,
+            proctor_config=self._proctor_config,
         )
         engine.run()
 
@@ -688,6 +704,10 @@ class DesktopController:
                 "cap": RESULT_BATCH_SIZE,
                 "period_key": period_key,
                 "offset": already_loaded,
+                "classrooms": self._classrooms,
+                "time_slots": self._time_slots,
+                "proctor_config": self._proctor_config,
+                "allow_unassigned_classrooms": self._allow_unassigned_classrooms,
             },
             daemon=True,
         )

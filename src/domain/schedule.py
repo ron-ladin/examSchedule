@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict
 
+from src.domain.classroom_assignment import ClassroomAssignment
 from src.domain.exam_period import ExamPeriod
 
 
@@ -19,3 +20,7 @@ from src.domain.exam_period import ExamPeriod
 class Schedule:
     period: ExamPeriod
     assignments: Dict[str, date] = field(default_factory=dict)
+    classroom_assignments: Dict[str, list[ClassroomAssignment]] = field(
+        default_factory=dict
+    )
+    unassigned_classroom_exams: Dict[str, int] = field(default_factory=dict)

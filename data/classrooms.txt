@@ -1,10 +1,10 @@
 $$$$
-Room 101
+Building 507 - Room 201
 40
 $$$$
-Room 202
+Building 507 - Room 202
 60
 $$$$
-Auditorium
-120
+Building 604 - Auditorium 101
+250
 $$$$

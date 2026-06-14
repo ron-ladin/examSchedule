@@ -48,7 +48,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.controller import DesktopController, _run_generation_process
+from src.controller import DesktopController, RESULT_BATCH_SIZE, _run_generation_process
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
 from src.ui.assets.icons import BookIcon, CalendarIcon
@@ -425,6 +425,7 @@ class ConfigScreen(QWidget):
         self._gen_start_time: float = 0.0
         self._dead_ticks: int = 0
         self._settings_dialog: SettingsScreen | None = None
+        self._allow_unassigned_generation = False
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -1224,6 +1225,9 @@ class ConfigScreen(QWidget):
         selected = self._get_selected_ids()
 
         self._controller.set_selected_programs(selected)
+        self._controller.set_allow_unassigned_classrooms(
+            self._allow_unassigned_generation
+        )
         self._pending_selected = selected
         self._pending_color_map = {
             pid: PROGRAMME_COLOURS[i % len(PROGRAMME_COLOURS)]
@@ -1265,7 +1269,11 @@ class ConfigScreen(QWidget):
             ),
             kwargs={
                 "settings": self._controller.settings,
-                "cap": None,
+                "cap": RESULT_BATCH_SIZE,
+                "classrooms": self._controller.classrooms,
+                "time_slots": self._controller.time_slots,
+                "proctor_config": self._controller.proctor_config,
+                "allow_unassigned_classrooms": self._allow_unassigned_generation,
             },
             daemon=True,
         )
@@ -1280,6 +1288,7 @@ class ConfigScreen(QWidget):
         """Show the optional Feature 4 capacity warning before generation."""
         shortfall = self._controller.feature4_capacity_shortfall()
         if shortfall is None:
+            self._allow_unassigned_generation = False
             return True
 
         total_capacity, total_students = shortfall
@@ -1288,7 +1297,7 @@ class ConfigScreen(QWidget):
             "Insufficient Classroom Capacity",
             "The total classroom capacity is lower than the total number of "
             "students.\n\n"
-            f"Classroom capacity: {total_capacity:,}\n"
+            f"Usable classroom capacity (75%): {total_capacity:,}\n"
             f"Students: {total_students:,}\n"
             f"Missing seats: {total_students - total_capacity:,}\n\n"
             "Generation may reject schedules that cannot be assigned to rooms. "
@@ -1296,7 +1305,8 @@ class ConfigScreen(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        return response == QMessageBox.StandardButton.Yes
+        self._allow_unassigned_generation = response == QMessageBox.StandardButton.Yes
+        return self._allow_unassigned_generation
 
 
     def _poll_result(self) -> None:
