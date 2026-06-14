@@ -516,18 +516,56 @@ class DesktopController:
         """
         return self._feature4_enabled and self.feature4_inputs_valid
 
+    def _relevant_offerings_for_course(self, course: Course) -> list:
+        """
+        Offerings of an exam course that are relevant to the current run:
+        selected programmes AND the semester of any loaded exam period
+        (spec 4.3/4.4). Mirrors ClassroomAssigner.get_relevant_offerings so the
+        pre-generation checks and the engine agree on which exams matter.
+        """
+        semesters = {period.semester for period in self._exam_periods}
+        seen: set[int] = set()
+        relevant: list = []
+        for semester in semesters:
+            for offering in course.get_relevant_offerings(
+                self._selected_programs, semester
+            ):
+                if id(offering) not in seen:
+                    seen.add(id(offering))
+                    relevant.append(offering)
+        return relevant
+
+    def engine_classrooms(self) -> list[Classroom]:
+        """Classrooms passed to the engine — empty unless Feature 4 is active.
+
+        Gating here (not only in the UI) guarantees that disabling the toggle
+        truly disables classroom assignment, even if files remain loaded
+        (spec 4.1).
+        """
+        return list(self._classrooms) if self.feature4_active else []
+
+    def engine_time_slots(self) -> list[TimeSlot]:
+        """Time slots passed to the engine — empty unless Feature 4 is active."""
+        return list(self._time_slots) if self.feature4_active else []
+
+    def engine_proctor_config(self) -> ProctorConfig | None:
+        """Proctor config passed to the engine — None unless Feature 4 is active."""
+        return self._proctor_config if self.feature4_active else None
+
     def feature4_missing_student_counts(self) -> bool:
         """
-        True if any schedulable exam offering lacks a StudentCount (spec 4.3).
+        True if any *relevant* exam offering lacks a StudentCount (spec 4.3).
 
-        Only courses with evaluation_type == "Exam" are assigned rooms, so only
-        their offerings require a count.
+        Only courses with evaluation_type == "Exam" are assigned rooms, and only
+        offerings for the selected programmes in a loaded period's semester are
+        scheduled — so only those offerings require a count. Courses or
+        programmes the user did not select never block generation.
         """
         return any(
             offering.student_count is None
             for course in self._courses
             if course.has_exam()
-            for offering in course.offerings
+            for offering in self._relevant_offerings_for_course(course)
         )
 
     def feature4_ready(self) -> bool:
@@ -544,14 +582,19 @@ class DesktopController:
     def _exam_student_totals(self) -> dict[str, int]:
         """
         Total students per exam (spec 4.3): for each "Exam" course, sum the
-        StudentCount across all its program lines (offerings). Missing counts
-        contribute zero.
+        StudentCount across only its *relevant* program lines — selected
+        programmes in a loaded period's semester. Courses with no relevant
+        offering are excluded. Missing counts contribute zero.
         """
-        return {
-            course.id: sum(o.student_count or 0 for o in course.offerings)
-            for course in self._courses
-            if course.has_exam()
-        }
+        totals: dict[str, int] = {}
+        for course in self._courses:
+            if not course.has_exam():
+                continue
+            offerings = self._relevant_offerings_for_course(course)
+            if not offerings:
+                continue
+            totals[course.id] = sum(o.student_count or 0 for o in offerings)
+        return totals
 
     def feature4_capacity_shortfall(self) -> tuple[int, int] | None:
         """
@@ -637,6 +680,9 @@ class DesktopController:
             raise ValueError("Maximum 5 programmes may be selected.")
 
         self._selected_programs = list(program_ids)
+        # Changing the programme selection changes which exams are scheduled, so
+        # any previously generated results no longer match the inputs (spec §7).
+        self.mark_results_stale()
 
     def update_exam_periods(self, periods: list[ExamPeriod]) -> None:
         """Replace in-memory periods with edited versions from the UI."""
@@ -683,9 +729,9 @@ class DesktopController:
             selected_programs=self._selected_programs,
             threshold_filter=ThresholdFilter(),
             threshold_settings=self._settings.thresholds,
-            classrooms=self._classrooms,
-            time_slots=self._time_slots,
-            proctor_config=self._proctor_config,
+            classrooms=self.engine_classrooms(),
+            time_slots=self.engine_time_slots(),
+            proctor_config=self.engine_proctor_config(),
         )
         engine.run()
 
@@ -785,9 +831,9 @@ class DesktopController:
                 "cap": RESULT_BATCH_SIZE,
                 "period_key": period_key,
                 "offset": already_loaded,
-                "classrooms": self._classrooms,
-                "time_slots": self._time_slots,
-                "proctor_config": self._proctor_config,
+                "classrooms": self.engine_classrooms(),
+                "time_slots": self.engine_time_slots(),
+                "proctor_config": self.engine_proctor_config(),
                 "allow_unassigned_classrooms": self._allow_unassigned_classrooms,
             },
             daemon=True,

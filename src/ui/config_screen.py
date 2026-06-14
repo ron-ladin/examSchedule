@@ -1372,9 +1372,9 @@ class ConfigScreen(QWidget):
             kwargs={
                 "settings": self._controller.settings,
                 "cap": RESULT_BATCH_SIZE,
-                "classrooms": self._controller.classrooms,
-                "time_slots": self._controller.time_slots,
-                "proctor_config": self._controller.proctor_config,
+                "classrooms": self._controller.engine_classrooms(),
+                "time_slots": self._controller.engine_time_slots(),
+                "proctor_config": self._controller.engine_proctor_config(),
                 "allow_unassigned_classrooms": self._allow_unassigned_generation,
             },
             daemon=True,

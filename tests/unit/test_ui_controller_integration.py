@@ -263,6 +263,10 @@ def test_capacity_warning_cancel_prevents_generation(monkeypatch):
     controller._classrooms = [Classroom("Room 1", 20)]
     controller._time_slots = [TimeSlot(time(9, 0))]
     controller._proctor_config = ProctorConfig(20)
+    controller._selected_programs = ["83101"]
+    controller._exam_periods = [
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    ]
     controller._courses = [
         Course(
             "11111",
@@ -297,6 +301,10 @@ def test_capacity_warning_proceed_returns_true(monkeypatch):
     controller._classrooms = [Classroom("Room 1", 20)]
     controller._time_slots = [TimeSlot(time(9, 0))]
     controller._proctor_config = ProctorConfig(20)
+    controller._selected_programs = ["83101"]
+    controller._exam_periods = [
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    ]
     controller._courses = [
         Course(
             "11111",

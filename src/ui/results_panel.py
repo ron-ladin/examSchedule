@@ -378,7 +378,11 @@ class _ResultsPanel(QWidget):
         self._empty_labels: dict[str, QLabel] = {}
 
         self._has_stale_results: bool = False
-        self._auto_load_results: bool = True
+        # §1: never auto-load endlessly. Each "load more" restarts generation and
+        # skips already-loaded schedules via offset, so background auto-loading
+        # gets quadratically more expensive (loading 100k–101k re-skips 100k).
+        # Loading is therefore manual/on-demand: the user clicks "+N more options".
+        self._auto_load_results: bool = False
         self._stale_banner: QLabel = QLabel()
         self._save_btn: QPushButton = QPushButton()
 

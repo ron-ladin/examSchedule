@@ -83,7 +83,19 @@ class ClassroomAssigner:
                 selected_programs,
                 schedule.period.semester,
             )
-            student_count = sum(offering.student_count or 0 for offering in offerings)
+
+            # Spec §4.3: a relevant Exam offering MUST carry a StudentCount.
+            # Silently treating a missing count as zero would hide invalid input
+            # and could assign no room to a real exam. Fail clearly instead.
+            missing = [o for o in offerings if o.student_count is None]
+            if missing:
+                raise ValueError(
+                    f"Missing StudentCount for exam course '{course_id}' "
+                    f"({len(missing)} relevant offering(s)). "
+                    "Every relevant exam offering requires a StudentCount."
+                )
+
+            student_count = sum(offering.student_count for offering in offerings)
             exam_data.append((student_count, course_id, exam_date, offerings))
 
         # Place larger exams first to reduce avoidable assignment failures.

@@ -220,3 +220,76 @@ def test_generation_process_preserves_unassigned_exam_after_soft_warning():
 
     assert ok is True
     assert schedule.unassigned_classroom_exams == {"11111": 50}
+
+
+# ── §5: missing StudentCount on a relevant exam fails clearly ─────────────────
+
+def _course_missing_count(course_id: str, program: str = "83101") -> Course:
+    return Course(
+        course_id,
+        f"Course {course_id}",
+        "Dr. Test",
+        "Exam",
+        [CourseOffering(program, 1, "FALL", "Obligatory", None)],
+    )
+
+
+def test_assigner_raises_on_missing_count_for_relevant_exam():
+    """A relevant Exam offering with no StudentCount must fail, not become 0."""
+    course = _course_missing_count("11111")
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+
+    import pytest
+
+    with pytest.raises(ValueError, match="Missing StudentCount"):
+        ClassroomAssigner.assign(
+            schedule,
+            [course],
+            ["83101"],
+            [Classroom("Room 1", 50)],
+            [TimeSlot(time(9, 0))],
+            ProctorConfig(20),
+        )
+
+
+def test_assigner_ignores_missing_count_on_non_exam_course():
+    project = Course(
+        "33333",
+        "Final Project",
+        "Dr. Test",
+        "Project",
+        [CourseOffering("83101", 1, "FALL", "Obligatory", None)],
+    )
+    schedule = Schedule(_period(), {"33333": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [project],
+        ["83101"],
+        [Classroom("Room 1", 50)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    assert assigned is not None
+    assert "33333" not in assigned.classroom_assignments
+
+
+def test_assigner_ignores_missing_count_in_unselected_programme():
+    """Missing count for a programme the user did not select must not fail."""
+    course = _course_missing_count("11111", program="83999")
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [course],
+        ["83101"],
+        [Classroom("Room 1", 50)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    # No relevant offering for the selected programme → nothing to assign.
+    assert assigned is not None
+    assert "11111" in assigned.classroom_assignments
+    assert assigned.classroom_assignments["11111"] == []
