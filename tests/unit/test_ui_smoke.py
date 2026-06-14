@@ -331,6 +331,55 @@ def test_background_loading_control_is_hidden():
     panel.close()
 
 
+def test_group_exams_by_slot_orders_slots_and_flags_collapse():
+    """Spec §4.5: same-date exams group by slot, chronological, >3 collapse."""
+    from datetime import time as _time
+
+    from src.ui.results_panel import _group_exams_by_slot
+
+    def _assign(t):
+        offering = CourseOffering("83101", 1, "FALL", "Obligatory", 10)
+        return ClassroomAssignment(
+            exam=offering,
+            room=Classroom("R", 50),
+            slot=TimeSlot(t),
+            date=date(2026, 1, 5),
+            students_assigned=10,
+            proctor_count=1,
+        )
+
+    # 13:00 has 4 exams (collapses); 09:00 has 1 exam.
+    assignments = {
+        "A": [_assign(_time(13, 0))],
+        "B": [_assign(_time(13, 0))],
+        "C": [_assign(_time(13, 0))],
+        "D": [_assign(_time(13, 0))],
+        "E": [_assign(_time(9, 0))],
+    }
+    schedule = Schedule(
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 5))]),
+        {cid: date(2026, 1, 5) for cid in assignments},
+        assignments,
+    )
+    courses = {
+        cid: Course(
+            cid,
+            f"Course {cid}",
+            "Dr. Test",
+            "Exam",
+            [CourseOffering("83101", 1, "FALL", "Obligatory", 10)],
+        )
+        for cid in assignments
+    }
+
+    groups = _group_exams_by_slot(list(assignments), schedule, courses)
+
+    assert [g["slot"] for g in groups] == ["09:00", "13:00"]
+    assert groups[0]["collapsed"] is False
+    assert groups[1]["collapsed"] is True
+    assert len(groups[1]["course_ids"]) == 4
+
+
 def test_feature4_room_and_slot_are_visible_in_calendar_and_detail_dialog():
     app = _get_qapp()
     period = ExamPeriod(

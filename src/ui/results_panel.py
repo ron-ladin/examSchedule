@@ -101,6 +101,58 @@ def _enable_press_and_hold(button: QPushButton) -> None:
     button.setAutoRepeatInterval(_NAV_REPEAT_INTERVAL_MS)
 
 
+# Spec §4.5: exams in different time slots on the same date get distinct colors.
+_SLOT_PALETTE = [
+    "#DBEAFE",  # blue-100
+    "#DCFCE7",  # green-100
+    "#FEF9C3",  # yellow-100
+    "#FCE7F3",  # pink-100
+    "#EDE9FE",  # violet-100
+    "#FFEDD5",  # orange-100
+]
+
+# Spec §4.5: more than this many exams in one slot collapse to a clickable record.
+_SLOT_COLLAPSE_THRESHOLD = 3
+
+
+def _group_exams_by_slot(
+    course_ids: list[str],
+    schedule: Schedule,
+    courses_by_id: dict[str, Course],
+) -> list[dict]:
+    """Group a date's exams by assigned time slot (spec §4.5).
+
+    Returns slot groups ordered chronologically, with exams that have no room
+    (and therefore no slot) coming last. Each group is a dict with keys:
+    ``slot`` (label), ``course_ids``, ``names`` and ``collapsed`` (True when
+    more than ``_SLOT_COLLAPSE_THRESHOLD`` exams share the slot — rendered as a
+    single clickable record rather than an enumerated list).
+    """
+    grouped: dict[str, dict] = {}
+    for course_id in course_ids:
+        assignments = schedule.classroom_assignments.get(course_id, [])
+        if assignments:
+            label = assignments[0].slot.time.strftime("%H:%M")
+            has_slot = True
+        else:
+            label = "No slot"
+            has_slot = False
+
+        group = grouped.setdefault(
+            label,
+            {"slot": label, "has_slot": has_slot, "course_ids": [], "names": []},
+        )
+        course = courses_by_id.get(course_id)
+        group["course_ids"].append(course_id)
+        group["names"].append(course.name if course else course_id)
+
+    # Zero-padded HH:MM labels sort chronologically; "No slot" groups go last.
+    ordered = sorted(grouped.values(), key=lambda g: (not g["has_slot"], g["slot"]))
+    for group in ordered:
+        group["collapsed"] = len(group["course_ids"]) > _SLOT_COLLAPSE_THRESHOLD
+    return ordered
+
+
 class _CalendarCellDelegate(QStyledItemDelegate):
     """Custom painter for schedule calendar cells.
 
@@ -116,6 +168,7 @@ class _CalendarCellDelegate(QStyledItemDelegate):
     _SEP_COLOR = QColor("#BFDBFE")
 
     def paint(self, painter, option, index) -> None:
+        payload = index.data(Qt.ItemDataRole.UserRole)
         text: str = index.data(Qt.ItemDataRole.DisplayRole) or ""
         bg = index.data(Qt.ItemDataRole.BackgroundRole)
 
@@ -127,7 +180,9 @@ class _CalendarCellDelegate(QStyledItemDelegate):
         else:
             painter.fillRect(rect, Qt.GlobalColor.white)
 
-        if text:
+        if isinstance(payload, dict) and payload.get("groups"):
+            self._draw_slot_columns(painter, rect, payload["header"], payload["groups"])
+        elif text:
             self._draw_cell(painter, rect, text, bg)
 
         painter.restore()
@@ -192,6 +247,76 @@ class _CalendarCellDelegate(QStyledItemDelegate):
         text: str = index.data(Qt.ItemDataRole.DisplayRole) or ""
         n = max(1, text.count("\n") + 1)
         return QSize(option.rect.width() or 120, max(52, 24 + n * 13))
+
+    def _draw_slot_columns(self, painter, rect, header: str, groups: list) -> None:
+        """Paint same-date exams as side-by-side, per-slot colored columns (§4.5)."""
+        pad = 5
+        r = rect.adjusted(pad, pad, -pad, -pad)
+
+        date_font = QFont(painter.font())
+        date_font.setBold(True)
+        date_font.setPointSize(9)
+        painter.setFont(date_font)
+        painter.setPen(self._DATE_FG_EXAM)
+        painter.drawText(
+            QRect(r.left(), r.top(), r.width(), 16),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            header,
+        )
+
+        body_top = r.top() + 18
+        columns = len(groups)
+        if columns == 0:
+            return
+
+        gap = 3
+        col_w = max(1, (r.width() - gap * (columns - 1)) // columns)
+
+        for i, group in enumerate(groups):
+            x = r.left() + i * (col_w + gap)
+            col_rect = QRect(x, body_top, col_w, r.bottom() - body_top)
+            painter.fillRect(col_rect, QColor(_SLOT_PALETTE[i % len(_SLOT_PALETTE)]))
+
+            inner = col_rect.adjusted(4, 3, -3, -3)
+            y = inner.top()
+
+            slot_font = QFont(painter.font())
+            slot_font.setBold(True)
+            slot_font.setPointSize(8)
+            painter.setFont(slot_font)
+            painter.setPen(self._COURSE_FG)
+            painter.drawText(
+                QRect(inner.left(), y, inner.width(), 12),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                group["slot"],
+            )
+            y += 14
+
+            body_font = QFont(painter.font())
+            body_font.setBold(False)
+            body_font.setPointSize(8)
+            painter.setFont(body_font)
+            painter.setPen(self._META_FG)
+
+            if group["collapsed"]:
+                # §4.5: >3 exams in a slot become one clickable summary record.
+                for summary in (f"{len(group['course_ids'])} exams", "(click to view)"):
+                    painter.drawText(
+                        QRect(inner.left(), y, inner.width(), 12),
+                        Qt.AlignmentFlag.AlignLeft,
+                        summary,
+                    )
+                    y += 12
+            else:
+                for name in group["names"]:
+                    if y + 12 > inner.bottom():
+                        break
+                    painter.drawText(
+                        QRect(inner.left(), y, inner.width(), 12),
+                        Qt.AlignmentFlag.AlignLeft,
+                        name[:14],
+                    )
+                    y += 12
 
 
 def _make_data_table(headers: list[str]) -> QTableWidget:
@@ -886,6 +1011,22 @@ class _ResultsPanel(QWidget):
 
                 if course_ids:
                     item.setToolTip("Click to view exam details")
+
+                # §4.5: when exams have slot assignments, render them as
+                # side-by-side per-slot colored columns (with >3 collapse).
+                if any(
+                    schedule.classroom_assignments.get(course_id)
+                    for course_id in course_ids
+                ):
+                    item.setData(
+                        Qt.ItemDataRole.UserRole,
+                        {
+                            "header": date_header,
+                            "groups": _group_exams_by_slot(
+                                course_ids, schedule, self._courses_by_id
+                            ),
+                        },
+                    )
 
                 if first_prog and first_prog in self._prog_color_map:
                     color = QColor(self._prog_color_map[first_prog])
