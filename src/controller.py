@@ -24,13 +24,18 @@ from pathlib import Path
 
 from src.adapters.exact_conflict_strategy import ExactConflictStrategy
 from src.adapters.in_memory_data_provider import InMemoryDataProvider
+from src.adapters.readers.classroom_file_reader import ClassroomFileReader
 from src.adapters.readers.course_file_reader import CourseFileReader
 from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
+from src.adapters.readers.proctor_config_reader import ProctorConfigReader
 from src.adapters.readers.program_selector_reader import ProgramSelectorReader
 from src.adapters.readers.settings_file_reader import SettingsFileReader
+from src.adapters.readers.slots_file_reader import SlotsFileReader
 from src.adapters.text_file_exporter import TextFileExporter
+from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
+from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.semester import normalize_semester
 from src.domain.settings import Settings
@@ -38,6 +43,7 @@ from src.domain.sorting import SortingConfig
 from src.domain.sorting_engine import SortingEngine
 from src.domain.threshold import ThresholdSettings
 from src.domain.threshold_filter import ThresholdFilter
+from src.domain.time_slot import TimeSlot
 from src.engine.app_controller import AppController as _EngineController
 from src.engine.schedule_generator import ScheduleGenerator
 from src.interfaces.i_output_exporter import IOutputExporter
@@ -204,6 +210,9 @@ class DesktopController:
         self._exam_periods: list[ExamPeriod] = []
         self._selected_programs: list[str] = []
         self._loaded_program_ids: list[str] = []
+        self._classrooms: list[Classroom] = []
+        self._time_slots: list[TimeSlot] = []
+        self._proctor_config: ProctorConfig | None = None
         self._remaining_schedule_iterators: dict[str, Iterator[Schedule]] = {}
         self._has_more_schedules: dict[str, bool] = {}
         self._iterator_overflows: dict[str, Schedule] = {}
@@ -267,6 +276,36 @@ class DesktopController:
             len(self._courses),
         )
         return len(self._courses)
+
+    def load_classrooms(self, path: Path) -> int:
+        """Load and validate the optional Feature 4 classrooms file."""
+        self._classrooms = ClassroomFileReader(Path(path)).read()
+        self.mark_results_stale()
+        return len(self._classrooms)
+
+    def load_time_slots(self, path: Path) -> int:
+        """Load and validate the optional Feature 4 slots file."""
+        self._time_slots = SlotsFileReader(Path(path)).read()
+        self.mark_results_stale()
+        return len(self._time_slots)
+
+    def load_proctor_config(self, path: Path) -> ProctorConfig:
+        """Load and validate the optional Feature 4 proctor configuration."""
+        self._proctor_config = ProctorConfigReader(Path(path)).read()
+        self.mark_results_stale()
+        return self._proctor_config
+
+    def clear_classrooms(self) -> None:
+        self._classrooms = []
+        self.mark_results_stale()
+
+    def clear_time_slots(self) -> None:
+        self._time_slots = []
+        self.mark_results_stale()
+
+    def clear_proctor_config(self) -> None:
+        self._proctor_config = None
+        self.mark_results_stale()
 
     def _update_merge_courses(self, new_courses: list[Course]) -> None:
         """Update mode: merge offerings into existing courses; add unknown courses."""
@@ -405,6 +444,45 @@ class DesktopController:
     @property
     def has_periods(self) -> bool:
         return bool(self._exam_periods)
+
+    @property
+    def classrooms(self) -> list[Classroom]:
+        return list(self._classrooms)
+
+    @property
+    def time_slots(self) -> list[TimeSlot]:
+        return list(self._time_slots)
+
+    @property
+    def proctor_config(self) -> ProctorConfig | None:
+        return self._proctor_config
+
+    @property
+    def feature4_active(self) -> bool:
+        """Feature 4 activates automatically only when all inputs are valid."""
+        return bool(self._classrooms and self._time_slots and self._proctor_config)
+
+    def feature4_capacity_shortfall(self) -> tuple[int, int] | None:
+        """
+        Return (total classroom capacity, total students) when capacity is low.
+
+        The pre-check is a soft warning and applies only while Feature 4 is
+        active. Missing student counts contribute zero to the total.
+        """
+        if not self.feature4_active:
+            return None
+
+        total_capacity = sum(room.capacity for room in self._classrooms)
+        total_students = sum(
+            offering.student_count or 0
+            for course in self._courses
+            for offering in course.offerings
+        )
+
+        if total_capacity < total_students:
+            return total_capacity, total_students
+
+        return None
 
     def has_more_schedules(self, period_key: str) -> bool:
         """Return True if more schedules can be loaded for the given period."""

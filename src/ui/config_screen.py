@@ -555,6 +555,7 @@ class ConfigScreen(QWidget):
         cl.addLayout(top)
         cl.addWidget(self._build_prog_card())
         cl.addWidget(self._build_periods_card())
+        cl.addWidget(self._build_feature4_card())
 
         self._gen_btn = QPushButton("▶  Generate Schedule")
         self._gen_btn.setObjectName("generateBtn")
@@ -840,6 +841,183 @@ class ConfigScreen(QWidget):
         )
         self._edit_periods_btn.setEnabled(True)
 
+    def _build_feature4_card(self) -> QFrame:
+        """Build the optional classroom-assignment input card."""
+        c = _card()
+        self._feature4_card = c
+
+        vl = QVBoxLayout(c)
+        vl.setContentsMargins(20, 18, 20, 18)
+        vl.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.addWidget(_section_lbl("FEATURE 4 - CLASSROOM ASSIGNMENT"))
+        header.addStretch()
+
+        self._feature4_status = QLabel()
+        self._feature4_status.setFixedHeight(24)
+        header.addWidget(self._feature4_status)
+        vl.addLayout(header)
+
+        description = QLabel(
+            "Optional. Load all three valid files to assign classrooms, time slots, "
+            "and recommended proctor counts."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet(
+            "font-size:11px; color:#64748B; background:transparent;"
+        )
+        vl.addWidget(description)
+
+        file_specs = [
+            (
+                "Classrooms",
+                "Load Classrooms",
+                "_load_classrooms_btn",
+                "_classrooms_label",
+                self._load_classrooms,
+            ),
+            (
+                "Time Slots",
+                "Load Slots",
+                "_load_slots_btn",
+                "_slots_label",
+                self._load_slots,
+            ),
+            (
+                "Proctor Config",
+                "Load Proctors",
+                "_load_proctors_btn",
+                "_proctors_label",
+                self._load_proctors,
+            ),
+        ]
+
+        for title, btn_text, btn_attr, lbl_attr, handler in file_specs:
+            row = QHBoxLayout()
+            title_lbl = QLabel(title)
+            title_lbl.setMinimumWidth(105)
+            title_lbl.setStyleSheet(
+                "font-size:12px; font-weight:600; color:#171c20; background:transparent;"
+            )
+
+            btn = QPushButton(btn_text)
+            btn.setFixedWidth(120)
+            btn.clicked.connect(handler)
+
+            status = QLabel("Missing")
+            status.setWordWrap(True)
+            status.setStyleSheet(self._feature4_input_style("missing"))
+
+            setattr(self, btn_attr, btn)
+            setattr(self, lbl_attr, status)
+
+            row.addWidget(title_lbl)
+            row.addWidget(btn)
+            row.addWidget(status, 1)
+            vl.addLayout(row)
+
+        self._refresh_feature4_status()
+        return c
+
+    @staticmethod
+    def _feature4_input_style(state: str) -> str:
+        colors = {
+            "missing": ("#92400E", "#FEF3C7"),
+            "valid": ("#047857", "#D1FAE5"),
+            "invalid": ("#B91C1C", "#FEE2E2"),
+        }
+        foreground, background = colors[state]
+        return (
+            f"font-size:11px; color:{foreground}; background:{background};"
+            " border-radius:4px; padding:3px 7px;"
+        )
+
+    def _refresh_feature4_status(self) -> None:
+        if self._controller.feature4_active:
+            self._feature4_status.setText("ACTIVE")
+            self._feature4_status.setStyleSheet(
+                "font-size:11px; font-weight:800; color:#047857; background:#D1FAE5;"
+                " border:1px solid #6EE7B7; border-radius:12px; padding:2px 10px;"
+            )
+            self._feature4_card.setStyleSheet(
+                "QFrame { background:rgba(236,253,245,0.85);"
+                " border:1px solid #6EE7B7; border-radius:12px; }"
+            )
+        else:
+            self._feature4_status.setText("INACTIVE - optional inputs incomplete")
+            self._feature4_status.setStyleSheet(
+                "font-size:11px; font-weight:700; color:#64748B; background:#F1F5F9;"
+                " border:1px solid #CBD5E1; border-radius:12px; padding:2px 10px;"
+            )
+            self._feature4_card.setStyleSheet(
+                "QFrame { background:rgba(255,255,255,0.75);"
+                " border:1px dashed #CBD5E1; border-radius:12px; }"
+            )
+
+    def _load_feature4_file(
+        self,
+        title: str,
+        label: QLabel,
+        loader,
+        clearer,
+        success_text,
+    ) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Select {title} File",
+            "",
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            result = loader(Path(path))
+            label.setText(f"{Path(path).name} - {success_text(result)}")
+            label.setStyleSheet(self._feature4_input_style("valid"))
+        except Exception as exc:
+            clearer()
+            label.setText(f"{Path(path).name} - Invalid file")
+            label.setStyleSheet(self._feature4_input_style("invalid"))
+            logger.warning("Invalid Feature 4 %s file: %s", title, exc)
+            QMessageBox.critical(
+                self,
+                "Invalid Feature 4 File",
+                f"The selected {title.lower()} file is invalid.\n\n"
+                f"File: {Path(path).name}\n"
+                f"Reason: {exc}",
+            )
+
+        self._refresh_feature4_status()
+
+    def _load_classrooms(self) -> None:
+        self._load_feature4_file(
+            "Classrooms",
+            self._classrooms_label,
+            self._controller.load_classrooms,
+            self._controller.clear_classrooms,
+            lambda count: f"{count} room(s)",
+        )
+
+    def _load_slots(self) -> None:
+        self._load_feature4_file(
+            "Time Slots",
+            self._slots_label,
+            self._controller.load_time_slots,
+            self._controller.clear_time_slots,
+            lambda count: f"{count} slot(s)",
+        )
+
+    def _load_proctors(self) -> None:
+        self._load_feature4_file(
+            "Proctor Config",
+            self._proctors_label,
+            self._controller.load_proctor_config,
+            self._controller.clear_proctor_config,
+            lambda config: f"1:{config.students_per_proctor}",
+        )
+
     def _on_edit_periods(self) -> None:
         dlg = ExamPeriodsEditorDialog(self._controller, parent=self)
         dlg.exec()
@@ -1040,6 +1218,9 @@ class ConfigScreen(QWidget):
             self._settings_dialog.set_generation_state(is_running)
 
     def _on_generate(self) -> None:
+        if not self._confirm_capacity_warning():
+            return
+
         selected = self._get_selected_ids()
 
         self._controller.set_selected_programs(selected)
@@ -1094,6 +1275,28 @@ class ConfigScreen(QWidget):
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_result)
         self._poll_timer.start(150)
+
+    def _confirm_capacity_warning(self) -> bool:
+        """Show the optional Feature 4 capacity warning before generation."""
+        shortfall = self._controller.feature4_capacity_shortfall()
+        if shortfall is None:
+            return True
+
+        total_capacity, total_students = shortfall
+        response = QMessageBox.warning(
+            self,
+            "Insufficient Classroom Capacity",
+            "The total classroom capacity is lower than the total number of "
+            "students.\n\n"
+            f"Classroom capacity: {total_capacity:,}\n"
+            f"Students: {total_students:,}\n"
+            f"Missing seats: {total_students - total_capacity:,}\n\n"
+            "Generation may reject schedules that cannot be assigned to rooms. "
+            "Do you want to proceed anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return response == QMessageBox.StandardButton.Yes
 
 
     def _poll_result(self) -> None:
