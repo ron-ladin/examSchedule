@@ -55,16 +55,21 @@ Lives in the domain layer so `AppController` (engine layer) can depend on it wit
 
 ### 2.4 Wiring Decision
 
+> **⚠️ Proposed — PR #80 (SCRUM-261, not yet merged):** The lazy-filter wiring described
+> below is the design for PR #80. The currently merged code filters post-materialisation
+> inside `_process_generated_schedules()` in `controller.py`. This section will be updated
+> when PR #80 is merged into develop.
+
 **Threshold filtering: lazy, in the iterator chain (before `_MemoryExporter`).**
 
 Rationale: invalid schedules should never be materialised into RAM. The CSP generator yields schedules lazily; wrapping the iterator with a filter expression preserves O(stack depth) memory.
 
 ```python
-# AppController.run() — per period
+# AppController.run() — per period (PR #80 design)
 raw_iter = self._generator.generate_schedules(relevant_courses, period)
 if self._threshold_filter is not None and self._threshold_settings is not None:
-    schedules_by_period[period_key] = (
-        s for s in raw_iter if self._threshold_filter.is_valid(s, rc, ts)
+    schedules_by_period[period_key] = _apply_filter(
+        raw_iter, self._threshold_filter, self._threshold_settings, relevant_courses
     )
 ```
 
@@ -78,6 +83,10 @@ collected = self._sort(collected, courses_list)
 ```
 
 ### 2.5 `DesktopController` additions
+
+> **⚠️ Proposed — PR #80 (SCRUM-261, not yet merged):** `resort()`,
+> `cache_generated_results()`, and `_last_results` are part of PR #80 and are not
+> yet on develop.
 
 | Method | Description |
 |--------|-------------|

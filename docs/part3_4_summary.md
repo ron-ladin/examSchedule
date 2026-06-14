@@ -22,7 +22,7 @@ Sprint 3 extended the scheduling engine with two Quality-of-Life features for ge
 | SCRUM-258 | Core domain models (Sections 2+3) | ✅ Done |
 | SCRUM-259 | Filter & Sort Engine | ✅ Done (merged PR #78) |
 | SCRUM-260 | SettingsFileReader (CLI) | ✅ Done |
-| SCRUM-261 | Pipeline Integration | ✅ Done |
+| SCRUM-261 | Pipeline Integration | 🔄 PR #80 under review |
 | SCRUM-262 | UI: Settings Screen | ✅ Done |
 | SCRUM-263 | Tests: ThresholdFilter & SortingEngine | ✅ Done |
 
@@ -57,7 +57,10 @@ SORT
 2, SORT_AVG_DAYS_ANY
 ```
 
-### Pipeline Wiring (SCRUM-261)
+### Pipeline Wiring (SCRUM-261 — PR #80, not yet merged)
+
+> **⚠️ The wiring described below is proposed in PR #80 and not yet on develop.**
+> The currently merged architecture filters post-materialisation in `controller.py`.
 
 - ThresholdFilter is wired **lazily** in the iterator chain inside `AppController` — invalid schedules are never materialised into RAM.
 - SortingEngine is applied **post-materialisation** inside `_MemoryExporter` — after the schedule list is collected.
@@ -106,17 +109,17 @@ SORT
 1. **ClassroomAssigner not yet implemented** (SCRUM-266 in progress). Pipeline integration and UI screens are blocked.
 2. **Feature 4 UI** (SCRUM-268) not started. The toggle, classroom file browser, slot entry, proctor ratio input, and proctor report dialog are pending.
 3. **No cross-platform testing.** All development and CI has been on Linux. macOS rendering differences in QSS and font metrics have not been audited (RISK-1 in CLAUDE.md).
-4. **Student count field** in `courses.txt` (spec §2.1) not yet enforced by `CourseFileReader`. Will be added as part of SCRUM-266.
+4. **Student count field** in `courses.txt` (spec §4.3) not yet enforced by `CourseFileReader`. Will be added as part of SCRUM-266.
 
 ---
 
 ## Metrics
 
-| Metric | Value |
-|--------|-------|
-| Total tests | 384 |
-| Feature 3+4 tests | ~135 |
-| Test coverage (excl. `src/ui/`) | ≥ 85 % |
-| Pylint score | ≥ 8.5 / 10 |
-| Open bugs | 0 |
-| Open tech debt items | 5 (low severity) |
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Total tests (measured) | 384 | 364 unit + 20 e2e; `python3.11 -m pytest tests/unit/ tests/e2e/ -q` on 2026-06-14 |
+| Feature 3+4 tests (measured) | 172 | see §4 breakdown in tests_document |
+| Test coverage (excl. `src/ui/`) | target ≥ 85 % | see CI report (`pytest-cov` not available locally) |
+| Pylint score (measured) | 7.63 / 10 | target 8.5; delta from E1131 false positives (pylint version) + R0904 backlog |
+| Open bugs | 0 | |
+| Open tech debt items | 5 (low severity) | |

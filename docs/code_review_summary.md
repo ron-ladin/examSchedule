@@ -72,6 +72,9 @@ This document summarises code review findings for the features delivered in Spri
 
 ### `src/controller.py` — SCRUM-261 Pipeline Integration
 
+> **⚠️ Note (PR #80 — not yet merged):** The analysis below covers the proposed
+> SCRUM-261 design (PR #80). These changes are not yet on develop.
+
 **Strengths:**
 - `ThresholdFilter` is now wired lazily in the iterator chain inside `AppController`, which preserves the O(stack depth) memory guarantee — invalid schedules are never materialised.
 - `SortingEngine` is applied post-materialisation inside `_MemoryExporter`, which is the correct point: sorting requires a complete list.
@@ -81,7 +84,7 @@ This document summarises code review findings for the features delivered in Spri
 - The docstring in `controller.py` still says "Does NOT modify src/engine/app_controller.py" — now outdated since SCRUM-261 added the `threshold_filter` parameter to `AppController`.
 - `_MemoryExporter._sort()` short-circuits on `not settings.sorting.rules`, but `SortingEngine.sort()` already handles an empty criteria list (returns a copy). The guard is not harmful but adds a code path to test.
 
-**Verdict:** Approved.
+**Verdict:** Approved (pending PR #80 code review resolution).
 
 ---
 

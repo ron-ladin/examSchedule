@@ -91,11 +91,14 @@ SORT
 
 ## Slide 7 — Architecture: Where the Code Lives
 
+> **⚠️ Proposed (PR #80 — not yet merged):** The lazy `AppController` wiring shown
+> below is the design from SCRUM-261. The currently merged code filters
+> post-materialisation in `controller.py`. This slide reflects the target architecture.
+
 ```
 AppController.run()
     └─ generator.generate_schedules()     ← CSP engine (unchanged)
-        └─ (s for s in iter if filter.is_valid(s))   ← LAZY ThresholdFilter
-                                                          (new, SCRUM-261)
+        └─ _apply_filter(iter, ...)       ← LAZY ThresholdFilter (PR #80, SCRUM-261)
             └─ _MemoryExporter
                 └─ list(islice(iter))     ← materialise only valid schedules
                     └─ SortingEngine.sort()   ← sort post-materialisation

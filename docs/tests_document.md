@@ -14,7 +14,12 @@ All tests are written with `pytest` and follow the project's **unit + e2e** two-
 | Unit | `tests/unit/` | Single class/module in isolation; fakes/stubs for dependencies |
 | End-to-end | `tests/e2e/` | Full file-to-schedule pipeline using real readers, engine, and exporter |
 
-**Coverage target:** 85 % (excluding `src/ui/`).  
+**Coverage target:** 85 % (excluding `src/ui/`). See CI report for the measured value
+(`pytest-cov` not available in the local dev environment on this machine).  
+**Pylint score:** 7.63 / 10 (target 8.5). The delta is driven by `E1131` false positives
+from the `int | None` union syntax under the installed pylint version (resolved by a
+pylint upgrade) and `R0904` (too many public methods) on `DesktopController` which is
+tracked in the backlog.  
 **Test runner:** `python3.11 -m pytest tests/unit/ tests/e2e/`  
 **Headless UI:** `QT_QPA_PLATFORM=offscreen python3.11 -m pytest tests/unit/ tests/e2e/`
 
@@ -117,7 +122,11 @@ End-to-end controller integration tests:
 
 ---
 
-### 2.7 AppController Filter Wiring — `tests/unit/test_app_controller.py` (4 new tests, SCRUM-261)
+### 2.7 AppController Filter Wiring — `tests/unit/test_app_controller.py` (proposed, PR #80)
+
+> **⚠️ Proposed — PR #80 (SCRUM-261, not yet merged):** These tests are part of
+> the SCRUM-261 branch and will land on develop when that PR is approved and merged.
+> They are listed here for completeness; they do not exist in the current test suite.
 
 | Test | What is verified |
 |------|-----------------|
@@ -125,10 +134,13 @@ End-to-end controller integration tests:
 | `test_threshold_filter_accept_all_passes_every_schedule_through` | Accept-all filter leaves schedules unchanged |
 | `test_no_threshold_filter_passes_all_schedules_unchanged` | `threshold_filter=None` is a safe no-op |
 | `test_threshold_filter_only_applied_when_both_filter_and_settings_provided` | Filter is skipped when `threshold_settings=None` |
+| `test_threshold_filter_applied_to_correct_courses_per_period` | Multi-period regression: each period's filter receives its own course list |
 
 ---
 
-### 2.8 DesktopController Filter+Sort — `tests/unit/test_desktop_controller.py` (2 new tests, SCRUM-261)
+### 2.8 DesktopController Filter+Sort — `tests/unit/test_desktop_controller.py` (proposed, PR #80)
+
+> **⚠️ Proposed — PR #80 (SCRUM-261, not yet merged).**
 
 | Test | What is verified |
 |------|-----------------|
@@ -170,13 +182,19 @@ End-to-end controller integration tests:
 | `test_schedule_validator.py` | 4 | Feature 3 |
 | `test_settings_file_reader.py` | 18 | Feature 3 |
 | `test_controller_sprint3_integration.py` | 6 | Feature 3 (pipeline) |
-| `test_app_controller.py` (new) | 4 | SCRUM-261 |
-| `test_desktop_controller.py` (new) | 2 | SCRUM-261 |
+| `test_app_controller.py` | 6 | Engine pipeline |
+| `test_desktop_controller.py` | 37 | Desktop controller |
 | `test_feature4_domain.py` | 16 | Feature 4 |
 | `test_classroom_file_reader.py` | 14 | Feature 4 |
 | `test_proctor_config_reader.py` | 16 | Feature 4 |
-| **Total (parts 3+4)** | **135** | |
-| **Project total** | **384+** | All features |
+| **Total (parts 3+4, measured)** | **172** | |
+| **Project total (364 unit + 20 e2e)** | **384** | All features |
+
+_Counts verified by `python3.11 -m pytest tests/unit/ tests/e2e/ -q` on 2026-06-14._
+
+**Pending (PR #80 — SCRUM-261):** 5 additional tests in `test_app_controller.py`
+(threshold filter wiring) and 2 in `test_desktop_controller.py` (filter+sort end-to-end)
+will be added when PR #80 merges.
 
 ---
 

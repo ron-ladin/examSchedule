@@ -231,7 +231,7 @@ data/schedules.txt
 *.mmd
 
 # Local diagram drafts (committed version lives in diagrams.md)
-docs/
+# docs/ intentionally NOT ignored — deliverable docs live there
 
 # Claude Code local files
 .claude/
