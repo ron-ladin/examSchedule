@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -48,7 +49,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.controller import DesktopController, _run_generation_process
+from src.controller import DesktopController, RESULT_BATCH_SIZE, _run_generation_process
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
 from src.ui.assets.icons import BookIcon, CalendarIcon
@@ -420,11 +421,13 @@ class ConfigScreen(QWidget):
         self._gen_process: multiprocessing.Process | None = None
         self._poll_timer: QTimer | None = None
         self._result_queue: multiprocessing.Queue | None = None
+        self._worker_command_queue: multiprocessing.Queue | None = None
         self._pending_selected: list[str] = []
         self._pending_color_map: dict[str, str] = {}
         self._gen_start_time: float = 0.0
         self._dead_ticks: int = 0
         self._settings_dialog: SettingsScreen | None = None
+        self._allow_unassigned_generation = False
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -555,6 +558,7 @@ class ConfigScreen(QWidget):
         cl.addLayout(top)
         cl.addWidget(self._build_prog_card())
         cl.addWidget(self._build_periods_card())
+        cl.addWidget(self._build_feature4_card())
 
         self._gen_btn = QPushButton("▶  Generate Schedule")
         self._gen_btn.setObjectName("generateBtn")
@@ -840,6 +844,284 @@ class ConfigScreen(QWidget):
         )
         self._edit_periods_btn.setEnabled(True)
 
+    def _build_feature4_card(self) -> QFrame:
+        """Build the optional Feature 4 (classroom assignment) input card.
+
+        Per spec 4.1 the GUI exposes a dedicated activation toggle, a Browse
+        button for the classrooms file, and text inputs for the comma-separated
+        slots and the proctor ratio.
+        """
+        c = _card()
+        self._feature4_card = c
+
+        vl = QVBoxLayout(c)
+        vl.setContentsMargins(20, 18, 20, 18)
+        vl.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.addWidget(_section_lbl("FEATURE 4 - CLASSROOM ASSIGNMENT"))
+        header.addStretch()
+
+        self._feature4_status = QLabel()
+        self._feature4_status.setFixedHeight(24)
+        header.addWidget(self._feature4_status)
+        vl.addLayout(header)
+
+        # Dedicated activation toggle (spec 4.1).
+        self._feature4_toggle = QCheckBox("Enable classroom & slot assignment")
+        self._feature4_toggle.setChecked(self._controller.feature4_enabled)
+        self._feature4_toggle.toggled.connect(self._on_feature4_toggled)
+        vl.addWidget(self._feature4_toggle)
+
+        description = QLabel(
+            "When enabled, load a classrooms file and enter the exam time slots "
+            "and proctor ratio. All three are required before generation."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet(
+            "font-size:11px; color:#64748B; background:transparent;"
+        )
+        vl.addWidget(description)
+
+        # Classrooms: file browse (spec 4.1).
+        self._classrooms_label = QLabel("Missing")
+        self._classrooms_label.setWordWrap(True)
+        self._classrooms_label.setStyleSheet(self._feature4_input_style("missing"))
+        self._load_classrooms_btn = QPushButton("Load Classrooms")
+        self._load_classrooms_btn.setFixedWidth(120)
+        self._load_classrooms_btn.clicked.connect(self._load_classrooms)
+        crow = QHBoxLayout()
+        crow.addWidget(self._feature4_row_title("Classrooms"))
+        crow.addWidget(self._load_classrooms_btn)
+        crow.addWidget(self._classrooms_label, 1)
+        vl.addLayout(crow)
+
+        # Time slots: text input (spec 4.1 — comma-separated HH:MM).
+        self._slots_input = QLineEdit()
+        self._slots_input.setPlaceholderText("e.g. 09:00, 13:00, 19:00")
+        self._slots_input.editingFinished.connect(self._on_slots_entered)
+        self._slots_label = QLabel("Missing")
+        self._slots_label.setWordWrap(True)
+        self._slots_label.setStyleSheet(self._feature4_input_style("missing"))
+        srow = QHBoxLayout()
+        srow.addWidget(self._feature4_row_title("Time Slots"))
+        srow.addWidget(self._slots_input, 1)
+        srow.addWidget(self._slots_label)
+        vl.addLayout(srow)
+
+        # Proctor ratio: text input (spec 4.1 — '1:X').
+        self._proctors_input = QLineEdit()
+        self._proctors_input.setPlaceholderText("e.g. 1:20")
+        self._proctors_input.editingFinished.connect(self._on_proctors_entered)
+        self._proctors_label = QLabel("Missing")
+        self._proctors_label.setWordWrap(True)
+        self._proctors_label.setStyleSheet(self._feature4_input_style("missing"))
+        prow = QHBoxLayout()
+        prow.addWidget(self._feature4_row_title("Proctor Ratio"))
+        prow.addWidget(self._proctors_input, 1)
+        prow.addWidget(self._proctors_label)
+        vl.addLayout(prow)
+
+        self._feature4_inputs = [
+            self._load_classrooms_btn,
+            self._slots_input,
+            self._proctors_input,
+        ]
+        # Last text applied per input kind; lets us ignore the second
+        # editingFinished signal (Return then focus-out) for an unchanged value.
+        self._feature4_applied: dict[str, str] = {}
+        self._apply_feature4_enabled_state()
+        self._refresh_feature4_status()
+        return c
+
+    @staticmethod
+    def _feature4_row_title(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setMinimumWidth(105)
+        lbl.setStyleSheet(
+            "font-size:12px; font-weight:600; color:#171c20; background:transparent;"
+        )
+        return lbl
+
+    @staticmethod
+    def _feature4_input_style(state: str) -> str:
+        colors = {
+            "missing": ("#92400E", "#FEF3C7"),
+            "valid": ("#047857", "#D1FAE5"),
+            "invalid": ("#B91C1C", "#FEE2E2"),
+        }
+        foreground, background = colors[state]
+        return (
+            f"font-size:11px; color:{foreground}; background:{background};"
+            " border-radius:4px; padding:3px 7px;"
+        )
+
+    def _on_feature4_toggled(self, checked: bool) -> None:
+        self._controller.set_feature4_enabled(checked)
+        self._apply_feature4_enabled_state()
+        # Spec 4.3: surface an immediate error if exam courses lack StudentCount
+        # at the moment the feature is switched on (generation stays blocked).
+        if checked and self._controller.feature4_missing_student_counts():
+            QMessageBox.warning(
+                self,
+                "Missing Student Counts",
+                "Feature 4 requires a StudentCount for every exam course.\n\n"
+                "Generation stays disabled until the courses file provides them "
+                "(spec 4.3).",
+            )
+        self._refresh_feature4_status()
+        self._update_gen_btn()
+
+    def _apply_feature4_enabled_state(self) -> None:
+        for widget in self._feature4_inputs:
+            widget.setEnabled(self._controller.feature4_enabled)
+
+    def _refresh_feature4_status(self) -> None:
+        ctrl = self._controller
+        active_style = (
+            "font-size:11px; font-weight:800; color:#047857; background:#D1FAE5;"
+            " border:1px solid #6EE7B7; border-radius:12px; padding:2px 10px;"
+        )
+        warn_style = (
+            "font-size:11px; font-weight:800; color:#B91C1C; background:#FEE2E2;"
+            " border:1px solid #FCA5A5; border-radius:12px; padding:2px 10px;"
+        )
+        idle_style = (
+            "font-size:11px; font-weight:700; color:#64748B; background:#F1F5F9;"
+            " border:1px solid #CBD5E1; border-radius:12px; padding:2px 10px;"
+        )
+
+        if not ctrl.feature4_enabled:
+            text, style = "DISABLED", idle_style
+        elif ctrl.feature4_ready():
+            text, style = "ACTIVE", active_style
+        elif ctrl.feature4_inputs_valid and ctrl.feature4_missing_student_counts():
+            text, style = "BLOCKED - missing student counts", warn_style
+        else:
+            text, style = "INCOMPLETE - enter all inputs", idle_style
+
+        self._feature4_status.setText(text)
+        self._feature4_status.setStyleSheet(style)
+        if ctrl.feature4_ready():
+            self._feature4_card.setStyleSheet(
+                "QFrame { background:rgba(236,253,245,0.85);"
+                " border:1px solid #6EE7B7; border-radius:12px; }"
+            )
+        else:
+            self._feature4_card.setStyleSheet(
+                "QFrame { background:rgba(255,255,255,0.75);"
+                " border:1px dashed #CBD5E1; border-radius:12px; }"
+            )
+
+    def _load_feature4_file(
+        self,
+        title: str,
+        label: QLabel,
+        loader,
+        clearer,
+        success_text,
+    ) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Select {title} File",
+            "",
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            result = loader(Path(path))
+            label.setText(f"{Path(path).name} - {success_text(result)}")
+            label.setStyleSheet(self._feature4_input_style("valid"))
+        except Exception as exc:
+            clearer()
+            label.setText(f"{Path(path).name} - Invalid file")
+            label.setStyleSheet(self._feature4_input_style("invalid"))
+            logger.warning("Invalid Feature 4 %s file: %s", title, exc)
+            QMessageBox.critical(
+                self,
+                "Invalid Feature 4 File",
+                f"The selected {title.lower()} file is invalid.\n\n"
+                f"File: {Path(path).name}\n"
+                f"Reason: {exc}",
+            )
+
+        self._refresh_feature4_status()
+        self._update_gen_btn()
+
+    def _apply_feature4_text(
+        self,
+        text: str,
+        label: QLabel,
+        setter,
+        clearer,
+        success_text,
+        kind: str,
+    ) -> None:
+        """Validate and apply a Feature 4 text input (slots or proctor ratio)."""
+        text = text.strip()
+        # editingFinished fires on both Return and focus-out; skip re-applying an
+        # unchanged value so the cache is not invalidated spuriously.
+        if self._feature4_applied.get(kind) == text:
+            return
+        self._feature4_applied[kind] = text
+
+        if not text:
+            clearer()
+            label.setText("Missing")
+            label.setStyleSheet(self._feature4_input_style("missing"))
+            self._refresh_feature4_status()
+            self._update_gen_btn()
+            return
+
+        try:
+            result = setter(text)
+            label.setText(success_text(result))
+            label.setStyleSheet(self._feature4_input_style("valid"))
+        except ValueError as exc:
+            clearer()
+            label.setText("Invalid")
+            label.setStyleSheet(self._feature4_input_style("invalid"))
+            logger.warning("Invalid Feature 4 %s: %s", kind, exc)
+            QMessageBox.critical(
+                self,
+                "Invalid Feature 4 Input",
+                f"The {kind} entry is invalid.\n\nReason: {exc}",
+            )
+
+        self._refresh_feature4_status()
+        self._update_gen_btn()
+
+    def _load_classrooms(self) -> None:
+        self._load_feature4_file(
+            "Classrooms",
+            self._classrooms_label,
+            self._controller.load_classrooms,
+            self._controller.clear_classrooms,
+            lambda count: f"{count} room(s)",
+        )
+
+    def _on_slots_entered(self) -> None:
+        self._apply_feature4_text(
+            self._slots_input.text(),
+            self._slots_label,
+            self._controller.set_time_slots_from_text,
+            self._controller.clear_time_slots,
+            lambda count: f"{count} slot(s)",
+            "time slots",
+        )
+
+    def _on_proctors_entered(self) -> None:
+        self._apply_feature4_text(
+            self._proctors_input.text(),
+            self._proctors_label,
+            self._controller.set_proctor_config_from_text,
+            self._controller.clear_proctor_config,
+            lambda config: f"1:{config.students_per_proctor}",
+            "proctor ratio",
+        )
+
     def _on_edit_periods(self) -> None:
         dlg = ExamPeriodsEditorDialog(self._controller, parent=self)
         dlg.exec()
@@ -982,10 +1264,17 @@ class ConfigScreen(QWidget):
             )
             return
 
+        selected = self._get_selected_ids()
+        try:
+            self._controller.set_selected_programs(selected)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Selection", str(exc))
+            return
+
         self._update_programme_colours()
         self._update_prog_label()
         self._update_gen_btn()
-        self.courses_changed.emit(self._get_selected_ids())
+        self.courses_changed.emit(selected)
 
     def _on_view_courses_for(self, pid: str) -> None:
         from src.ui.programme_courses_dialog import ProgrammeCoursesDialog
@@ -1039,10 +1328,43 @@ class ConfigScreen(QWidget):
         if self._settings_dialog is not None and self._settings_dialog.isVisible():
             self._settings_dialog.set_generation_state(is_running)
 
+    def _close_generation_queues(self) -> None:
+        """Close UI-owned generation queues before starting/ending a generation.
+
+        If a queue is handed to DesktopController.attach_generation_worker(),
+        this class sets it to None first so ownership stays with the controller.
+        """
+        for queue_obj in (self._result_queue, self._worker_command_queue):
+            if queue_obj is None:
+                continue
+
+            try:
+                queue_obj.cancel_join_thread()
+            except Exception:
+                pass
+
+            try:
+                queue_obj.close()
+            except Exception:
+                pass
+
+        self._result_queue = None
+        self._worker_command_queue = None
+
     def _on_generate(self) -> None:
         selected = self._get_selected_ids()
+        try:
+            self._controller.set_selected_programs(selected)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Selection", str(exc))
+            return
 
-        self._controller.set_selected_programs(selected)
+        if not self._confirm_capacity_warning():
+            return
+
+        self._controller.set_allow_unassigned_classrooms(
+            self._allow_unassigned_generation
+        )
         self._pending_selected = selected
         self._pending_color_map = {
             pid: PROGRAMME_COLOURS[i % len(PROGRAMME_COLOURS)]
@@ -1060,19 +1382,30 @@ class ConfigScreen(QWidget):
             "QProgressBar::chunk { background:#2563EB; }"
         )
 
+        self._controller.shutdown_generation_worker()
+
         if self._gen_process is not None and self._gen_process.is_alive():
             self._gen_process.kill()
+            self._gen_process.join(timeout=0)
 
         if self._poll_timer is not None:
             self._poll_timer.stop()
 
-        if self._result_queue is not None:
-            self._result_queue.cancel_join_thread()
-            self._result_queue.close()
+        self._close_generation_queues()
 
         self._gen_start_time = time.monotonic()
         self._dead_ticks = 0
         self._result_queue = multiprocessing.Queue()
+        self._worker_command_queue = multiprocessing.Queue()
+
+        # Keep generation lazy for the normal no-sort flow. If sorting rules are
+        # active, fall back to full generation so Schedule #1 is globally sorted,
+        # not just sorted inside the currently-loaded batch.
+        generation_cap = (
+            None
+            if self._controller.settings.sorting.rules
+            else RESULT_BATCH_SIZE
+        )
 
         self._gen_process = multiprocessing.Process(
             target=_run_generation_process,
@@ -1084,7 +1417,12 @@ class ConfigScreen(QWidget):
             ),
             kwargs={
                 "settings": self._controller.settings,
-                "cap": None,
+                "cap": generation_cap,
+                "command_queue": self._worker_command_queue,
+                "classrooms": self._controller.engine_classrooms(),
+                "time_slots": self._controller.engine_time_slots(),
+                "proctor_config": self._controller.engine_proctor_config(),
+                "allow_unassigned_classrooms": self._allow_unassigned_generation,
             },
             daemon=True,
         )
@@ -1094,6 +1432,30 @@ class ConfigScreen(QWidget):
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_result)
         self._poll_timer.start(150)
+
+    def _confirm_capacity_warning(self) -> bool:
+        """Show the optional Feature 4 capacity warning before generation."""
+        shortfall = self._controller.feature4_capacity_shortfall()
+        if shortfall is None:
+            self._allow_unassigned_generation = False
+            return True
+
+        total_capacity, largest_exam_students = shortfall
+        response = QMessageBox.warning(
+            self,
+            "Insufficient Classroom Capacity",
+            "The total classroom capacity is lower than the number of students "
+            "in at least one exam.\n\n"
+            f"Total classroom capacity: {total_capacity:,}\n"
+            f"Largest exam: {largest_exam_students:,} students\n"
+            f"Shortfall: {largest_exam_students - total_capacity:,}\n\n"
+            "Generation may reject schedules that cannot be assigned to rooms. "
+            "Do you want to proceed anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        self._allow_unassigned_generation = response == QMessageBox.StandardButton.Yes
+        return self._allow_unassigned_generation
 
 
     def _poll_result(self) -> None:
@@ -1105,7 +1467,10 @@ class ConfigScreen(QWidget):
 
             if self._gen_process:
                 self._gen_process.kill()
+                self._gen_process.join(timeout=0.5)
 
+            self._close_generation_queues()
+            self._gen_process = None
             self._fail(f"Generation timed out after {_MAX_GEN_SECS}s.")
             return
 
@@ -1121,6 +1486,8 @@ class ConfigScreen(QWidget):
                     if self._poll_timer:
                         self._poll_timer.stop()
 
+                    self._close_generation_queues()
+                    self._gen_process = None
                     self._fail("Generation process exited unexpectedly.")
             else:
                 self._dead_ticks = 0
@@ -1145,6 +1512,29 @@ class ConfigScreen(QWidget):
             _, schedules_by_period, courses_by_id, truncated_periods = result
 
             self._controller.on_generation_succeeded(truncated_periods)
+
+            if (
+                truncated_periods
+                and self._worker_command_queue is not None
+                and self._result_queue is not None
+                and self._gen_process is not None
+                and self._gen_process.is_alive()
+            ):
+                self._controller.attach_generation_worker(
+                    self._worker_command_queue,
+                    self._result_queue,
+                    self._gen_process,
+                )
+                self._worker_command_queue = None
+                self._result_queue = None
+                self._gen_process = None
+            else:
+                if self._gen_process is not None:
+                    self._gen_process.join(timeout=0.5)
+
+                self._close_generation_queues()
+                self._gen_process = None
+
             schedules_by_period = self._controller.cache_generated_results(
                 schedules_by_period
             )
@@ -1164,6 +1554,8 @@ class ConfigScreen(QWidget):
             )
         else:
             logger.error("Generation failed or returned invalid result: %s", result)
+            self._close_generation_queues()
+            self._gen_process = None
             self._fail("Generation failed. Please check the input files and try again.")
 
 
@@ -1175,6 +1567,10 @@ class ConfigScreen(QWidget):
             self._poll_timer.stop()
 
         logger.error("Generation failed: %s", msg)
+
+        self._controller.shutdown_generation_worker()
+        self._close_generation_queues()
+        self._gen_process = None
 
         self._update_gen_btn()
         self.generation_failed.emit(msg)
@@ -1197,9 +1593,17 @@ class ConfigScreen(QWidget):
     def _update_gen_btn(self) -> None:
         running = self._gen_process is not None and self._gen_process.is_alive()
 
+        # When Feature 4 is enabled, generation is blocked until all its
+        # inputs and student counts are valid (spec 4.2).
+        feature4_ok = (
+            not self._controller.feature4_enabled
+            or self._controller.feature4_ready()
+        )
+
         self._gen_btn.setEnabled(
             not running
             and self._controller.has_courses
             and self._controller.has_periods
             and self._count_checked() >= 1
+            and feature4_ok
         )
