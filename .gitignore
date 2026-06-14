@@ -217,6 +217,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Dev container
+.devcontainer/
+
 # Project notes
 BUGS_AND_FIXES.md
 

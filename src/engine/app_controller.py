@@ -34,13 +34,29 @@ Notes:
 import logging
 from collections.abc import Iterator
 
+from src.domain.interfaces import IThresholdFilter
 from src.domain.schedule import Schedule
+from src.domain.threshold import ThresholdSettings
 from src.interfaces.i_data_provider import IDataProvider
 from src.interfaces.i_output_exporter import IOutputExporter
 from src.interfaces.i_schedule_generator import IScheduleGenerator
 
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_filter(
+    raw_iter: Iterator[Schedule],
+    threshold_filter,
+    threshold_settings,
+    courses: list,
+) -> Iterator[Schedule]:
+    # Accepts courses as a function argument so the value is captured
+    # eagerly at call time — not by reference to the enclosing loop variable.
+    return (
+        s for s in raw_iter
+        if threshold_filter.is_valid(s, courses, threshold_settings)
+    )
 
 
 class AppController:
@@ -51,11 +67,15 @@ class AppController:
         exporter: IOutputExporter,
         generator: IScheduleGenerator,
         selected_programs: list[str],
+        threshold_filter: IThresholdFilter | None = None,
+        threshold_settings: ThresholdSettings | None = None,
     ) -> None:
         self._data_provider = data_provider
         self._exporter = exporter
         self._generator = generator
         self._selected_programs = selected_programs
+        self._threshold_filter = threshold_filter
+        self._threshold_settings = threshold_settings
 
     def run(self) -> None:
         logger.info("Starting exam schedule generation")
@@ -97,9 +117,17 @@ class AppController:
             # Converting to a list would materialise all schedules into RAM,
             # destroying the O(PAGE_SIZE) memory guarantee of PaginatedExporter
             # and defeating the entire purpose of the yield-based generator.
-            schedules_by_period[period_key] = self._generator.generate_schedules(
-                relevant_courses, period
-            )
+            raw_iter = self._generator.generate_schedules(relevant_courses, period)
+
+            if self._threshold_filter is not None and self._threshold_settings is not None:
+                schedules_by_period[period_key] = _apply_filter(
+                    raw_iter,
+                    self._threshold_filter,
+                    self._threshold_settings,
+                    relevant_courses,
+                )
+            else:
+                schedules_by_period[period_key] = raw_iter
 
         self._exporter.export_schedules(schedules_by_period, courses_by_id)
         logger.info("Export complete")

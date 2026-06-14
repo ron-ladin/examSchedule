@@ -37,9 +37,9 @@ from src.domain.settings import Settings
 from src.domain.sorting import SortingConfig
 from src.domain.sorting_engine import SortingEngine
 from src.domain.threshold import ThresholdSettings
+from src.domain.threshold_filter import ThresholdFilter
 from src.engine.app_controller import AppController as _EngineController
 from src.engine.schedule_generator import ScheduleGenerator
-from src.engine.schedule_validator import filter_schedules
 from src.interfaces.i_output_exporter import IOutputExporter
 
 logger = logging.getLogger(__name__)
@@ -67,10 +67,12 @@ class _MemoryExporter(IOutputExporter):
         cap: int | None = None,
         offset_by_period: dict[str, int] | None = None,
         only_period_keys: set[str] | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._cap = cap
         self._offset_by_period = offset_by_period or {}
         self._only_period_keys = only_period_keys
+        self._settings = settings
 
         self.schedules_by_period: dict[str, list[Schedule]] = {}
         self.courses_by_id: dict[str, Course] = {}
@@ -89,6 +91,8 @@ class _MemoryExporter(IOutputExporter):
         self.remaining_iterators.clear()
         self.has_more_by_period.clear()
 
+        courses_list = list(courses_by_id.values())
+
         for key, schedule_iter in schedules_by_period.items():
             if self._only_period_keys is not None and key not in self._only_period_keys:
                 continue
@@ -96,14 +100,15 @@ class _MemoryExporter(IOutputExporter):
             offset = self._offset_by_period.get(key, 0)
 
             if self._cap is None:
-                self.schedules_by_period[key] = list(islice(schedule_iter, offset, None))
+                collected = list(islice(schedule_iter, offset, None))
+                self.schedules_by_period[key] = self._sort(collected, courses_list)
                 self.has_more_by_period[key] = False
                 continue
 
             batch = list(islice(schedule_iter, offset, offset + self._cap + 1))
 
             if len(batch) > self._cap:
-                self.schedules_by_period[key] = batch[: self._cap]
+                self.schedules_by_period[key] = self._sort(batch[: self._cap], courses_list)
                 self.truncated_periods.add(key)
                 self.has_more_by_period[key] = True
 
@@ -112,31 +117,14 @@ class _MemoryExporter(IOutputExporter):
                     schedule_iter,
                 )
             else:
-                self.schedules_by_period[key] = batch
+                self.schedules_by_period[key] = self._sort(batch, courses_list)
                 self.has_more_by_period[key] = False
 
+    def _sort(self, schedules: list[Schedule], courses: list[Course]) -> list[Schedule]:
+        if self._settings and self._settings.sorting.rules:
+            return SortingEngine.sort(schedules, courses, self._settings.sorting)
+        return schedules
 
-def _process_generated_schedules(
-    schedules_by_period: dict[str, list[Schedule]],
-    courses: list[Course],
-    settings: Settings,
-) -> dict[str, list[Schedule]]:
-    """Apply Sprint 3 threshold filtering first, then sorting."""
-    result: dict[str, list[Schedule]] = {}
-
-    for period_key, schedules in schedules_by_period.items():
-        valid = filter_schedules(
-            schedules,
-            courses,
-            settings.thresholds,
-        )
-        result[period_key] = SortingEngine.sort(
-            valid,
-            courses,
-            settings.sorting,
-        )
-
-    return result
 
 
 def _run_generation_process(
@@ -162,6 +150,11 @@ def _run_generation_process(
         cap=<number>, period_key=<key>, offset=<already loaded>.
     """
     try:
+        active_settings = settings or Settings(
+            thresholds=ThresholdSettings(),
+            sorting=SortingConfig(),
+        )
+
         data_provider = InMemoryDataProvider(
             courses=courses,
             exam_periods=exam_periods,
@@ -174,6 +167,7 @@ def _run_generation_process(
             cap=cap,
             offset_by_period={period_key: offset} if period_key else None,
             only_period_keys={period_key} if period_key else None,
+            settings=active_settings,
         )
 
         engine = _EngineController(
@@ -181,24 +175,15 @@ def _run_generation_process(
             exporter=memory_exporter,
             generator=generator,
             selected_programs=selected_programs,
+            threshold_filter=ThresholdFilter(),
+            threshold_settings=active_settings.thresholds,
         )
         engine.run()
-
-        active_settings = settings or Settings(
-            thresholds=ThresholdSettings(),
-            sorting=SortingConfig(),
-        )
-
-        processed_schedules = _process_generated_schedules(
-            dict(memory_exporter.schedules_by_period),
-            list(courses),
-            active_settings,
-        )
 
         result_queue.put(
             (
                 True,
-                processed_schedules,
+                dict(memory_exporter.schedules_by_period),
                 dict(memory_exporter.courses_by_id),
                 memory_exporter.truncated_periods,
             )
@@ -517,21 +502,19 @@ class DesktopController:
         )
         generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
 
-        memory_exporter = _MemoryExporter(cap=None)
+        memory_exporter = _MemoryExporter(cap=None, settings=self._settings)
 
         engine = _EngineController(
             data_provider=data_provider,
             exporter=memory_exporter,
             generator=generator,
             selected_programs=self._selected_programs,
+            threshold_filter=ThresholdFilter(),
+            threshold_settings=self._settings.thresholds,
         )
         engine.run()
 
-        processed = self._apply_threshold_and_sort(
-            dict(memory_exporter.schedules_by_period)
-        )
-        self._last_results = processed
-
+        self._last_results = dict(memory_exporter.schedules_by_period)
         self.on_generation_succeeded(set())
 
         self._remaining_schedule_iterators.clear()
@@ -539,20 +522,9 @@ class DesktopController:
         self._iterator_overflows.clear()
 
         return (
-            processed,
-            memory_exporter.courses_by_id,
+            dict(memory_exporter.schedules_by_period),
+            dict(memory_exporter.courses_by_id),
             set(),
-        )
-
-    def _apply_threshold_and_sort(
-        self,
-        schedules_by_period: dict[str, list[Schedule]],
-    ) -> dict[str, list[Schedule]]:
-        """Filter each period's schedules by active thresholds, then sort them."""
-        return _process_generated_schedules(
-            schedules_by_period,
-            list(self._courses),
-            self._settings,
         )
 
     def resort(self, config: SortingConfig) -> dict[str, list[Schedule]]:
