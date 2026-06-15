@@ -156,7 +156,7 @@ def test_config_screen_renders_optional_feature4_controls():
     app.processEvents()
 
     # Spec 4.1: Browse button for classrooms, text inputs for slots + ratio.
-    assert screen._load_classrooms_btn.text() == "Load Classrooms"
+    assert screen._load_classrooms_btn.text() == "Browse"
     assert screen._slots_input.placeholderText().startswith("e.g.")
     assert screen._proctors_input.placeholderText().startswith("e.g.")
     assert screen._classrooms_label.text() == "Missing"

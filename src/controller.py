@@ -45,6 +45,7 @@ from src.domain.threshold import ThresholdSettings
 from src.domain.threshold_filter import ThresholdFilter
 from src.domain.time_slot import TimeSlot
 from src.engine.app_controller import AppController as _EngineController
+from src.engine.proctor_report import build_proctor_report
 from src.engine.schedule_generator import ScheduleGenerator
 from src.interfaces.i_output_exporter import IOutputExporter
 
@@ -53,7 +54,6 @@ logger = logging.getLogger(__name__)
 
 # Initial UI generation and each Load More request use this batch size.
 RESULT_BATCH_SIZE: int = 1000
-RESULT_CAP: int = RESULT_BATCH_SIZE
 
 
 class _MemoryExporter(IOutputExporter):
@@ -285,6 +285,15 @@ class DesktopController:
             len(self._courses),
         )
         return len(self._courses)
+
+    def snapshot_courses(self) -> list[Course]:
+        """Return a shallow copy of the current courses list for rollback."""
+        return list(self._courses)
+
+    def restore_courses(self, courses: list[Course]) -> None:
+        """Restore a previously snapshotted courses list (spec 4.3 abort)."""
+        self._courses = list(courses)
+        self.mark_results_stale()
 
     def load_classrooms(self, path: Path) -> int:
         """Load and validate the optional Feature 4 classrooms file."""
@@ -524,14 +533,19 @@ class DesktopController:
         pre-generation checks and the engine agree on which exams matter.
         """
         semesters = {period.semester for period in self._exam_periods}
-        seen: set[int] = set()
+        seen: set[tuple] = set()
         relevant: list = []
         for semester in semesters:
             for offering in course.get_relevant_offerings(
                 self._selected_programs, semester
             ):
-                if id(offering) not in seen:
-                    seen.add(id(offering))
+                key = (
+                    offering.program_id,
+                    offering.year,
+                    normalize_semester(offering.semester),
+                )
+                if key not in seen:
+                    seen.add(key)
                     relevant.append(offering)
         return relevant
 
@@ -552,6 +566,22 @@ class DesktopController:
         """Proctor config passed to the engine — None unless Feature 4 is active."""
         return self._proctor_config if self.feature4_active else None
 
+    def any_exam_missing_student_count(self) -> bool:
+        """
+        True if ANY exam course has an offering without a StudentCount,
+        regardless of programme selection (spec 4.3 file-load abort).
+
+        Used at courses-file load time, before programmes/periods are known,
+        to reject a file that cannot satisfy Feature 4. Unlike
+        feature4_missing_student_counts this is not filtered by relevance.
+        """
+        return any(
+            offering.student_count is None
+            for course in self._courses
+            if course.has_exam()
+            for offering in course.offerings
+        )
+
     def feature4_missing_student_counts(self) -> bool:
         """
         True if any *relevant* exam offering lacks a StudentCount (spec 4.3).
@@ -560,7 +590,13 @@ class DesktopController:
         offerings for the selected programmes in a loaded period's semester are
         scheduled — so only those offerings require a count. Courses or
         programmes the user did not select never block generation.
+
+        When no programmes are selected yet, relevance cannot be determined, so
+        fall back to the unfiltered check — otherwise the warning would be
+        vacuously suppressed and the engine would raise at generate time.
         """
+        if not self._selected_programs:
+            return self.any_exam_missing_student_count()
         return any(
             offering.student_count is None
             for course in self._courses
@@ -954,3 +990,14 @@ class DesktopController:
         exporter.export_schedules(schedules_by_period, courses_by_id)
 
         logger.info("Exported schedules to %s", output_path)
+
+    def proctor_report_text(self, schedule: Schedule) -> str:
+        """Return the spec 4.6 proctor report text for one schedule."""
+        courses_by_id = {course.id: course for course in self._courses}
+        return build_proctor_report(schedule, courses_by_id)
+
+    def export_proctor_report(self, schedule: Schedule, output_path: Path) -> None:
+        """Write the spec 4.6 proctor report for one schedule to a .txt file."""
+        text = self.proctor_report_text(schedule)
+        Path(output_path).write_text(text, encoding="utf-8")
+        logger.info("Exported proctor report to %s", output_path)

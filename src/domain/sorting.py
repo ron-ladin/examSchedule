@@ -21,7 +21,7 @@ Notes:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 
 class SortCriterion(Enum):

@@ -1081,3 +1081,52 @@ def test_selecting_more_than_five_programmes_is_rejected_and_previous_selection_
         "83104",
         "83105",
     ]
+
+
+# ── spec 4.3: missing-StudentCount detection and file-load abort support ──────
+
+def _exam_course(student_count, program="83101", course_id="11111"):
+    return Course(
+        id=course_id,
+        name="Calculus",
+        instructor="Dr. Cohen",
+        evaluation_type="Exam",
+        offerings=[CourseOffering(program, 1, "FALL", "Obligatory", student_count)],
+    )
+
+
+def test_any_exam_missing_student_count_detects_missing_unfiltered():
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(None)]
+
+    # No programmes selected, no periods loaded — still detected (file-load abort).
+    assert ctrl.any_exam_missing_student_count() is True
+
+
+def test_any_exam_missing_student_count_false_when_all_present():
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(40)]
+
+    assert ctrl.any_exam_missing_student_count() is False
+
+
+def test_missing_student_counts_not_vacuous_without_selected_programmes():
+    """HIGH-12: enabling Feature 4 before selecting programmes still flags gaps."""
+    ctrl = DesktopController()
+    ctrl._feature4_enabled = True
+    ctrl._courses = [_exam_course(None)]
+    # No selected programmes — must fall back to the unfiltered check.
+    assert ctrl._selected_programs == []
+    assert ctrl.feature4_missing_student_counts() is True
+
+
+def test_snapshot_and_restore_courses_round_trip():
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(40)]
+    snapshot = ctrl.snapshot_courses()
+
+    ctrl._courses = [_exam_course(None, course_id="22222")]
+    ctrl.restore_courses(snapshot)
+
+    assert [c.id for c in ctrl._courses] == ["11111"]
+    assert ctrl.any_exam_missing_student_count() is False

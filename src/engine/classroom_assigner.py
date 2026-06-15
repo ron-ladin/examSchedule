@@ -50,22 +50,21 @@ class ClassroomAssigner:
     """Create a complete room allocation or reject the schedule."""
 
     @staticmethod
-    def assign(
+    def _collect_exam_data(
         schedule: Schedule,
-        courses: list[Course],
+        courses_by_id: dict[str, Course],
         selected_programs: list[str],
-        classrooms: list[Classroom],
-        slots: list[TimeSlot],
-        proctor_config: ProctorConfig,
-        allow_unassigned: bool = False,
-    ) -> Schedule | None:
-        courses_by_id = {course.id: course for course in courses}
-        rooms = sorted(classrooms, key=lambda room: room.capacity, reverse=True)
-        used_rooms: dict[tuple[object, TimeSlot], set[str]] = {}
-        result: dict[str, list[ClassroomAssignment]] = {}
-        unassigned: dict[str, int] = {}
+        allow_unassigned: bool,
+        unassigned: dict[str, int],
+    ) -> list[tuple] | None:
+        """Validate every exam in the schedule and gather room-sizing data.
 
-        exam_data = []
+        Returns a list of (student_count, course_id, exam_date, offerings) for
+        the exams that need rooms, or None when an unknown course must reject the
+        schedule (spec 4.4). Raises ValueError on a relevant exam missing its
+        StudentCount (spec 4.3).
+        """
+        exam_data: list[tuple] = []
         for course_id, exam_date in schedule.assignments.items():
             course = courses_by_id.get(course_id)
             if course is None:
@@ -97,6 +96,33 @@ class ClassroomAssigner:
 
             student_count = sum(offering.student_count for offering in offerings)
             exam_data.append((student_count, course_id, exam_date, offerings))
+        return exam_data
+
+    @staticmethod
+    def assign(
+        schedule: Schedule,
+        courses: list[Course],
+        selected_programs: list[str],
+        classrooms: list[Classroom],
+        slots: list[TimeSlot],
+        proctor_config: ProctorConfig,
+        allow_unassigned: bool = False,
+    ) -> Schedule | None:
+        courses_by_id = {course.id: course for course in courses}
+        rooms = sorted(classrooms, key=lambda room: room.capacity, reverse=True)
+        used_rooms: dict[tuple[object, TimeSlot], set[str]] = {}
+        result: dict[str, list[ClassroomAssignment]] = {}
+        unassigned: dict[str, int] = {}
+
+        exam_data = ClassroomAssigner._collect_exam_data(
+            schedule,
+            courses_by_id,
+            selected_programs,
+            allow_unassigned,
+            unassigned,
+        )
+        if exam_data is None:
+            return None
 
         # Place larger exams first to reduce avoidable assignment failures.
         for student_count, course_id, exam_date, offerings in sorted(

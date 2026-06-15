@@ -3,6 +3,8 @@
 from datetime import date, time
 from queue import Queue
 
+import pytest
+
 from src.controller import _run_generation_process
 from src.domain.classroom import Classroom
 from src.domain.course import Course
@@ -239,8 +241,6 @@ def test_assigner_raises_on_missing_count_for_relevant_exam():
     course = _course_missing_count("11111")
     schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
 
-    import pytest
-
     with pytest.raises(ValueError, match="Missing StudentCount"):
         ClassroomAssigner.assign(
             schedule,
@@ -293,3 +293,98 @@ def test_assigner_ignores_missing_count_in_unselected_programme():
     assert assigned is not None
     assert "11111" in assigned.classroom_assignments
     assert assigned.classroom_assignments["11111"] == []
+
+
+# ── §6: StudentCount == 0 skips room assignment (spec 4.3) ────────────────────
+
+def test_assigner_skips_room_assignment_for_zero_student_count():
+    """StudentCount of exactly 0 keeps the exam date but assigns no room."""
+    course = _course("11111", 0)
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [course],
+        ["83101"],
+        [Classroom("Room 1", 50)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    assert assigned is not None
+    assert assigned.classroom_assignments["11111"] == []
+    assert "11111" not in assigned.unassigned_classroom_exams
+
+
+# ── §7: heap-exhaustion path of the balanced distribution (spec 4.4) ──────────
+
+def test_assigner_rejects_when_capacity_is_exactly_one_short():
+    """Total capacity below the student count rejects the whole schedule."""
+    course = _course("11111", 101)
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [course],
+        ["83101"],
+        [Classroom("Room 1", 50), Classroom("Room 2", 50)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    assert assigned is None
+
+
+def test_assigner_fills_rooms_to_exact_capacity():
+    """When the student count equals total capacity every seat is used once."""
+    course = _course("11111", 100)
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [course],
+        ["83101"],
+        [Classroom("Room 1", 50), Classroom("Room 2", 50)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    rooms = assigned.classroom_assignments["11111"]
+    assert sum(item.students_assigned for item in rooms) == 100
+    assert all(item.students_assigned == item.room.capacity for item in rooms)
+
+
+# ── §8: unknown course id in the schedule (spec 4.4 rejection) ────────────────
+
+def test_assigner_rejects_schedule_with_unknown_course_when_strict():
+    """A course id absent from the catalogue rejects the schedule by default."""
+    schedule = Schedule(_period(), {"99999": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [],
+        ["83101"],
+        [Classroom("Room 1", 50)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    assert assigned is None
+
+
+def test_assigner_marks_unknown_course_unassigned_when_allowed():
+    """With allow_unassigned the unknown course is recorded, not rejected."""
+    schedule = Schedule(_period(), {"99999": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [],
+        ["83101"],
+        [Classroom("Room 1", 50)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+        allow_unassigned=True,
+    )
+
+    assert assigned is not None
+    assert assigned.unassigned_classroom_exams.get("99999") == 0

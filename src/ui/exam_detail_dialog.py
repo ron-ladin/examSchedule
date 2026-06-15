@@ -69,10 +69,30 @@ class ExamDetailDialog(QDialog):
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(12)
 
-        # ── Header ─────────────────────────────────────────────────────────────
+        layout.addLayout(self._build_header(exam_date, len(course_ids)))
+
+        sep = QLabel()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background: #E2E8F0;")
+        layout.addWidget(sep)
+
+        rows = self._build_rows(
+            course_ids,
+            courses_by_id,
+            prog_color_map,
+            classroom_assignments,
+            unassigned_exams,
+        )
+        table = self._create_table()
+        self._fill_table(table, rows)
+        layout.addWidget(table)
+
+        layout.addLayout(self._build_footer())
+
+    @staticmethod
+    def _build_header(exam_date: date, exam_count: int) -> QHBoxLayout:
         header_row = QHBoxLayout()
-        date_badge = CalendarIcon(22, "#2563EB")
-        header_row.addWidget(date_badge)
+        header_row.addWidget(CalendarIcon(22, "#2563EB"))
 
         title_col = QVBoxLayout()
         title_col.setSpacing(1)
@@ -81,22 +101,17 @@ class ExamDetailDialog(QDialog):
             "font-size: 16px; font-weight: 700; color: #1F2937; background: transparent;"
         )
         count_lbl = QLabel(
-            f"{len(course_ids)} exam{'s' if len(course_ids) != 1 else ''} scheduled"
+            f"{exam_count} exam{'s' if exam_count != 1 else ''} scheduled"
         )
         count_lbl.setStyleSheet("font-size: 11px; color: #6B7280; background: transparent;")
         title_col.addWidget(title)
         title_col.addWidget(count_lbl)
         header_row.addLayout(title_col)
         header_row.addStretch()
-        layout.addLayout(header_row)
+        return header_row
 
-        # ── Thin separator ─────────────────────────────────────────────────────
-        sep = QLabel()
-        sep.setFixedHeight(1)
-        sep.setStyleSheet("background: #E2E8F0;")
-        layout.addWidget(sep)
-
-        # ── Detail table ───────────────────────────────────────────────────────
+    @staticmethod
+    def _create_table() -> QTableWidget:
         table = QTableWidget()
         table.setColumnCount(10)
         table.setHorizontalHeaderLabels(
@@ -115,17 +130,16 @@ class ExamDetailDialog(QDialog):
         )
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
-        table.horizontalHeader().setMinimumHeight(34)
+        header = table.horizontalHeader()
+        stretch_columns = {1, 9}
+        for column in range(10):
+            mode = (
+                QHeaderView.ResizeMode.Stretch
+                if column in stretch_columns
+                else QHeaderView.ResizeMode.ResizeToContents
+            )
+            header.setSectionResizeMode(column, mode)
+        header.setMinimumHeight(34)
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(True)
         table.setStyleSheet("""
@@ -148,14 +162,10 @@ class ExamDetailDialog(QDialog):
             QTableWidget::item { padding: 8px 10px; color: #1F2937; }
             QTableWidget::item:alternate { background: #F8FAFC; }
         """)
+        return table
 
-        rows = self._build_rows(
-            course_ids,
-            courses_by_id,
-            prog_color_map,
-            classroom_assignments,
-            unassigned_exams,
-        )
+    @staticmethod
+    def _fill_table(table: QTableWidget, rows: list) -> None:
         table.setRowCount(len(rows))
         bold_font = QFont()
         bold_font.setWeight(QFont.Weight.Medium)
@@ -197,9 +207,8 @@ class ExamDetailDialog(QDialog):
             table.setItem(row_idx, 9, aff_item)
 
         table.resizeRowsToContents()
-        layout.addWidget(table)
 
-        # ── Footer: Close button ───────────────────────────────────────────────
+    def _build_footer(self) -> QHBoxLayout:
         btn_row = QHBoxLayout()
         full_screen_btn = QPushButton("Full Screen")
         full_screen_btn.setFixedWidth(120)
@@ -218,7 +227,7 @@ class ExamDetailDialog(QDialog):
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.accept)
         btn_row.addWidget(close_btn)
-        layout.addLayout(btn_row)
+        return btn_row
 
     def _toggle_full_screen(self, button: QPushButton) -> None:
         if self.isFullScreen():
@@ -251,6 +260,7 @@ class ExamDetailDialog(QDialog):
             name = course.name if course else course_id
             req_str = "—"
             affected: list[str] = []
+            affected_seen: set[str] = set()
             if course:
                 for offering in course.offerings:
                     if offering.program_id in prog_color_map:
@@ -259,7 +269,8 @@ class ExamDetailDialog(QDialog):
                             req_str = "Obligatory"
                         elif raw.startswith("elec"):
                             req_str = "Elective"
-                        if offering.program_id not in affected:
+                        if offering.program_id not in affected_seen:
+                            affected_seen.add(offering.program_id)
                             affected.append(offering.program_id)
             affected_str = (
                 "; ".join(programme_display_name(program_id) for program_id in affected)
