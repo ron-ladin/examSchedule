@@ -171,7 +171,7 @@ class ExamDetailDialog(QDialog):
         bold_font.setWeight(QFont.Weight.Medium)
 
         for row_idx, row in enumerate(rows):
-            course_id, name, slot, building, room, students, capacity, status, req, affected = row
+            course_id, name, slot, building, room, students, capacity, status, req, affected, proctors = row
             id_item = QTableWidgetItem(course_id)
             id_item.setFont(bold_font)
             id_item.setForeground(QColor("#1D4ED8"))
@@ -205,6 +205,8 @@ class ExamDetailDialog(QDialog):
             if affected == "Not affected":
                 aff_item.setForeground(QColor("#94A3B8"))
             table.setItem(row_idx, 9, aff_item)
+
+            table.setItem(row_idx, 10, QTableWidgetItem(proctors))
 
         table.resizeRowsToContents()
 
@@ -251,8 +253,8 @@ class ExamDetailDialog(QDialog):
         prog_color_map: dict[str, str],
         classroom_assignments: dict[str, list[ClassroomAssignment]] | None = None,
         unassigned_exams: dict[str, int] | None = None,
-    ) -> list[tuple[str, str, str, str, str, str, str, str, str, str]]:
-        rows: list[tuple[str, str, str, str, str, str, str, str, str, str]] = []
+    ) -> list[tuple[str, str, str, str, str, str, str, str, str, str, str]]:
+        rows: list[tuple[str, str, str, str, str, str, str, str, str, str, str]] = []
         classroom_assignments = classroom_assignments or {}
         unassigned_exams = unassigned_exams or {}
         for course_id in course_ids:
@@ -291,6 +293,7 @@ class ExamDetailDialog(QDialog):
                         "UNASSIGNED",
                         req_str,
                         affected_str,
+                        "—",
                     )
                 )
             elif assignments:
@@ -315,6 +318,7 @@ class ExamDetailDialog(QDialog):
                             ),
                             req_str,
                             affected_str,
+                            str(assignment.proctor_count),
                         )
                     )
             else:
@@ -330,6 +334,7 @@ class ExamDetailDialog(QDialog):
                         "—",
                         req_str,
                         affected_str,
+                        "—",
                     )
                 )
         return rows

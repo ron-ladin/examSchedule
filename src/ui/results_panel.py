@@ -184,6 +184,7 @@ class _ResultsPanel(QWidget):
         self._has_stale_results = False
         self._stale_banner.setVisible(False)
         self._save_btn.setEnabled(True)
+        self._proctor_btn.setEnabled(True)
 
     def load(
         self,
@@ -987,6 +988,15 @@ class _ResultsPanel(QWidget):
 
     def _on_proctor_report(self) -> None:
         """Build and show the spec 4.6 proctor report for displayed schedules."""
+        if self._has_stale_results:
+            self._show_message(
+                "Stale Schedules",
+                "Exam period dates have changed since the last generation.\n\n"
+                "Please click  ▶  Generate again before viewing/exporting the proctor report.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
         selected = self._selected_schedules()
         if not selected:
             self._show_message(
