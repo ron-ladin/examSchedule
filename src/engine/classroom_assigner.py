@@ -55,16 +55,20 @@ class ClassroomAssigner:
         courses_by_id: dict[str, Course],
         selected_programs: list[str],
         allow_unassigned: bool,
-        unassigned: dict[str, int],
-    ) -> list[tuple] | None:
+    ) -> tuple[list[tuple], dict[str, int]] | None:
         """Validate every exam in the schedule and gather room-sizing data.
 
-        Returns a list of (student_count, course_id, exam_date, offerings) for
-        the exams that need rooms, or None when an unknown course must reject the
-        schedule (spec 4.4). Raises ValueError on a relevant exam missing its
-        StudentCount (spec 4.3).
+        Returns (exam_data, unassigned) where exam_data is a list of
+        (student_count, course_id, exam_date, offerings) for the exams that need
+        rooms and unassigned maps unknown courses to 0. Returns None when an
+        unknown course must reject the schedule (spec 4.4). Raises ValueError on
+        a relevant exam missing its StudentCount (spec 4.3).
+
+        Builds its own unassigned dict rather than mutating a caller-supplied one
+        so a None reject leaves no partial state behind (immutability rule).
         """
         exam_data: list[tuple] = []
+        unassigned: dict[str, int] = {}
         for course_id, exam_date in schedule.assignments.items():
             course = courses_by_id.get(course_id)
             if course is None:
@@ -96,7 +100,7 @@ class ClassroomAssigner:
 
             student_count = sum(offering.student_count for offering in offerings)
             exam_data.append((student_count, course_id, exam_date, offerings))
-        return exam_data
+        return exam_data, unassigned
 
     @staticmethod
     def assign(
@@ -112,17 +116,16 @@ class ClassroomAssigner:
         rooms = sorted(classrooms, key=lambda room: room.capacity, reverse=True)
         used_rooms: dict[tuple[object, TimeSlot], set[str]] = {}
         result: dict[str, list[ClassroomAssignment]] = {}
-        unassigned: dict[str, int] = {}
 
-        exam_data = ClassroomAssigner._collect_exam_data(
+        collected = ClassroomAssigner._collect_exam_data(
             schedule,
             courses_by_id,
             selected_programs,
             allow_unassigned,
-            unassigned,
         )
-        if exam_data is None:
+        if collected is None:
             return None
+        exam_data, unassigned = collected
 
         # Place larger exams first to reduce avoidable assignment failures.
         for student_count, course_id, exam_date, offerings in sorted(
@@ -152,11 +155,14 @@ class ClassroomAssigner:
                 if sum(room.capacity for room in available) < student_count:
                     continue
 
-                allocated = []
                 distribution = _balanced_distribution(available, student_count)
                 if distribution is None:
+                    # Heap exhaustion on an imbalanced slot: keep allocated as
+                    # None so a later slot (or the unassigned path) can handle
+                    # the course instead of silently recording zero rooms.
                     continue
 
+                allocated = []
                 for room, placed in distribution:
                     allocated.append(
                         ClassroomAssignment(

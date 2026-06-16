@@ -13,7 +13,10 @@ from src.domain.exam_period import ExamPeriod
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.time_slot import TimeSlot
-from src.engine.classroom_assigner import ClassroomAssigner
+from src.engine.classroom_assigner import (
+    ClassroomAssigner,
+    _balanced_distribution,
+)
 
 
 def _period() -> ExamPeriod:
@@ -388,3 +391,57 @@ def test_assigner_marks_unknown_course_unassigned_when_allowed():
 
     assert assigned is not None
     assert assigned.unassigned_classroom_exams.get("99999") == 0
+
+
+# ── §9: balanced-distribution contract and heap-exhaustion guard ──────────────
+
+def test_balanced_distribution_splits_imbalanced_rooms_within_capacity():
+    """Uneven room sizes still split evenly without exceeding any capacity."""
+    rooms = [Classroom("Big", 50), Classroom("Small", 10)]
+
+    distribution = _balanced_distribution(rooms, 40)
+
+    assert distribution is not None
+    placed = dict((room.room_id, count) for room, count in distribution)
+    assert sum(placed.values()) == 40
+    assert all(count <= room.capacity for room, count in distribution)
+
+
+def test_balanced_distribution_returns_none_when_capacity_insufficient():
+    """Below-capacity input returns None so the caller never records 0 rooms."""
+    rooms = [Classroom("Room 1", 20), Classroom("Room 2", 10)]
+
+    assert _balanced_distribution(rooms, 40) is None
+
+
+def test_assigner_leaves_no_silent_empty_assignment_on_distribution_failure():
+    """HIGH fix: a None distribution must not record the course with 0 rooms.
+
+    When no slot can host the exam, the course is either rejected (strict) or
+    recorded as unassigned — never silently present with an empty room list.
+    """
+    course = _course("11111", 40)
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+
+    rejected = ClassroomAssigner.assign(
+        schedule,
+        [course],
+        ["83101"],
+        [Classroom("Room 1", 20), Classroom("Room 2", 10)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+    assert rejected is None
+
+    allowed = ClassroomAssigner.assign(
+        schedule,
+        [course],
+        ["83101"],
+        [Classroom("Room 1", 20), Classroom("Room 2", 10)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+        allow_unassigned=True,
+    )
+    assert allowed is not None
+    assert allowed.classroom_assignments["11111"] == []
+    assert allowed.unassigned_classroom_exams == {"11111": 40}
