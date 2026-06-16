@@ -45,7 +45,9 @@ from src.domain.threshold import ThresholdSettings
 from src.domain.threshold_filter import ThresholdFilter
 from src.domain.time_slot import TimeSlot
 from src.engine.app_controller import AppController as _EngineController
+from src.engine.classroom_assigner import ClassroomAssigner
 from src.engine.schedule_generator import ScheduleGenerator
+from src.interfaces.i_classroom_assigner import IClassroomAssigner
 from src.interfaces.i_output_exporter import IOutputExporter
 
 logger = logging.getLogger(__name__)
@@ -74,17 +76,26 @@ class _MemoryExporter(IOutputExporter):
         offset_by_period: dict[str, int] | None = None,
         only_period_keys: set[str] | None = None,
         settings: Settings | None = None,
+        classroom_assigner: IClassroomAssigner | None = None,
+        classrooms: list[Classroom] | None = None,
+        time_slots: list[TimeSlot] | None = None,
+        proctor_config: ProctorConfig | None = None,
     ) -> None:
         self._cap = cap
         self._offset_by_period = offset_by_period or {}
         self._only_period_keys = only_period_keys
         self._settings = settings
+        self._classroom_assigner = classroom_assigner
+        self._classrooms = classrooms or []
+        self._time_slots = time_slots or []
+        self._proctor_config = proctor_config
 
         self.schedules_by_period: dict[str, list[Schedule]] = {}
         self.courses_by_id: dict[str, Course] = {}
         self.truncated_periods: set[str] = set()
         self.remaining_iterators: dict[str, Iterator[Schedule]] = {}
         self.has_more_by_period: dict[str, bool] = {}
+        self.assignments_by_period: dict[str, list[list]] = {}
 
     def export_schedules(
         self,
@@ -96,6 +107,7 @@ class _MemoryExporter(IOutputExporter):
         self.truncated_periods.clear()
         self.remaining_iterators.clear()
         self.has_more_by_period.clear()
+        self.assignments_by_period.clear()
 
         courses_list = list(courses_by_id.values())
 
@@ -106,30 +118,83 @@ class _MemoryExporter(IOutputExporter):
             offset = self._offset_by_period.get(key, 0)
 
             if self._cap is None:
-                collected = list(islice(schedule_iter, offset, None))
-                self.schedules_by_period[key] = self._sort(collected, courses_list)
+                collected, assign_map = self._apply_assigner(
+                    islice(schedule_iter, offset, None), courses_list
+                )
+                sorted_schedules = self._sort(collected, courses_list)
+                self.schedules_by_period[key] = sorted_schedules
                 self.has_more_by_period[key] = False
+                if self._classroom_assigner is not None:
+                    self.assignments_by_period[key] = [
+                        assign_map.get(id(s), []) for s in sorted_schedules
+                    ]
                 continue
 
-            batch = list(islice(schedule_iter, offset, offset + self._cap + 1))
+            raw_batch, assign_map = self._apply_assigner(
+                islice(schedule_iter, offset, offset + self._cap + 1), courses_list
+            )
 
-            if len(batch) > self._cap:
-                self.schedules_by_period[key] = self._sort(batch[: self._cap], courses_list)
+            if len(raw_batch) > self._cap:
+                kept = raw_batch[: self._cap]
+                sorted_kept = self._sort(kept, courses_list)
+                self.schedules_by_period[key] = sorted_kept
                 self.truncated_periods.add(key)
                 self.has_more_by_period[key] = True
-
                 self.remaining_iterators[key] = chain(
-                    [batch[self._cap]],
+                    [raw_batch[self._cap]],
                     schedule_iter,
                 )
+                if self._classroom_assigner is not None:
+                    self.assignments_by_period[key] = [
+                        assign_map.get(id(s), []) for s in sorted_kept
+                    ]
             else:
-                self.schedules_by_period[key] = self._sort(batch, courses_list)
+                sorted_batch = self._sort(raw_batch, courses_list)
+                self.schedules_by_period[key] = sorted_batch
                 self.has_more_by_period[key] = False
+                if self._classroom_assigner is not None:
+                    self.assignments_by_period[key] = [
+                        assign_map.get(id(s), []) for s in sorted_batch
+                    ]
 
     def _sort(self, schedules: list[Schedule], courses: list[Course]) -> list[Schedule]:
         if self._settings and self._settings.sorting.rules:
             return SortingEngine.sort(schedules, courses, self._settings.sorting)
         return schedules
+
+    def _apply_assigner(
+        self,
+        schedule_iter,
+        courses_list: list[Course],
+    ) -> tuple[list[Schedule], dict[int, list]]:
+        """Materialise schedules, optionally filtering via the classroom assigner.
+
+        Returns (accepted_schedules, assign_map) where assign_map maps
+        id(schedule) -> list[ClassroomAssignment] for the accepted schedules.
+        When no assigner is configured, assign_map is always empty.
+        """
+        accepted: list[Schedule] = []
+        assign_map: dict[int, list] = {}
+
+        for schedule in schedule_iter:
+            if self._classroom_assigner is None:
+                accepted.append(schedule)
+                continue
+
+            result = self._classroom_assigner.assign(
+                schedule,
+                courses_list,
+                self._classrooms,
+                self._time_slots,
+                self._proctor_config,
+            )
+            if result is None:
+                continue  # spec §4.4 CRITICAL: reject schedule
+
+            assign_map[id(schedule)] = result
+            accepted.append(schedule)
+
+        return accepted, assign_map
 
 
 
@@ -142,24 +207,36 @@ def _run_generation_process(
     cap: "int | None" = None,
     period_key: "str | None" = None,
     offset: int = 0,
+    classrooms: "list[Classroom] | None" = None,
+    time_slots: "list[TimeSlot] | None" = None,
+    proctor_config: "ProctorConfig | None" = None,
 ) -> None:
     """
     Entry point for multiprocessing.Process-based schedule generation.
 
-    Puts (True, schedules_by_period, courses_by_id, truncated_periods) on success
-    or (False, error_message) on failure.
+    Puts (True, schedules_by_period, courses_by_id, truncated_periods,
+    assignments_by_period) on success or (False, error_message) on failure.
 
     Default behavior:
         cap=None -> generate all schedules up front.
 
     Optional legacy batching:
         cap=<number>, period_key=<key>, offset=<already loaded>.
+
+    Optional Feature 4:
+        When classrooms, time_slots, and proctor_config are all provided,
+        a ClassroomAssigner is applied to each schedule. Schedules that
+        cannot be fully assigned are rejected (spec §4.4 CRITICAL rule).
     """
     try:
         active_settings = settings or Settings(
             thresholds=ThresholdSettings(),
             sorting=SortingConfig(),
         )
+
+        assigner: IClassroomAssigner | None = None
+        if classrooms and time_slots and proctor_config is not None:
+            assigner = ClassroomAssigner()
 
         data_provider = InMemoryDataProvider(
             courses=courses,
@@ -174,6 +251,10 @@ def _run_generation_process(
             offset_by_period={period_key: offset} if period_key else None,
             only_period_keys={period_key} if period_key else None,
             settings=active_settings,
+            classroom_assigner=assigner,
+            classrooms=list(classrooms) if classrooms else [],
+            time_slots=list(time_slots) if time_slots else [],
+            proctor_config=proctor_config,
         )
 
         engine = _EngineController(
@@ -192,6 +273,7 @@ def _run_generation_process(
                 dict(memory_exporter.schedules_by_period),
                 dict(memory_exporter.courses_by_id),
                 memory_exporter.truncated_periods,
+                dict(memory_exporter.assignments_by_period),
             )
         )
     except Exception as exc:
@@ -226,9 +308,21 @@ class DesktopController:
         # can re-rank in place instead of regenerating from scratch.
         self._last_results: dict[str, list[Schedule]] | None = None
 
+        # Feature 4: classroom assignments parallel to schedules_by_period.
+        # period_key -> [assignments_for_schedule_0, assignments_for_schedule_1, ...]
+        self._classroom_assignments_by_period: dict[str, list[list]] = {}
+
     @property
     def settings(self) -> Settings:
         return self._settings
+
+    def get_classroom_assignments(self, period_key: str) -> list[list]:
+        """Return per-schedule classroom assignments for a period (Feature 4).
+
+        Returns a list parallel to schedules_by_period[period_key]: index i holds
+        the list[ClassroomAssignment] for schedule i. Empty when Feature 4 is inactive.
+        """
+        return list(self._classroom_assignments_by_period.get(period_key, []))
 
     def apply_sort(self, config: SortingConfig) -> None:
         """Store a new sort config immediately on sort-list change (§281).
@@ -626,6 +720,7 @@ class DesktopController:
     def cache_generated_results(
         self,
         schedules_by_period: dict[str, list[Schedule]],
+        assignments_by_period: dict[str, list[list]] | None = None,
     ) -> dict[str, list[Schedule]]:
         """Cache subprocess results and apply the current sort order before display.
 
@@ -642,6 +737,7 @@ class DesktopController:
         }
 
         self._last_results = resorted
+        self._classroom_assignments_by_period = dict(assignments_by_period or {})
         return resorted
 
     def reset_generation_state(self) -> None:
@@ -675,6 +771,15 @@ class DesktopController:
         import multiprocessing as _mp
 
         q: _mp.Queue = _mp.Queue()
+
+        feature4_kwargs = {}
+        if self.feature4_active:
+            feature4_kwargs = {
+                "classrooms": list(self._classrooms),
+                "time_slots": list(self._time_slots),
+                "proctor_config": self._proctor_config,
+            }
+
         proc = _mp.Process(
             target=_run_generation_process,
             args=(
@@ -688,6 +793,7 @@ class DesktopController:
                 "cap": RESULT_BATCH_SIZE,
                 "period_key": period_key,
                 "offset": already_loaded,
+                **feature4_kwargs,
             },
             daemon=True,
         )

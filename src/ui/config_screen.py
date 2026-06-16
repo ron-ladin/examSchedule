@@ -1255,6 +1255,14 @@ class ConfigScreen(QWidget):
         self._dead_ticks = 0
         self._result_queue = multiprocessing.Queue()
 
+        feature4_kwargs = {}
+        if self._controller.feature4_active:
+            feature4_kwargs = {
+                "classrooms": self._controller.classrooms,
+                "time_slots": self._controller.time_slots,
+                "proctor_config": self._controller.proctor_config,
+            }
+
         self._gen_process = multiprocessing.Process(
             target=_run_generation_process,
             args=(
@@ -1266,6 +1274,7 @@ class ConfigScreen(QWidget):
             kwargs={
                 "settings": self._controller.settings,
                 "cap": None,
+                **feature4_kwargs,
             },
             daemon=True,
         )
@@ -1339,17 +1348,19 @@ class ConfigScreen(QWidget):
 
         if (
             isinstance(result, tuple)
-            and len(result) == 4
+            and len(result) == 5
             and result[0] is True
             and isinstance(result[1], dict)
             and isinstance(result[2], dict)
             and isinstance(result[3], set)
+            and isinstance(result[4], dict)
         ):
-            _, schedules_by_period, courses_by_id, truncated_periods = result
+            _, schedules_by_period, courses_by_id, truncated_periods, assignments_by_period = result
 
             self._controller.on_generation_succeeded(truncated_periods)
             schedules_by_period = self._controller.cache_generated_results(
-                schedules_by_period
+                schedules_by_period,
+                assignments_by_period,
             )
 
             self._notify_settings_state(False)

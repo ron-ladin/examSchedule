@@ -620,11 +620,12 @@ class _ResultsPanel(QWidget):
 
         if not (
             isinstance(result, tuple)
-            and len(result) == 4
+            and len(result) == 5
             and result[0] is True
             and isinstance(result[1], dict)
             and isinstance(result[2], dict)
             and isinstance(result[3], set)
+            and isinstance(result[4], dict)
         ):
             error_details = (
                 result[1]
@@ -640,7 +641,7 @@ class _ResultsPanel(QWidget):
             self._cleanup_load_more_state(period_key, terminate=True)
             return
 
-        _, all_by_period, _courses_by_id, truncated_periods = result
+        _, all_by_period, _courses_by_id, truncated_periods, _assignments = result
 
         old_len = len(self._schedules_by_period[period_key])
         extra = all_by_period.get(period_key, [])

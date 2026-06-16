@@ -179,7 +179,7 @@ def test_generation_process_applies_thresholds_and_sorting_settings(tmp_path):
         cap=None,
     )
 
-    ok, schedules_by_period, _courses_by_id, truncated_periods = (
+    ok, schedules_by_period, _courses_by_id, truncated_periods, _assignments = (
         result_queue.get_nowait()
     )
     schedules = _all_schedules(schedules_by_period)
