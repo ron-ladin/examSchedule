@@ -36,7 +36,6 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -602,9 +601,8 @@ class ConfigScreen(QWidget):
     def _build_feature4_card(self) -> QFrame:
         """Build the optional Feature 4 (classroom assignment) input card.
 
-        Per spec 4.1 the GUI exposes a dedicated activation toggle, a Browse
-        button for the classrooms file, and text inputs for the comma-separated
-        slots and the proctor ratio.
+        The GUI exposes a dedicated activation toggle and Browse buttons for
+        the classrooms, time-slots, and proctor-ratio text files.
         """
         c = _card()
         self._feature4_card = c
@@ -629,8 +627,8 @@ class ConfigScreen(QWidget):
         vl.addWidget(self._feature4_toggle)
 
         description = QLabel(
-            "When enabled, load a classrooms file and enter the exam time slots "
-            "and proctor ratio. All three are required before generation."
+            "When enabled, load classrooms, time slots, and proctor ratio .txt "
+            "files. All three are required before generation."
         )
         description.setWordWrap(True)
         description.setStyleSheet(
@@ -651,44 +649,37 @@ class ConfigScreen(QWidget):
         crow.addWidget(self._classrooms_label, 1)
         vl.addLayout(crow)
 
-        # Time slots: text input (spec 4.1 — comma-separated HH:MM).
-        self._slots_input = QLineEdit()
-        self._slots_input.setPlaceholderText("e.g. 09:00, 13:00, 19:00")
-        # Real-time validation (spec 4.2): textChanged gives inline feedback while
-        # typing; editingFinished still applies the value and surfaces a dialog.
-        self._slots_input.textChanged.connect(self._on_slots_changed)
-        self._slots_input.editingFinished.connect(self._on_slots_entered)
+        # Time slots: .txt file with comma-separated HH:MM values.
+        self._load_slots_btn = QPushButton("Browse")
+        self._load_slots_btn.setFixedWidth(120)
+        self._load_slots_btn.clicked.connect(self._load_time_slots)
         self._slots_label = QLabel("Missing")
         self._slots_label.setWordWrap(True)
         self._slots_label.setStyleSheet(self._feature4_input_style("missing"))
         srow = QHBoxLayout()
         srow.addWidget(self._feature4_row_title("Time Slots"))
-        srow.addWidget(self._slots_input, 1)
-        srow.addWidget(self._slots_label)
+        srow.addWidget(self._load_slots_btn)
+        srow.addWidget(self._slots_label, 1)
         vl.addLayout(srow)
 
-        # Proctor ratio: text input (spec 4.1 — '1:X').
-        self._proctors_input = QLineEdit()
-        self._proctors_input.setPlaceholderText("e.g. 1:20")
-        self._proctors_input.textChanged.connect(self._on_proctors_changed)
-        self._proctors_input.editingFinished.connect(self._on_proctors_entered)
+        # Proctor ratio: .txt file with a single '1:X' value.
+        self._load_proctors_btn = QPushButton("Browse")
+        self._load_proctors_btn.setFixedWidth(120)
+        self._load_proctors_btn.clicked.connect(self._load_proctor_config)
         self._proctors_label = QLabel("Missing")
         self._proctors_label.setWordWrap(True)
         self._proctors_label.setStyleSheet(self._feature4_input_style("missing"))
         prow = QHBoxLayout()
         prow.addWidget(self._feature4_row_title("Proctor Ratio"))
-        prow.addWidget(self._proctors_input, 1)
-        prow.addWidget(self._proctors_label)
+        prow.addWidget(self._load_proctors_btn)
+        prow.addWidget(self._proctors_label, 1)
         vl.addLayout(prow)
 
         self._feature4_inputs = [
             self._load_classrooms_btn,
-            self._slots_input,
-            self._proctors_input,
+            self._load_slots_btn,
+            self._load_proctors_btn,
         ]
-        # Last text applied per input kind; lets us ignore the second
-        # editingFinished signal (Return then focus-out) for an unchanged value.
-        self._feature4_applied: dict[str, str] = {}
         self._apply_feature4_enabled_state()
         self._refresh_feature4_status()
         return c
@@ -809,49 +800,6 @@ class ConfigScreen(QWidget):
         self._refresh_feature4_status()
         self._update_gen_btn()
 
-    def _apply_feature4_text(
-        self,
-        text: str,
-        label: QLabel,
-        setter,
-        clearer,
-        success_text,
-        kind: str,
-    ) -> None:
-        """Validate and apply a Feature 4 text input (slots or proctor ratio)."""
-        text = text.strip()
-        # editingFinished fires on both Return and focus-out; skip re-applying an
-        # unchanged value so the cache is not invalidated spuriously.
-        if self._feature4_applied.get(kind) == text:
-            return
-        self._feature4_applied[kind] = text
-
-        if not text:
-            clearer()
-            label.setText("Missing")
-            label.setStyleSheet(self._feature4_input_style("missing"))
-            self._refresh_feature4_status()
-            self._update_gen_btn()
-            return
-
-        try:
-            result = setter(text)
-            label.setText(success_text(result))
-            label.setStyleSheet(self._feature4_input_style("valid"))
-        except ValueError as exc:
-            clearer()
-            label.setText("Invalid")
-            label.setStyleSheet(self._feature4_input_style("invalid"))
-            logger.warning("Invalid Feature 4 %s: %s", kind, exc)
-            QMessageBox.critical(
-                self,
-                "Invalid Feature 4 Input",
-                f"The {kind} entry is invalid.\n\nReason: {exc}",
-            )
-
-        self._refresh_feature4_status()
-        self._update_gen_btn()
-
     def _load_classrooms(self) -> None:
         self._load_feature4_file(
             "Classrooms",
@@ -861,64 +809,22 @@ class ConfigScreen(QWidget):
             lambda count: f"{count} room(s)",
         )
 
-    def _live_validate(self, text: str, label: QLabel, setter, clearer) -> None:
-        """Apply a Feature 4 text input live (spec 4.2) without modal dialogs.
-
-        Updates the label colour inline as the user types and keeps the
-        controller/Generate gate in sync. Errors are shown only via the label
-        here; the modal dialog is reserved for editingFinished.
-        """
-        text = text.strip()
-        if not text:
-            clearer()
-            label.setText("Missing")
-            label.setStyleSheet(self._feature4_input_style("missing"))
-        else:
-            try:
-                setter(text)
-                label.setText("Valid")
-                label.setStyleSheet(self._feature4_input_style("valid"))
-            except ValueError:
-                clearer()
-                label.setText("Invalid")
-                label.setStyleSheet(self._feature4_input_style("invalid"))
-        self._refresh_feature4_status()
-        self._update_gen_btn()
-
-    def _on_slots_changed(self, text: str) -> None:
-        self._live_validate(
-            text,
+    def _load_time_slots(self) -> None:
+        self._load_feature4_file(
+            "Time Slots",
             self._slots_label,
-            self._controller.set_time_slots_from_text,
-            self._controller.clear_time_slots,
-        )
-
-    def _on_proctors_changed(self, text: str) -> None:
-        self._live_validate(
-            text,
-            self._proctors_label,
-            self._controller.set_proctor_config_from_text,
-            self._controller.clear_proctor_config,
-        )
-
-    def _on_slots_entered(self) -> None:
-        self._apply_feature4_text(
-            self._slots_input.text(),
-            self._slots_label,
-            self._controller.set_time_slots_from_text,
+            self._controller.load_time_slots,
             self._controller.clear_time_slots,
             lambda count: f"{count} slot(s)",
-            "time slots",
         )
 
-    def _on_proctors_entered(self) -> None:
-        self._apply_feature4_text(
-            self._proctors_input.text(),
+    def _load_proctor_config(self) -> None:
+        self._load_feature4_file(
+            "Proctor Ratio",
             self._proctors_label,
-            self._controller.set_proctor_config_from_text,
+            self._controller.load_proctor_config,
             self._controller.clear_proctor_config,
             lambda config: f"1:{config.students_per_proctor}",
-            "proctor ratio",
         )
 
     def _on_edit_periods(self) -> None:

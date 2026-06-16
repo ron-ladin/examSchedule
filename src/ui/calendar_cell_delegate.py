@@ -8,7 +8,7 @@ paints either a single date cell or side-by-side per-slot columns.
 
 from typing import TypedDict
 
-from PyQt6.QtCore import Qt, QRect, QSize
+from PyQt6.QtCore import QPoint, Qt, QRect, QSize
 from PyQt6.QtGui import QBrush, QColor, QFont, QPen
 from PyQt6.QtWidgets import QStyledItemDelegate
 
@@ -41,7 +41,6 @@ _BODY_LINE_H = 13
 _COL_GAP = 3
 _COL_INNER_LINE_H = 12
 _COL_SLOT_LINE_H = 14
-_NAME_MAX_CHARS = 14
 
 
 class SlotGroup(TypedDict):
@@ -52,6 +51,53 @@ class SlotGroup(TypedDict):
     course_ids: list[str]
     names: list[str]
     collapsed: bool
+
+
+def _slot_group_heading(group: SlotGroup) -> str:
+    """Return a clear heading that exposes same-slot exam counts."""
+    count = len(group["course_ids"])
+    suffix = "exam" if count == 1 else "exams"
+    return f"{group['slot']} · {count} {suffix}"
+
+
+def _course_ids_for_click_position(
+    groups: list[SlotGroup],
+    rect: QRect,
+    pos: QPoint,
+) -> list[str] | None:
+    """Map a click inside a calendar cell to one exam, one slot group, or all.
+
+    Returns None when the click should open all exams for that date.
+    """
+    if not groups:
+        return None
+
+    r = rect.adjusted(_CELL_PAD, _CELL_PAD, -_CELL_PAD, -_CELL_PAD)
+    body_top = r.top() + _DATE_LINE_H
+    if pos.y() < body_top:
+        return None
+
+    columns = len(groups)
+    gap = _COL_GAP
+    col_w = max(1, (r.width() - gap * (columns - 1)) // columns)
+    relative_x = pos.x() - r.left()
+    index = int(relative_x // (col_w + gap))
+    index = max(0, min(index, columns - 1))
+    group = groups[index]
+
+    col_x = r.left() + index * (col_w + gap)
+    col_rect = QRect(col_x, body_top, col_w, r.bottom() - body_top)
+    inner = col_rect.adjusted(4, 3, -3, -3)
+    if pos.y() < inner.top() + _COL_SLOT_LINE_H:
+        return list(group["course_ids"])
+
+    if group["collapsed"]:
+        return list(group["course_ids"])
+
+    name_index = (pos.y() - (inner.top() + _COL_SLOT_LINE_H)) // _COL_INNER_LINE_H
+    if 0 <= name_index < len(group["course_ids"]):
+        return [group["course_ids"][name_index]]
+    return list(group["course_ids"])
 
 
 def _group_exams_by_slot(
@@ -231,7 +277,11 @@ class _CalendarCellDelegate(QStyledItemDelegate):
             painter.drawText(
                 QRect(inner.left(), y, inner.width(), _COL_INNER_LINE_H),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                group["slot"],
+                painter.fontMetrics().elidedText(
+                    _slot_group_heading(group),
+                    Qt.TextElideMode.ElideRight,
+                    inner.width(),
+                ),
             )
             y += _COL_SLOT_LINE_H
 
@@ -251,12 +301,28 @@ class _CalendarCellDelegate(QStyledItemDelegate):
                     )
                     y += _COL_INNER_LINE_H
             else:
-                for name in group["names"]:
+                for index, name in enumerate(group["names"]):
                     if y + _COL_INNER_LINE_H > inner.bottom():
+                        hidden = len(group["names"]) - index
+                        if hidden and y <= inner.bottom():
+                            painter.drawText(
+                                QRect(
+                                    inner.left(),
+                                    max(inner.top(), y - _COL_INNER_LINE_H),
+                                    inner.width(),
+                                    _COL_INNER_LINE_H,
+                                ),
+                                Qt.AlignmentFlag.AlignLeft,
+                                f"+{hidden} more",
+                            )
                         break
                     painter.drawText(
                         QRect(inner.left(), y, inner.width(), _COL_INNER_LINE_H),
                         Qt.AlignmentFlag.AlignLeft,
-                        name[:_NAME_MAX_CHARS],
+                        painter.fontMetrics().elidedText(
+                            f"• {name}",
+                            Qt.TextElideMode.ElideRight,
+                            inner.width(),
+                        ),
                     )
                     y += _COL_INNER_LINE_H

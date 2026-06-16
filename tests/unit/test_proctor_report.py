@@ -2,6 +2,9 @@
 
 from datetime import date, time
 
+import pytest
+
+from src.controller import DesktopController
 from src.domain.classroom import Classroom
 from src.domain.classroom_assignment import ClassroomAssignment
 from src.domain.course import Course
@@ -88,3 +91,15 @@ def test_report_for_schedule_without_assignments():
     report = build_proctor_report(schedule, _courses())
 
     assert report == "No room assignments for this schedule."
+
+
+def test_controller_refuses_to_export_stale_proctor_report(tmp_path):
+    controller = DesktopController()
+    controller.mark_results_stale()
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+    output_path = tmp_path / "proctor_report.txt"
+
+    with pytest.raises(ValueError, match="stale"):
+        controller.export_proctor_report(schedule, output_path)
+
+    assert not output_path.exists()

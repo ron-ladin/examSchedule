@@ -315,11 +315,10 @@ class DesktopController:
 
     def set_time_slots_from_text(self, text: str) -> int:
         """
-        Parse comma-separated HH:MM slots typed in the GUI (spec 4.1).
+        Parse comma-separated HH:MM slots from an in-memory value.
 
-        The GUI provides slots as a text input, not a file; parsing and
-        validation are delegated to SlotsFileReader.parse_line so the rules
-        match the CLI file path exactly. Raises ValueError on invalid input.
+        Kept as a compatibility helper; the GUI loads slots from a .txt file.
+        Raises ValueError on invalid input.
         """
         self._time_slots = SlotsFileReader.parse_line(text)
         self.mark_results_stale()
@@ -327,10 +326,10 @@ class DesktopController:
 
     def set_proctor_config_from_text(self, text: str) -> ProctorConfig:
         """
-        Parse a '1:X' proctor ratio typed in the GUI (spec 4.1).
+        Parse a '1:X' proctor ratio from an in-memory value.
 
-        Delegates to ProctorConfigReader.parse_line so GUI and CLI enforce the
-        same '1:X' rule. Raises ValueError on invalid input.
+        Kept as a compatibility helper; the GUI loads the ratio from a .txt
+        file. Raises ValueError on invalid input.
         """
         self._proctor_config = ProctorConfigReader.parse_line(text)
         self.mark_results_stale()
@@ -998,6 +997,11 @@ class DesktopController:
 
     def export_proctor_report(self, schedule: Schedule, output_path: Path) -> None:
         """Write the spec 4.6 proctor report for one schedule to a .txt file."""
+        if self._results_stale:
+            raise ValueError(
+                "Cannot export stale schedules. Generate schedules again first."
+            )
+
         text = self.proctor_report_text(schedule)
         Path(output_path).write_text(text, encoding="utf-8")
         logger.info("Exported proctor report to %s", output_path)

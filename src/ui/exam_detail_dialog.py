@@ -38,8 +38,19 @@ class ExamDetailDialog(QDialog):
         classroom_assignments: dict[str, list[ClassroomAssignment]] | None = None,
         unassigned_exams: dict[str, int] | None = None,
         parent=None,
+        all_course_ids: list[str] | None = None,
+        all_classroom_assignments: dict[str, list[ClassroomAssignment]] | None = None,
+        all_unassigned_exams: dict[str, int] | None = None,
     ) -> None:
         super().__init__(parent)
+        self._courses_by_id = courses_by_id
+        self._prog_color_map = prog_color_map
+        self._all_course_ids = list(all_course_ids or course_ids)
+        self._all_classroom_assignments = (
+            all_classroom_assignments or classroom_assignments or {}
+        )
+        self._all_unassigned_exams = all_unassigned_exams or unassigned_exams or {}
+        self._show_all_btn: QPushButton | None = None
         self.setWindowTitle("Exam Details")
         self.setMinimumWidth(900)
         self.setMinimumHeight(280)
@@ -83,14 +94,13 @@ class ExamDetailDialog(QDialog):
             classroom_assignments,
             unassigned_exams,
         )
-        table = self._create_table()
-        self._fill_table(table, rows)
-        layout.addWidget(table)
+        self._table = self._create_table()
+        self._fill_table(self._table, rows)
+        layout.addWidget(self._table)
 
-        layout.addLayout(self._build_footer())
+        layout.addLayout(self._build_footer(len(course_ids) < len(self._all_course_ids)))
 
-    @staticmethod
-    def _build_header(exam_date: date, exam_count: int) -> QHBoxLayout:
+    def _build_header(self, exam_date: date, exam_count: int) -> QHBoxLayout:
         header_row = QHBoxLayout()
         header_row.addWidget(CalendarIcon(22, "#2563EB"))
 
@@ -100,12 +110,13 @@ class ExamDetailDialog(QDialog):
         title.setStyleSheet(
             "font-size: 16px; font-weight: 700; color: #1F2937; background: transparent;"
         )
-        count_lbl = QLabel(
-            f"{exam_count} exam{'s' if exam_count != 1 else ''} scheduled"
+        self._count_lbl = QLabel()
+        self._set_count_text(exam_count)
+        self._count_lbl.setStyleSheet(
+            "font-size: 11px; color: #6B7280; background: transparent;"
         )
-        count_lbl.setStyleSheet("font-size: 11px; color: #6B7280; background: transparent;")
         title_col.addWidget(title)
-        title_col.addWidget(count_lbl)
+        title_col.addWidget(self._count_lbl)
         header_row.addLayout(title_col)
         header_row.addStretch()
         return header_row
@@ -113,7 +124,7 @@ class ExamDetailDialog(QDialog):
     @staticmethod
     def _create_table() -> QTableWidget:
         table = QTableWidget()
-        table.setColumnCount(10)
+        table.setColumnCount(11)
         table.setHorizontalHeaderLabels(
             [
                 "Course #",
@@ -126,13 +137,14 @@ class ExamDetailDialog(QDialog):
                 "Status",
                 "Requirement",
                 "Degree",
+                "Proctors",
             ]
         )
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         header = table.horizontalHeader()
         stretch_columns = {1, 9}
-        for column in range(10):
+        for column in range(11):
             mode = (
                 QHeaderView.ResizeMode.Stretch
                 if column in stretch_columns
@@ -210,7 +222,7 @@ class ExamDetailDialog(QDialog):
 
         table.resizeRowsToContents()
 
-    def _build_footer(self) -> QHBoxLayout:
+    def _build_footer(self, can_show_all: bool) -> QHBoxLayout:
         btn_row = QHBoxLayout()
         full_screen_btn = QPushButton("Full Screen")
         full_screen_btn.setFixedWidth(120)
@@ -218,6 +230,12 @@ class ExamDetailDialog(QDialog):
             lambda: self._toggle_full_screen(full_screen_btn)
         )
         btn_row.addWidget(full_screen_btn)
+        if can_show_all:
+            self._show_all_btn = QPushButton("Show All Exams")
+            self._show_all_btn.setObjectName("showAllExamsButton")
+            self._show_all_btn.setFixedWidth(140)
+            self._show_all_btn.clicked.connect(self._show_all_exams)
+            btn_row.addWidget(self._show_all_btn)
         btn_row.addStretch()
         close_btn = QPushButton("Close")
         close_btn.setFixedWidth(110)
@@ -230,6 +248,24 @@ class ExamDetailDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         btn_row.addWidget(close_btn)
         return btn_row
+
+    def _set_count_text(self, exam_count: int) -> None:
+        self._count_lbl.setText(
+            f"{exam_count} exam{'s' if exam_count != 1 else ''} scheduled"
+        )
+
+    def _show_all_exams(self) -> None:
+        rows = self._build_rows(
+            self._all_course_ids,
+            self._courses_by_id,
+            self._prog_color_map,
+            self._all_classroom_assignments,
+            self._all_unassigned_exams,
+        )
+        self._fill_table(self._table, rows)
+        self._set_count_text(len(self._all_course_ids))
+        if self._show_all_btn is not None:
+            self._show_all_btn.hide()
 
     def _toggle_full_screen(self, button: QPushButton) -> None:
         if self.isFullScreen():

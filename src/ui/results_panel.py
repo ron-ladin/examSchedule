@@ -16,8 +16,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from queue import Empty as _QueueEmpty
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QCursor
+from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 from src.ui.assets.animated_widgets import AnimatedPlaceholder
 from src.ui.calendar_cell_delegate import (
     _CalendarCellDelegate,
+    _course_ids_for_click_position,
     _group_exams_by_slot,
 )
 from src.ui.tokens import (
@@ -51,6 +52,22 @@ from src.domain.semester import display_semester
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
 
 logger = logging.getLogger(__name__)
+
+
+class _CalendarTable(QTableWidget):
+    """Calendar table that reports where inside a date cell the user clicked."""
+
+    calendarCellClicked = pyqtSignal(int, int, QPoint)
+
+    def mouseReleaseEvent(self, event) -> None:
+        index = self.indexAt(event.position().toPoint())
+        if index.isValid() and event.button() == Qt.MouseButton.LeftButton:
+            self.calendarCellClicked.emit(
+                index.row(),
+                index.column(),
+                event.position().toPoint(),
+            )
+        super().mouseReleaseEvent(event)
 
 
 def _standard_period_keys() -> list[str]:
@@ -105,7 +122,7 @@ def _enable_press_and_hold(button: QPushButton) -> None:
 
 
 def _make_data_table(headers: list[str]) -> QTableWidget:
-    table = QTableWidget()
+    table = _CalendarTable()
     table.setColumnCount(len(headers))
     table.setHorizontalHeaderLabels(headers)
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -174,10 +191,11 @@ class _ResultsPanel(QWidget):
         self._setup_ui()
 
     def mark_stale(self) -> None:
-        """Show the stale-data warning and disable Export."""
+        """Show the stale-data warning and disable schedule/report exports."""
         self._has_stale_results = True
         self._stale_banner.setVisible(True)
         self._save_btn.setEnabled(False)
+        self._proctor_btn.setEnabled(False)
 
     def clear_stale(self) -> None:
         """Hide the stale-data warning and re-enable Export."""
@@ -418,8 +436,10 @@ class _ResultsPanel(QWidget):
         self._next_btns[period_key] = next_btn
         self._load_more_btns[period_key] = chunk_btn
 
-        table.cellClicked.connect(
-            lambda row, col, k=period_key: self._on_cell_clicked(k, row, col)
+        table.calendarCellClicked.connect(
+            lambda row, col, pos, k=period_key: self._on_cell_clicked(
+                k, row, col, pos
+            )
         )
 
         self._refresh_period_card(period_key)
@@ -760,6 +780,14 @@ class _ResultsPanel(QWidget):
                         Qt.ItemDataRole.UserRole,
                         {"header": date_header, "groups": slot_groups},
                     )
+                    tooltip_lines = [f"{len(course_ids)} exams on {date_header}"]
+                    for group in slot_groups:
+                        tooltip_lines.append(
+                            f"{group['slot']} ({len(group['course_ids'])}): "
+                            + ", ".join(group["names"])
+                        )
+                    tooltip_lines.append("Click a time group to view its exams.")
+                    item.setToolTip("\n".join(tooltip_lines))
 
                 if first_prog and first_prog in self._prog_color_map:
                     color = QColor(self._prog_color_map[first_prog])
@@ -864,7 +892,13 @@ class _ResultsPanel(QWidget):
 
         return course_lines, first_prog
 
-    def _on_cell_clicked(self, period_key: str, row: int, col: int) -> None:
+    def _on_cell_clicked(
+        self,
+        period_key: str,
+        row: int,
+        col: int,
+        click_pos: QPoint | None = None,
+    ) -> None:
         cell_info = self._cell_data.get(period_key, {}).get((row, col))
 
         if cell_info is None:
@@ -877,9 +911,15 @@ class _ResultsPanel(QWidget):
         if not course_ids:
             return
 
+        all_course_ids = list(course_ids)
+        all_classroom_assignments = classroom_assignments
+        all_unassigned_exams = unassigned_exams
+
         # Spec 4.5: when the cell renders multiple side-by-side slot columns,
         # open only the exams of the column the user actually clicked.
-        visible_ids = self._slot_filter_for_click(period_key, row, col, groups)
+        visible_ids = self._slot_filter_for_click(
+            period_key, row, col, groups, click_pos
+        )
         if visible_ids is not None:
             course_ids = visible_ids
             classroom_assignments = {
@@ -901,6 +941,9 @@ class _ResultsPanel(QWidget):
             classroom_assignments,
             unassigned_exams,
             parent=self,
+            all_course_ids=all_course_ids,
+            all_classroom_assignments=all_classroom_assignments,
+            all_unassigned_exams=all_unassigned_exams,
         )
         dialog.exec()
 
@@ -910,6 +953,7 @@ class _ResultsPanel(QWidget):
         row: int,
         col: int,
         groups: "list[dict] | None",
+        click_pos: QPoint | None = None,
     ) -> "list[str] | None":
         """Return the course ids of the slot column under the cursor, or None.
 
@@ -917,7 +961,7 @@ class _ResultsPanel(QWidget):
         the cell is split into N slot columns, map the cursor's x offset within
         the cell to the matching column and return just its course ids.
         """
-        if not groups or len(groups) <= 1:
+        if not groups or click_pos is None:
             return None
 
         table = self._cal_tables.get(period_key)
@@ -932,11 +976,7 @@ class _ResultsPanel(QWidget):
         if rect.width() <= 0:
             return None
 
-        local_x = table.viewport().mapFromGlobal(QCursor.pos()).x() - rect.x()
-        column_width = rect.width() / len(groups)
-        index = int(local_x // column_width)
-        index = max(0, min(index, len(groups) - 1))
-        return list(groups[index]["course_ids"])
+        return _course_ids_for_click_position(groups, rect, click_pos)
 
     def _show_message(
         self,

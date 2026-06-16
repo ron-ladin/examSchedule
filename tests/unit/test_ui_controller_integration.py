@@ -181,14 +181,20 @@ def _write_classrooms_file(tmp_path: Path) -> Path:
     return classrooms
 
 
-def _enter_slots(screen: ConfigScreen, text: str) -> None:
-    screen._slots_input.setText(text)
-    screen._on_slots_entered()
+def _write_slots_file(
+    tmp_path: Path,
+    text: str = "09:00, 13:00, 19:00",
+    filename: str = "slots.txt",
+) -> Path:
+    slots = tmp_path / filename
+    slots.write_text(f"$$$$\n{text}\n$$$$\n", encoding="utf-8")
+    return slots
 
 
-def _enter_proctors(screen: ConfigScreen, text: str) -> None:
-    screen._proctors_input.setText(text)
-    screen._on_proctors_entered()
+def _write_proctors_file(tmp_path: Path) -> Path:
+    proctors = tmp_path / "proctors.txt"
+    proctors.write_text("1:20\n", encoding="utf-8")
+    return proctors
 
 
 def test_feature4_activates_only_after_toggle_and_all_three_valid_inputs(
@@ -198,7 +204,9 @@ def test_feature4_activates_only_after_toggle_and_all_three_valid_inputs(
     controller = DesktopController()
     screen = ConfigScreen(controller)
     classrooms = _write_classrooms_file(tmp_path)
-    _patch_file_dialog(monkeypatch, [classrooms])
+    slots = _write_slots_file(tmp_path)
+    proctors = _write_proctors_file(tmp_path)
+    _patch_file_dialog(monkeypatch, [classrooms, slots, proctors])
 
     screen._on_feature4_toggled(True)
     assert controller.feature4_enabled is True
@@ -207,11 +215,11 @@ def test_feature4_activates_only_after_toggle_and_all_three_valid_inputs(
     assert controller.feature4_active is False
     assert "2 room(s)" in screen._classrooms_label.text()
 
-    _enter_slots(screen, "09:00, 13:00, 19:00")
+    screen._load_time_slots()
     assert controller.feature4_active is False
     assert "3 slot(s)" in screen._slots_label.text()
 
-    _enter_proctors(screen, "1:20")
+    screen._load_proctor_config()
     app.processEvents()
 
     assert controller.feature4_active is True
@@ -220,7 +228,7 @@ def test_feature4_activates_only_after_toggle_and_all_three_valid_inputs(
     screen.close()
 
 
-def test_invalid_feature4_text_shows_inline_error_and_deactivates(
+def test_invalid_feature4_file_shows_error_and_deactivates(
     tmp_path,
     monkeypatch,
 ):
@@ -228,7 +236,12 @@ def test_invalid_feature4_text_shows_inline_error_and_deactivates(
     controller = DesktopController()
     screen = ConfigScreen(controller)
     classrooms = _write_classrooms_file(tmp_path)
-    _patch_file_dialog(monkeypatch, [classrooms])
+    slots = _write_slots_file(tmp_path)
+    proctors = _write_proctors_file(tmp_path)
+    invalid_slots = _write_slots_file(
+        tmp_path, "09:00, 11:00", "invalid_slots.txt"
+    )
+    _patch_file_dialog(monkeypatch, [classrooms, slots, proctors, invalid_slots])
     shown_errors = []
     monkeypatch.setattr(
         QMessageBox,
@@ -238,20 +251,20 @@ def test_invalid_feature4_text_shows_inline_error_and_deactivates(
 
     screen._on_feature4_toggled(True)
     screen._load_classrooms()
-    _enter_slots(screen, "09:00, 13:00, 19:00")
-    _enter_proctors(screen, "1:20")
+    screen._load_time_slots()
+    screen._load_proctor_config()
     assert controller.feature4_active is True
 
     # Slots only 2h apart violate the >=4h rule (spec 2.3.4) -> cleared.
-    _enter_slots(screen, "09:00, 11:00")
+    screen._load_time_slots()
     app.processEvents()
 
     assert controller.feature4_active is False
     assert controller.time_slots == []
-    assert screen._slots_label.text() == "Invalid"
+    assert "Invalid file" in screen._slots_label.text()
     assert screen._feature4_status.text().startswith("INCOMPLETE")
     assert shown_errors
-    assert shown_errors[0][0] == "Invalid Feature 4 Input"
+    assert shown_errors[0][0] == "Invalid Feature 4 File"
     assert "at least 4 hours apart" in shown_errors[0][1]
     screen.close()
 
