@@ -23,7 +23,6 @@ periods_changed()           → after exam periods are (re)loaded
 import logging
 import multiprocessing
 import time
-from datetime import date, timedelta
 from pathlib import Path
 from queue import Empty as _QueueEmpty
 
@@ -32,7 +31,6 @@ from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
-    QDialog,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -43,19 +41,15 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from src.controller import DesktopController, _run_generation_process
+from src.controller import DesktopController, RESULT_BATCH_SIZE, _run_generation_process
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
 from src.ui.assets.icons import BookIcon, CalendarIcon
-from src.ui.period_utils import (
-    STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER,
-    build_display_periods as _build_display_periods,
-)
+from src.ui.periods_editor_dialog import ExamPeriodsEditorDialog
 from src.ui.results_panel import _display_period_key
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
 
@@ -164,245 +158,10 @@ class _ProgrammeRow(QWidget):
             f"font-size:13px; color:{color}; font-weight:500; background:transparent;"
         )
 
-    def set_view_btn_enabled(self, has_courses: bool) -> None:
-        self._view_btn.setEnabled(self._checkbox.isChecked() and has_courses)
-
     def _on_state_changed(self, state: int) -> None:
         checked = state == Qt.CheckState.Checked.value
         self._view_btn.setEnabled(checked)
         self.toggled.emit(self._pid, checked)
-
-
-class ExamPeriodsEditorDialog(QDialog):
-    """Modal dialog for editing exam period dates before generation (SRS §2.4)."""
-
-    def __init__(self, controller: "DesktopController", parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Edit Exam Periods")
-        self.setModal(True)
-        self.setMinimumSize(950, 560)
-
-        self._controller = controller
-        self._editors: dict[str, object] = {}
-        self._existing_period_keys: set[str] = {
-            period.get_key()
-            for period in self._controller.get_exam_periods()
-        }
-        self._activated_synthetic_period_keys: set[str] = set()
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(12)
-
-        tabs = QTabWidget()
-        tabs.setUsesScrollButtons(True)
-        tabs.setMovable(False)
-
-        # Important:
-        # The tabs already exist, but inactive tab text was almost white.
-        # This stylesheet makes all semester/moed tabs readable.
-        tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: none;
-                background: transparent;
-            }
-
-            QTabBar::tab {
-                background: transparent;
-                color: #374151;
-                padding: 8px 18px;
-                margin-right: 4px;
-                border-radius: 6px;
-                font-size: 13px;
-                font-weight: 500;
-                min-width: 110px;
-            }
-
-            QTabBar::tab:hover {
-                background: rgba(0, 90, 194, 0.08);
-                color: #005ac2;
-            }
-
-            QTabBar::tab:selected {
-                background: #9CA3AF;
-                color: #FFFFFF;
-                font-weight: 700;
-            }
-
-            QTabBar::tab:disabled {
-                color: #9CA3AF;
-            }
-        """)
-
-        from src.ui.date_editor import DateEditorWidget
-
-        self._tabs = tabs
-
-        for period in _build_display_periods(self._controller):
-            key = period.get_key()
-
-            if not period.date_ranges:
-                tabs.addTab(
-                    self._build_missing_period_tab(period),
-                    _display_period_key(key),
-                )
-                continue
-
-            editor = DateEditorWidget(period)
-            editor.period_changed.connect(lambda k=key: self._sync(k))
-
-            self._editors[key] = editor
-            tabs.addTab(editor, _display_period_key(key))
-
-        root.addWidget(tabs)
-
-        close_row = QHBoxLayout()
-        close_row.addStretch()
-
-        close_btn = QPushButton("Close")
-        close_btn.setFixedSize(110, 36)
-        close_btn.clicked.connect(self.accept)
-
-        close_row.addWidget(close_btn)
-        root.addLayout(close_row)
-
-    def _build_missing_period_tab(self, period: "ExamPeriod") -> QWidget:
-        """Create a tab for a missing exam period with an activation button."""
-        wrapper = QWidget()
-        layout = QVBoxLayout(wrapper)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        missing_lbl = QLabel(
-            "No exam period dates are defined for this semester/moed."
-        )
-        missing_lbl.setWordWrap(True)
-        missing_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        missing_lbl.setStyleSheet(
-            "background: #FEF3C7;"
-            "color: #92400E;"
-            "border: 1px solid #F59E0B;"
-            "border-radius: 8px;"
-            "padding: 10px 14px;"
-            "font-size: 12px;"
-            "font-weight: 600;"
-        )
-
-        create_btn = QPushButton("＋ Define exam period dates")
-        create_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        create_btn.setFixedHeight(36)
-        create_btn.setStyleSheet(
-            "QPushButton {"
-            " background: #005ac2;"
-            " color: white;"
-            " border: none;"
-            " border-radius: 8px;"
-            " padding: 8px 16px;"
-            " font-size: 12px;"
-            " font-weight: 700;"
-            "}"
-            "QPushButton:hover {"
-            " background: #004494;"
-            "}"
-        )
-        create_btn.clicked.connect(
-            lambda _=False, p=period: self._activate_missing_period(p)
-        )
-
-        layout.addWidget(missing_lbl)
-        layout.addWidget(create_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-        layout.addStretch()
-
-        return wrapper
-
-    def _activate_missing_period(self, period: "ExamPeriod") -> None:
-        """Convert a missing display-only period into a real editable period."""
-        from src.domain.exam_period import ExamPeriod
-        from src.ui.date_editor import DateEditorWidget
-
-        key = period.get_key()
-        start = date.today()
-        end = start + timedelta(days=13)
-
-        new_period = ExamPeriod(
-            semester=period.semester,
-            moed=period.moed,
-            date_ranges=[(start, end)],
-            excluded_dates=set(),
-        )
-
-        self._activated_synthetic_period_keys.add(key)
-
-        editor = DateEditorWidget(new_period)
-        editor.period_changed.connect(lambda k=key: self._sync(k))
-        self._editors[key] = editor
-
-        tab_label = _display_period_key(key)
-        tab_index = -1
-
-        for i in range(self._tabs.count()):
-            if self._tabs.tabText(i) == tab_label:
-                tab_index = i
-                break
-
-        if tab_index == -1:
-            self._tabs.addTab(editor, tab_label)
-            self._tabs.setCurrentWidget(editor)
-        else:
-            self._tabs.removeTab(tab_index)
-            self._tabs.insertTab(tab_index, editor, tab_label)
-            self._tabs.setCurrentIndex(tab_index)
-
-        self._sync(key)
-
-    def _sync(self, changed_key: str | None = None) -> None:
-        """
-        Sync editor changes back to the controller.
-
-        Existing periods are always updated.
-        Synthetic standard periods are added only after the user edits that
-        specific synthetic tab.
-        """
-        if changed_key and changed_key not in self._existing_period_keys:
-            self._activated_synthetic_period_keys.add(changed_key)
-
-        edited_by_key = {
-            key: editor.get_exam_period()
-            for key, editor in self._editors.items()
-        }
-
-        updated = []
-
-        for period in self._controller.get_exam_periods():
-            key = period.get_key()
-            updated.append(edited_by_key.get(key, period))
-
-        existing_updated_keys = {period.get_key() for period in updated}
-
-        for semester, moed in _STANDARD_PERIOD_ORDER:
-            key = f"{semester} - {moed}"
-
-            if (
-                key in self._activated_synthetic_period_keys
-                and key in edited_by_key
-                and key not in existing_updated_keys
-            ):
-                updated.append(edited_by_key[key])
-                existing_updated_keys.add(key)
-
-        deduped = []
-        seen_keys = set()
-
-        for period in updated:
-            key = period.get_key()
-
-            if key in seen_keys:
-                continue
-
-            deduped.append(period)
-            seen_keys.add(key)
-
-        self._controller.update_exam_periods(deduped)
 
 
 class ConfigScreen(QWidget):
@@ -425,6 +184,7 @@ class ConfigScreen(QWidget):
         self._gen_start_time: float = 0.0
         self._dead_ticks: int = 0
         self._settings_dialog: SettingsScreen | None = None
+        self._allow_unassigned_generation = False
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -827,13 +587,10 @@ class ConfigScreen(QWidget):
             self._edit_periods_btn.setEnabled(False)
             return
 
+        # Reflect the periods actually loaded, using the same display format as
+        # the results calendar tabs (avoids drift from a hardcoded list).
         display_names = [
-            "FALL — Aleph",
-            "FALL — Bet",
-            "SPRING — Aleph",
-            "SPRING — Bet",
-            "SUMMER — Aleph",
-            "SUMMER — Bet",
+            _display_period_key(period.get_key()) for period in periods
         ]
 
         self._periods_summary_lbl.setText(
@@ -842,7 +599,11 @@ class ConfigScreen(QWidget):
         self._edit_periods_btn.setEnabled(True)
 
     def _build_feature4_card(self) -> QFrame:
-        """Build the optional classroom-assignment input card."""
+        """Build the optional Feature 4 (classroom assignment) input card.
+
+        The GUI exposes a dedicated activation toggle and Browse buttons for
+        the classrooms, time-slots, and proctor-ratio text files.
+        """
         c = _card()
         self._feature4_card = c
 
@@ -859,9 +620,15 @@ class ConfigScreen(QWidget):
         header.addWidget(self._feature4_status)
         vl.addLayout(header)
 
+        # Dedicated activation toggle (spec 4.1).
+        self._feature4_toggle = QCheckBox("Enable classroom & slot assignment")
+        self._feature4_toggle.setChecked(self._controller.feature4_enabled)
+        self._feature4_toggle.toggled.connect(self._on_feature4_toggled)
+        vl.addWidget(self._feature4_toggle)
+
         description = QLabel(
-            "Optional. Load all three valid files to assign classrooms, time slots, "
-            "and recommended proctor counts."
+            "When enabled, load classrooms, time slots, and proctor ratio .txt "
+            "files. All three are required before generation."
         )
         description.setWordWrap(True)
         description.setStyleSheet(
@@ -869,56 +636,62 @@ class ConfigScreen(QWidget):
         )
         vl.addWidget(description)
 
-        file_specs = [
-            (
-                "Classrooms",
-                "Load Classrooms",
-                "_load_classrooms_btn",
-                "_classrooms_label",
-                self._load_classrooms,
-            ),
-            (
-                "Time Slots",
-                "Load Slots",
-                "_load_slots_btn",
-                "_slots_label",
-                self._load_slots,
-            ),
-            (
-                "Proctor Config",
-                "Load Proctors",
-                "_load_proctors_btn",
-                "_proctors_label",
-                self._load_proctors,
-            ),
+        # Classrooms: file browse (spec 4.1).
+        self._classrooms_label = QLabel("Missing")
+        self._classrooms_label.setWordWrap(True)
+        self._classrooms_label.setStyleSheet(self._feature4_input_style("missing"))
+        self._load_classrooms_btn = QPushButton("Browse")
+        self._load_classrooms_btn.setFixedWidth(120)
+        self._load_classrooms_btn.clicked.connect(self._load_classrooms)
+        crow = QHBoxLayout()
+        crow.addWidget(self._feature4_row_title("Classrooms"))
+        crow.addWidget(self._load_classrooms_btn)
+        crow.addWidget(self._classrooms_label, 1)
+        vl.addLayout(crow)
+
+        # Time slots: .txt file with comma-separated HH:MM values.
+        self._load_slots_btn = QPushButton("Browse")
+        self._load_slots_btn.setFixedWidth(120)
+        self._load_slots_btn.clicked.connect(self._load_time_slots)
+        self._slots_label = QLabel("Missing")
+        self._slots_label.setWordWrap(True)
+        self._slots_label.setStyleSheet(self._feature4_input_style("missing"))
+        srow = QHBoxLayout()
+        srow.addWidget(self._feature4_row_title("Time Slots"))
+        srow.addWidget(self._load_slots_btn)
+        srow.addWidget(self._slots_label, 1)
+        vl.addLayout(srow)
+
+        # Proctor ratio: .txt file with a single '1:X' value.
+        self._load_proctors_btn = QPushButton("Browse")
+        self._load_proctors_btn.setFixedWidth(120)
+        self._load_proctors_btn.clicked.connect(self._load_proctor_config)
+        self._proctors_label = QLabel("Missing")
+        self._proctors_label.setWordWrap(True)
+        self._proctors_label.setStyleSheet(self._feature4_input_style("missing"))
+        prow = QHBoxLayout()
+        prow.addWidget(self._feature4_row_title("Proctor Ratio"))
+        prow.addWidget(self._load_proctors_btn)
+        prow.addWidget(self._proctors_label, 1)
+        vl.addLayout(prow)
+
+        self._feature4_inputs = [
+            self._load_classrooms_btn,
+            self._load_slots_btn,
+            self._load_proctors_btn,
         ]
-
-        for title, btn_text, btn_attr, lbl_attr, handler in file_specs:
-            row = QHBoxLayout()
-            title_lbl = QLabel(title)
-            title_lbl.setMinimumWidth(105)
-            title_lbl.setStyleSheet(
-                "font-size:12px; font-weight:600; color:#171c20; background:transparent;"
-            )
-
-            btn = QPushButton(btn_text)
-            btn.setFixedWidth(120)
-            btn.clicked.connect(handler)
-
-            status = QLabel("Missing")
-            status.setWordWrap(True)
-            status.setStyleSheet(self._feature4_input_style("missing"))
-
-            setattr(self, btn_attr, btn)
-            setattr(self, lbl_attr, status)
-
-            row.addWidget(title_lbl)
-            row.addWidget(btn)
-            row.addWidget(status, 1)
-            vl.addLayout(row)
-
+        self._apply_feature4_enabled_state()
         self._refresh_feature4_status()
         return c
+
+    @staticmethod
+    def _feature4_row_title(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setMinimumWidth(105)
+        lbl.setStyleSheet(
+            "font-size:12px; font-weight:600; color:#171c20; background:transparent;"
+        )
+        return lbl
 
     @staticmethod
     def _feature4_input_style(state: str) -> str:
@@ -933,23 +706,58 @@ class ConfigScreen(QWidget):
             " border-radius:4px; padding:3px 7px;"
         )
 
-    def _refresh_feature4_status(self) -> None:
-        if self._controller.feature4_active:
-            self._feature4_status.setText("ACTIVE")
-            self._feature4_status.setStyleSheet(
-                "font-size:11px; font-weight:800; color:#047857; background:#D1FAE5;"
-                " border:1px solid #6EE7B7; border-radius:12px; padding:2px 10px;"
+    def _on_feature4_toggled(self, checked: bool) -> None:
+        self._controller.set_feature4_enabled(checked)
+        self._apply_feature4_enabled_state()
+        # Spec 4.3: surface an immediate error if exam courses lack StudentCount
+        # at the moment the feature is switched on (generation stays blocked).
+        if checked and self._controller.feature4_missing_student_counts():
+            QMessageBox.warning(
+                self,
+                "Missing Student Counts",
+                "Feature 4 requires a StudentCount for every exam course.\n\n"
+                "Generation stays disabled until the courses file provides them "
+                "(spec 4.3).",
             )
+        self._refresh_feature4_status()
+        self._update_gen_btn()
+
+    def _apply_feature4_enabled_state(self) -> None:
+        for widget in self._feature4_inputs:
+            widget.setEnabled(self._controller.feature4_enabled)
+
+    def _refresh_feature4_status(self) -> None:
+        ctrl = self._controller
+        active_style = (
+            "font-size:11px; font-weight:800; color:#047857; background:#D1FAE5;"
+            " border:1px solid #6EE7B7; border-radius:12px; padding:2px 10px;"
+        )
+        warn_style = (
+            "font-size:11px; font-weight:800; color:#B91C1C; background:#FEE2E2;"
+            " border:1px solid #FCA5A5; border-radius:12px; padding:2px 10px;"
+        )
+        idle_style = (
+            "font-size:11px; font-weight:700; color:#64748B; background:#F1F5F9;"
+            " border:1px solid #CBD5E1; border-radius:12px; padding:2px 10px;"
+        )
+
+        if not ctrl.feature4_enabled:
+            text, style = "DISABLED", idle_style
+        elif ctrl.feature4_ready():
+            text, style = "ACTIVE", active_style
+        elif ctrl.feature4_inputs_valid and ctrl.feature4_missing_student_counts():
+            text, style = "BLOCKED - missing student counts", warn_style
+        else:
+            text, style = "INCOMPLETE - enter all inputs", idle_style
+
+        self._feature4_status.setText(text)
+        self._feature4_status.setStyleSheet(style)
+        if ctrl.feature4_ready():
             self._feature4_card.setStyleSheet(
                 "QFrame { background:rgba(236,253,245,0.85);"
                 " border:1px solid #6EE7B7; border-radius:12px; }"
             )
         else:
-            self._feature4_status.setText("INACTIVE - optional inputs incomplete")
-            self._feature4_status.setStyleSheet(
-                "font-size:11px; font-weight:700; color:#64748B; background:#F1F5F9;"
-                " border:1px solid #CBD5E1; border-radius:12px; padding:2px 10px;"
-            )
             self._feature4_card.setStyleSheet(
                 "QFrame { background:rgba(255,255,255,0.75);"
                 " border:1px dashed #CBD5E1; border-radius:12px; }"
@@ -990,6 +798,7 @@ class ConfigScreen(QWidget):
             )
 
         self._refresh_feature4_status()
+        self._update_gen_btn()
 
     def _load_classrooms(self) -> None:
         self._load_feature4_file(
@@ -1000,7 +809,7 @@ class ConfigScreen(QWidget):
             lambda count: f"{count} room(s)",
         )
 
-    def _load_slots(self) -> None:
+    def _load_time_slots(self) -> None:
         self._load_feature4_file(
             "Time Slots",
             self._slots_label,
@@ -1009,9 +818,9 @@ class ConfigScreen(QWidget):
             lambda count: f"{count} slot(s)",
         )
 
-    def _load_proctors(self) -> None:
+    def _load_proctor_config(self) -> None:
         self._load_feature4_file(
-            "Proctor Config",
+            "Proctor Ratio",
             self._proctors_label,
             self._controller.load_proctor_config,
             self._controller.clear_proctor_config,
@@ -1074,7 +883,32 @@ class ConfigScreen(QWidget):
         mode = checked_btn.text().lower()
 
         try:
+            # Spec 4.3: if Feature 4 is ON and any Exam course is missing a
+            # StudentCount, the load must be rejected immediately. Snapshot the
+            # prior courses so we can restore them when the new file is invalid.
+            prior_courses = self._controller.snapshot_courses()
             count = self._controller.load_courses(Path(path), mode=mode)
+            if (
+                self._controller.feature4_enabled
+                and self._controller.any_exam_missing_student_count()
+            ):
+                self._controller.restore_courses(prior_courses)
+                self._courses_label.setText(f"{Path(path).name} - Missing StudentCount")
+                self._courses_label.setStyleSheet(
+                    "font-size:11px; color:#B91C1C; background:rgba(239,68,68,0.1);"
+                    " border-radius:4px; padding:2px 7px;"
+                )
+                QMessageBox.critical(
+                    self,
+                    "Missing Student Counts",
+                    "Feature 4 is enabled, but this courses file has Exam courses "
+                    "without a StudentCount (5th column).\n\n"
+                    "The file load was aborted (spec 4.3). Add StudentCount to "
+                    "every exam course, or disable Feature 4, then try again.",
+                )
+                self._set_status("✗  Courses load aborted — missing StudentCount.")
+                self._update_gen_btn()
+                return
             self._courses_label.setText(f"{Path(path).name}  ({count})")
             self._courses_label.setStyleSheet(
                 "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
@@ -1224,6 +1058,9 @@ class ConfigScreen(QWidget):
         selected = self._get_selected_ids()
 
         self._controller.set_selected_programs(selected)
+        self._controller.set_allow_unassigned_classrooms(
+            self._allow_unassigned_generation
+        )
         self._pending_selected = selected
         self._pending_color_map = {
             pid: PROGRAMME_COLOURS[i % len(PROGRAMME_COLOURS)]
@@ -1265,7 +1102,11 @@ class ConfigScreen(QWidget):
             ),
             kwargs={
                 "settings": self._controller.settings,
-                "cap": None,
+                "cap": RESULT_BATCH_SIZE,
+                "classrooms": self._controller.engine_classrooms(),
+                "time_slots": self._controller.engine_time_slots(),
+                "proctor_config": self._controller.engine_proctor_config(),
+                "allow_unassigned_classrooms": self._allow_unassigned_generation,
             },
             daemon=True,
         )
@@ -1280,23 +1121,25 @@ class ConfigScreen(QWidget):
         """Show the optional Feature 4 capacity warning before generation."""
         shortfall = self._controller.feature4_capacity_shortfall()
         if shortfall is None:
+            self._allow_unassigned_generation = False
             return True
 
-        total_capacity, total_students = shortfall
+        total_capacity, largest_exam_students = shortfall
         response = QMessageBox.warning(
             self,
             "Insufficient Classroom Capacity",
-            "The total classroom capacity is lower than the total number of "
-            "students.\n\n"
-            f"Classroom capacity: {total_capacity:,}\n"
-            f"Students: {total_students:,}\n"
-            f"Missing seats: {total_students - total_capacity:,}\n\n"
+            "The total classroom capacity is lower than the number of students "
+            "in at least one exam.\n\n"
+            f"Total classroom capacity: {total_capacity:,}\n"
+            f"Largest exam: {largest_exam_students:,} students\n"
+            f"Shortfall: {largest_exam_students - total_capacity:,}\n\n"
             "Generation may reject schedules that cannot be assigned to rooms. "
             "Do you want to proceed anyway?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        return response == QMessageBox.StandardButton.Yes
+        self._allow_unassigned_generation = response == QMessageBox.StandardButton.Yes
+        return self._allow_unassigned_generation
 
 
     def _poll_result(self) -> None:
@@ -1400,9 +1243,17 @@ class ConfigScreen(QWidget):
     def _update_gen_btn(self) -> None:
         running = self._gen_process is not None and self._gen_process.is_alive()
 
+        # When Feature 4 is enabled, generation is blocked until all its
+        # inputs and student counts are valid (spec 4.2).
+        feature4_ok = (
+            not self._controller.feature4_enabled
+            or self._controller.feature4_ready()
+        )
+
         self._gen_btn.setEnabled(
             not running
             and self._controller.has_courses
             and self._controller.has_periods
             and self._count_checked() >= 1
+            and feature4_ok
         )

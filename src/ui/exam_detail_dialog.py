@@ -20,8 +20,10 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from src.domain.classroom_assignment import ClassroomAssignment
 from src.domain.course import Course
 from src.ui.assets.icons import CalendarIcon
+from src.ui.tokens import programme_display_name
 
 
 class ExamDetailDialog(QDialog):
@@ -33,15 +35,37 @@ class ExamDetailDialog(QDialog):
         course_ids: list[str],
         courses_by_id: dict[str, Course],
         prog_color_map: dict[str, str],
+        classroom_assignments: dict[str, list[ClassroomAssignment]] | None = None,
+        unassigned_exams: dict[str, int] | None = None,
         parent=None,
+        all_course_ids: list[str] | None = None,
+        all_classroom_assignments: dict[str, list[ClassroomAssignment]] | None = None,
+        all_unassigned_exams: dict[str, int] | None = None,
     ) -> None:
         super().__init__(parent)
+        self._courses_by_id = courses_by_id
+        self._prog_color_map = prog_color_map
+        self._all_course_ids = list(all_course_ids or course_ids)
+        self._all_classroom_assignments = (
+            all_classroom_assignments or classroom_assignments or {}
+        )
+        self._all_unassigned_exams = all_unassigned_exams or unassigned_exams or {}
+        self._show_all_btn: QPushButton | None = None
         self.setWindowTitle("Exam Details")
-        self.setMinimumWidth(600)
+        self.setMinimumWidth(900)
         self.setMinimumHeight(280)
         self.setModal(True)
+        self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint, True)
+        self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint, True)
         self.setStyleSheet("QDialog { background: #FFFFFF; }")
-        self._setup_ui(exam_date, course_ids, courses_by_id, prog_color_map)
+        self._setup_ui(
+            exam_date,
+            course_ids,
+            courses_by_id,
+            prog_color_map,
+            classroom_assignments or {},
+            unassigned_exams or {},
+        )
 
     def _setup_ui(
         self,
@@ -49,15 +73,36 @@ class ExamDetailDialog(QDialog):
         course_ids: list[str],
         courses_by_id: dict[str, Course],
         prog_color_map: dict[str, str],
+        classroom_assignments: dict[str, list[ClassroomAssignment]],
+        unassigned_exams: dict[str, int],
     ) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(12)
 
-        # ── Header ─────────────────────────────────────────────────────────────
+        layout.addLayout(self._build_header(exam_date, len(course_ids)))
+
+        sep = QLabel()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background: #E2E8F0;")
+        layout.addWidget(sep)
+
+        rows = self._build_rows(
+            course_ids,
+            courses_by_id,
+            prog_color_map,
+            classroom_assignments,
+            unassigned_exams,
+        )
+        self._table = self._create_table()
+        self._fill_table(self._table, rows)
+        layout.addWidget(self._table)
+
+        layout.addLayout(self._build_footer(len(course_ids) < len(self._all_course_ids)))
+
+    def _build_header(self, exam_date: date, exam_count: int) -> QHBoxLayout:
         header_row = QHBoxLayout()
-        date_badge = CalendarIcon(22, "#2563EB")
-        header_row.addWidget(date_badge)
+        header_row.addWidget(CalendarIcon(22, "#2563EB"))
 
         title_col = QVBoxLayout()
         title_col.setSpacing(1)
@@ -65,35 +110,48 @@ class ExamDetailDialog(QDialog):
         title.setStyleSheet(
             "font-size: 16px; font-weight: 700; color: #1F2937; background: transparent;"
         )
-        count_lbl = QLabel(
-            f"{len(course_ids)} exam{'s' if len(course_ids) != 1 else ''} scheduled"
+        self._count_lbl = QLabel()
+        self._set_count_text(exam_count)
+        self._count_lbl.setStyleSheet(
+            "font-size: 11px; color: #6B7280; background: transparent;"
         )
-        count_lbl.setStyleSheet("font-size: 11px; color: #6B7280; background: transparent;")
         title_col.addWidget(title)
-        title_col.addWidget(count_lbl)
+        title_col.addWidget(self._count_lbl)
         header_row.addLayout(title_col)
         header_row.addStretch()
-        layout.addLayout(header_row)
+        return header_row
 
-        # ── Thin separator ─────────────────────────────────────────────────────
-        sep = QLabel()
-        sep.setFixedHeight(1)
-        sep.setStyleSheet("background: #E2E8F0;")
-        layout.addWidget(sep)
-
-        # ── Detail table ───────────────────────────────────────────────────────
+    @staticmethod
+    def _create_table() -> QTableWidget:
         table = QTableWidget()
-        table.setColumnCount(4)
+        table.setColumnCount(11)
         table.setHorizontalHeaderLabels(
-            ["Course #", "Course Name", "Requirement", "Programs Affected"]
+            [
+                "Course #",
+                "Course Name",
+                "Time Slot",
+                "Building",
+                "Room",
+                "Students",
+                "Room Capacity",
+                "Status",
+                "Requirement",
+                "Degree",
+                "Proctors",
+            ]
         )
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        table.horizontalHeader().setMinimumHeight(34)
+        header = table.horizontalHeader()
+        stretch_columns = {1, 9}
+        for column in range(11):
+            mode = (
+                QHeaderView.ResizeMode.Stretch
+                if column in stretch_columns
+                else QHeaderView.ResizeMode.ResizeToContents
+            )
+            header.setSectionResizeMode(column, mode)
+        header.setMinimumHeight(34)
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(True)
         table.setStyleSheet("""
@@ -116,37 +174,68 @@ class ExamDetailDialog(QDialog):
             QTableWidget::item { padding: 8px 10px; color: #1F2937; }
             QTableWidget::item:alternate { background: #F8FAFC; }
         """)
+        return table
 
-        rows = self._build_rows(course_ids, courses_by_id, prog_color_map)
+    @staticmethod
+    def _fill_table(table: QTableWidget, rows: list) -> None:
         table.setRowCount(len(rows))
         bold_font = QFont()
         bold_font.setWeight(QFont.Weight.Medium)
 
-        for row_idx, (course_id, name, req, affected) in enumerate(rows):
+        for row_idx, row in enumerate(rows):
+            course_id, name, slot, building, room, students, capacity, status, req, affected, proctors = row
             id_item = QTableWidgetItem(course_id)
             id_item.setFont(bold_font)
             id_item.setForeground(QColor("#1D4ED8"))
             table.setItem(row_idx, 0, id_item)
 
             table.setItem(row_idx, 1, QTableWidgetItem(name))
+            table.setItem(row_idx, 2, QTableWidgetItem(slot))
+            table.setItem(row_idx, 3, QTableWidgetItem(building))
+            room_item = QTableWidgetItem(room)
+            if room == "NO CLASSROOM":
+                room_item.setForeground(QColor("#DC2626"))
+            table.setItem(row_idx, 4, room_item)
+            table.setItem(row_idx, 5, QTableWidgetItem(students))
+            table.setItem(row_idx, 6, QTableWidgetItem(capacity))
+            status_item = QTableWidgetItem(status)
+            if status == "FULL":
+                status_item.setForeground(QColor("#DC2626"))
+                status_item.setBackground(QColor("#FEE2E2"))
+            elif status == "AVAILABLE":
+                status_item.setForeground(QColor("#047857"))
+            table.setItem(row_idx, 7, status_item)
 
             req_item = QTableWidgetItem(req)
             if req == "Obligatory":
                 req_item.setForeground(QColor("#1D4ED8"))
             elif req == "Elective":
                 req_item.setForeground(QColor("#7C3AED"))
-            table.setItem(row_idx, 2, req_item)
+            table.setItem(row_idx, 8, req_item)
 
             aff_item = QTableWidgetItem(affected)
             if affected == "Not affected":
                 aff_item.setForeground(QColor("#94A3B8"))
-            table.setItem(row_idx, 3, aff_item)
+            table.setItem(row_idx, 9, aff_item)
+
+            table.setItem(row_idx, 10, QTableWidgetItem(proctors))
 
         table.resizeRowsToContents()
-        layout.addWidget(table)
 
-        # ── Footer: Close button ───────────────────────────────────────────────
+    def _build_footer(self, can_show_all: bool) -> QHBoxLayout:
         btn_row = QHBoxLayout()
+        full_screen_btn = QPushButton("Full Screen")
+        full_screen_btn.setFixedWidth(120)
+        full_screen_btn.clicked.connect(
+            lambda: self._toggle_full_screen(full_screen_btn)
+        )
+        btn_row.addWidget(full_screen_btn)
+        if can_show_all:
+            self._show_all_btn = QPushButton("Show All Exams")
+            self._show_all_btn.setObjectName("showAllExamsButton")
+            self._show_all_btn.setFixedWidth(140)
+            self._show_all_btn.clicked.connect(self._show_all_exams)
+            btn_row.addWidget(self._show_all_btn)
         btn_row.addStretch()
         close_btn = QPushButton("Close")
         close_btn.setFixedWidth(110)
@@ -158,20 +247,58 @@ class ExamDetailDialog(QDialog):
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.accept)
         btn_row.addWidget(close_btn)
-        layout.addLayout(btn_row)
+        return btn_row
+
+    def _set_count_text(self, exam_count: int) -> None:
+        self._count_lbl.setText(
+            f"{exam_count} exam{'s' if exam_count != 1 else ''} scheduled"
+        )
+
+    def _show_all_exams(self) -> None:
+        rows = self._build_rows(
+            self._all_course_ids,
+            self._courses_by_id,
+            self._prog_color_map,
+            self._all_classroom_assignments,
+            self._all_unassigned_exams,
+        )
+        self._fill_table(self._table, rows)
+        self._set_count_text(len(self._all_course_ids))
+        if self._show_all_btn is not None:
+            self._show_all_btn.hide()
+
+    def _toggle_full_screen(self, button: QPushButton) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+            button.setText("Full Screen")
+        else:
+            self.showFullScreen()
+            button.setText("Exit Full Screen")
+
+    @staticmethod
+    def _split_room_name(room_id: str) -> tuple[str, str]:
+        if " - " in room_id:
+            building, room = room_id.split(" - ", 1)
+            return building, room
+        return "—", room_id
 
     @staticmethod
     def _build_rows(
         course_ids: list[str],
         courses_by_id: dict[str, Course],
         prog_color_map: dict[str, str],
-    ) -> list[tuple[str, str, str, str]]:
-        rows: list[tuple[str, str, str, str]] = []
+        classroom_assignments: dict[str, list[ClassroomAssignment]] | None = None,
+        unassigned_exams: dict[str, int] | None = None,
+    ) -> list[tuple[str, str, str, str, str, str, str, str, str, str, str]]:
+        rows: list[tuple[str, str, str, str, str, str, str, str, str, str, str]] = []
+        classroom_assignments = classroom_assignments or {}
+        unassigned_exams = unassigned_exams or {}
         for course_id in course_ids:
             course = courses_by_id.get(course_id)
             name = course.name if course else course_id
             req_str = "—"
             affected: list[str] = []
+            affected_seen: set[str] = set()
             if course:
                 for offering in course.offerings:
                     if offering.program_id in prog_color_map:
@@ -180,8 +307,70 @@ class ExamDetailDialog(QDialog):
                             req_str = "Obligatory"
                         elif raw.startswith("elec"):
                             req_str = "Elective"
-                        if offering.program_id not in affected:
+                        if offering.program_id not in affected_seen:
+                            affected_seen.add(offering.program_id)
                             affected.append(offering.program_id)
-            affected_str = ", ".join(affected) if affected else "Not affected"
-            rows.append((course_id, name, req_str, affected_str))
+            affected_str = (
+                "; ".join(programme_display_name(program_id) for program_id in affected)
+                if affected
+                else "Not affected"
+            )
+            assignments = classroom_assignments.get(course_id, [])
+            if course_id in unassigned_exams:
+                rows.append(
+                    (
+                        course_id,
+                        name,
+                        "—",
+                        "—",
+                        "NO CLASSROOM",
+                        str(unassigned_exams[course_id]),
+                        "0",
+                        "UNASSIGNED",
+                        req_str,
+                        affected_str,
+                        "—",
+                    )
+                )
+            elif assignments:
+                for assignment in assignments:
+                    building, room = ExamDetailDialog._split_room_name(
+                        assignment.room.room_id
+                    )
+                    rows.append(
+                        (
+                            course_id,
+                            name,
+                            assignment.slot.time.strftime("%H:%M"),
+                            building,
+                            room,
+                            str(assignment.students_assigned),
+                            str(assignment.room.capacity),
+                            (
+                                "FULL"
+                                if assignment.students_assigned
+                                == assignment.room.capacity
+                                else "AVAILABLE"
+                            ),
+                            req_str,
+                            affected_str,
+                            str(assignment.proctor_count),
+                        )
+                    )
+            else:
+                rows.append(
+                    (
+                        course_id,
+                        name,
+                        "—",
+                        "—",
+                        "—",
+                        "—",
+                        "—",
+                        "—",
+                        req_str,
+                        affected_str,
+                        "—",
+                    )
+                )
         return rows

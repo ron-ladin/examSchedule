@@ -45,16 +45,15 @@ from src.domain.threshold import ThresholdSettings
 from src.domain.threshold_filter import ThresholdFilter
 from src.domain.time_slot import TimeSlot
 from src.engine.app_controller import AppController as _EngineController
+from src.engine.proctor_report import build_proctor_report
 from src.engine.schedule_generator import ScheduleGenerator
 from src.interfaces.i_output_exporter import IOutputExporter
 
 logger = logging.getLogger(__name__)
 
 
-# Kept for backward compatibility with existing UI/tests that import this name.
-# Full generation uses cap=None, so this value is only used by legacy helpers.
+# Initial UI generation and each Load More request use this batch size.
 RESULT_BATCH_SIZE: int = 1000
-RESULT_CAP: int = RESULT_BATCH_SIZE
 
 
 class _MemoryExporter(IOutputExporter):
@@ -142,6 +141,10 @@ def _run_generation_process(
     cap: "int | None" = None,
     period_key: "str | None" = None,
     offset: int = 0,
+    classrooms: "list[Classroom] | None" = None,
+    time_slots: "list[TimeSlot] | None" = None,
+    proctor_config: "ProctorConfig | None" = None,
+    allow_unassigned_classrooms: bool = False,
 ) -> None:
     """
     Entry point for multiprocessing.Process-based schedule generation.
@@ -183,6 +186,10 @@ def _run_generation_process(
             selected_programs=selected_programs,
             threshold_filter=ThresholdFilter(),
             threshold_settings=active_settings.thresholds,
+            classrooms=classrooms,
+            time_slots=time_slots,
+            proctor_config=proctor_config,
+            allow_unassigned_classrooms=allow_unassigned_classrooms,
         )
         engine.run()
 
@@ -213,6 +220,8 @@ class DesktopController:
         self._classrooms: list[Classroom] = []
         self._time_slots: list[TimeSlot] = []
         self._proctor_config: ProctorConfig | None = None
+        self._allow_unassigned_classrooms: bool = False
+        self._feature4_enabled: bool = False
         self._remaining_schedule_iterators: dict[str, Iterator[Schedule]] = {}
         self._has_more_schedules: dict[str, bool] = {}
         self._iterator_overflows: dict[str, Schedule] = {}
@@ -277,6 +286,15 @@ class DesktopController:
         )
         return len(self._courses)
 
+    def snapshot_courses(self) -> list[Course]:
+        """Return a shallow copy of the current courses list for rollback."""
+        return list(self._courses)
+
+    def restore_courses(self, courses: list[Course]) -> None:
+        """Restore a previously snapshotted courses list (spec 4.3 abort)."""
+        self._courses = list(courses)
+        self.mark_results_stale()
+
     def load_classrooms(self, path: Path) -> int:
         """Load and validate the optional Feature 4 classrooms file."""
         self._classrooms = ClassroomFileReader(Path(path)).read()
@@ -295,6 +313,33 @@ class DesktopController:
         self.mark_results_stale()
         return self._proctor_config
 
+    def set_time_slots_from_text(self, text: str) -> int:
+        """
+        Parse comma-separated HH:MM slots from an in-memory value.
+
+        Kept as a compatibility helper; the GUI loads slots from a .txt file.
+        Raises ValueError on invalid input.
+        """
+        self._time_slots = SlotsFileReader.parse_line(text)
+        self.mark_results_stale()
+        return len(self._time_slots)
+
+    def set_proctor_config_from_text(self, text: str) -> ProctorConfig:
+        """
+        Parse a '1:X' proctor ratio from an in-memory value.
+
+        Kept as a compatibility helper; the GUI loads the ratio from a .txt
+        file. Raises ValueError on invalid input.
+        """
+        self._proctor_config = ProctorConfigReader.parse_line(text)
+        self.mark_results_stale()
+        return self._proctor_config
+
+    def set_feature4_enabled(self, enabled: bool) -> None:
+        """Toggle Feature 4 on/off (spec 4.1 dedicated activation toggle)."""
+        self._feature4_enabled = enabled
+        self.mark_results_stale()
+
     def clear_classrooms(self) -> None:
         self._classrooms = []
         self.mark_results_stale()
@@ -306,6 +351,10 @@ class DesktopController:
     def clear_proctor_config(self) -> None:
         self._proctor_config = None
         self.mark_results_stale()
+
+    def set_allow_unassigned_classrooms(self, allow: bool) -> None:
+        """Preserve the user's soft-warning choice for subsequent result batches."""
+        self._allow_unassigned_classrooms = bool(allow)
 
     def _update_merge_courses(self, new_courses: list[Course]) -> None:
         """Update mode: merge offerings into existing courses; add unknown courses."""
@@ -458,29 +507,152 @@ class DesktopController:
         return self._proctor_config
 
     @property
-    def feature4_active(self) -> bool:
-        """Feature 4 activates automatically only when all inputs are valid."""
+    def feature4_enabled(self) -> bool:
+        """Whether the user turned the Feature 4 toggle on (spec 4.1)."""
+        return self._feature4_enabled
+
+    @property
+    def feature4_inputs_valid(self) -> bool:
+        """True when all three Feature 4 inputs have been loaded and validated."""
         return bool(self._classrooms and self._time_slots and self._proctor_config)
+
+    @property
+    def feature4_active(self) -> bool:
+        """
+        Feature 4 is active only when the toggle is on AND all inputs are valid
+        (spec 4.1 — activated via a dedicated toggle).
+        """
+        return self._feature4_enabled and self.feature4_inputs_valid
+
+    def _relevant_offerings_for_course(self, course: Course) -> list:
+        """
+        Offerings of an exam course that are relevant to the current run:
+        selected programmes AND the semester of any loaded exam period
+        (spec 4.3/4.4). Mirrors ClassroomAssigner.get_relevant_offerings so the
+        pre-generation checks and the engine agree on which exams matter.
+        """
+        semesters = {period.semester for period in self._exam_periods}
+        seen: set[tuple] = set()
+        relevant: list = []
+        for semester in semesters:
+            for offering in course.get_relevant_offerings(
+                self._selected_programs, semester
+            ):
+                key = (
+                    offering.program_id,
+                    offering.year,
+                    normalize_semester(offering.semester),
+                )
+                if key not in seen:
+                    seen.add(key)
+                    relevant.append(offering)
+        return relevant
+
+    def engine_classrooms(self) -> list[Classroom]:
+        """Classrooms passed to the engine — empty unless Feature 4 is active.
+
+        Gating here (not only in the UI) guarantees that disabling the toggle
+        truly disables classroom assignment, even if files remain loaded
+        (spec 4.1).
+        """
+        return list(self._classrooms) if self.feature4_active else []
+
+    def engine_time_slots(self) -> list[TimeSlot]:
+        """Time slots passed to the engine — empty unless Feature 4 is active."""
+        return list(self._time_slots) if self.feature4_active else []
+
+    def engine_proctor_config(self) -> ProctorConfig | None:
+        """Proctor config passed to the engine — None unless Feature 4 is active."""
+        return self._proctor_config if self.feature4_active else None
+
+    def any_exam_missing_student_count(self) -> bool:
+        """
+        True if ANY exam course has an offering without a StudentCount,
+        regardless of programme selection (spec 4.3 file-load abort).
+
+        Used at courses-file load time, before programmes/periods are known,
+        to reject a file that cannot satisfy Feature 4. Unlike
+        feature4_missing_student_counts this is not filtered by relevance.
+        """
+        return any(
+            offering.student_count is None
+            for course in self._courses
+            if course.has_exam()
+            for offering in course.offerings
+        )
+
+    def feature4_missing_student_counts(self) -> bool:
+        """
+        True if any *relevant* exam offering lacks a StudentCount (spec 4.3).
+
+        Only courses with evaluation_type == "Exam" are assigned rooms, and only
+        offerings for the selected programmes in a loaded period's semester are
+        scheduled — so only those offerings require a count. Courses or
+        programmes the user did not select never block generation.
+
+        When no programmes are selected yet, relevance cannot be determined, so
+        fall back to the unfiltered check — otherwise the warning would be
+        vacuously suppressed and the engine would raise at generate time.
+        """
+        if not self._selected_programs:
+            return self.any_exam_missing_student_count()
+        return any(
+            offering.student_count is None
+            for course in self._courses
+            if course.has_exam()
+            for offering in self._relevant_offerings_for_course(course)
+        )
+
+    def feature4_ready(self) -> bool:
+        """
+        True when Feature 4 may proceed to generation (spec 4.2): toggle on,
+        all three inputs valid, and every exam offering has a StudentCount.
+        """
+        return (
+            self._feature4_enabled
+            and self.feature4_inputs_valid
+            and not self.feature4_missing_student_counts()
+        )
+
+    def _exam_student_totals(self) -> dict[str, int]:
+        """
+        Total students per exam (spec 4.3): for each "Exam" course, sum the
+        StudentCount across only its *relevant* program lines — selected
+        programmes in a loaded period's semester. Courses with no relevant
+        offering are excluded. Missing counts contribute zero.
+        """
+        totals: dict[str, int] = {}
+        for course in self._courses:
+            if not course.has_exam():
+                continue
+            offerings = self._relevant_offerings_for_course(course)
+            if not offerings:
+                continue
+            totals[course.id] = sum(o.student_count or 0 for o in offerings)
+        return totals
 
     def feature4_capacity_shortfall(self) -> tuple[int, int] | None:
         """
-        Return (total classroom capacity, total students) when capacity is low.
+        Pre-generation capacity warning (spec 4.4).
 
-        The pre-check is a soft warning and applies only while Feature 4 is
-        active. Missing student counts contribute zero to the total.
+        Returns (total classroom capacity, largest single-exam student count)
+        when the total capacity of ALL rooms is less than the StudentCount of
+        ANY single exam — because each exam occupies rooms in a single slot, so
+        the binding constraint is the largest single exam, not the sum of all
+        exams. Returns None when Feature 4 is inactive or capacity suffices.
         """
         if not self.feature4_active:
             return None
 
-        total_capacity = sum(room.capacity for room in self._classrooms)
-        total_students = sum(
-            offering.student_count or 0
-            for course in self._courses
-            for offering in course.offerings
-        )
+        exam_totals = self._exam_student_totals()
+        if not exam_totals:
+            return None
 
-        if total_capacity < total_students:
-            return total_capacity, total_students
+        total_capacity = sum(room.capacity for room in self._classrooms)
+        largest_exam = max(exam_totals.values())
+
+        if total_capacity < largest_exam:
+            return total_capacity, largest_exam
 
         return None
 
@@ -543,6 +715,9 @@ class DesktopController:
             raise ValueError("Maximum 5 programmes may be selected.")
 
         self._selected_programs = list(program_ids)
+        # Changing the programme selection changes which exams are scheduled, so
+        # any previously generated results no longer match the inputs (spec §7).
+        self.mark_results_stale()
 
     def update_exam_periods(self, periods: list[ExamPeriod]) -> None:
         """Replace in-memory periods with edited versions from the UI."""
@@ -589,6 +764,9 @@ class DesktopController:
             selected_programs=self._selected_programs,
             threshold_filter=ThresholdFilter(),
             threshold_settings=self._settings.thresholds,
+            classrooms=self.engine_classrooms(),
+            time_slots=self.engine_time_slots(),
+            proctor_config=self.engine_proctor_config(),
         )
         engine.run()
 
@@ -688,6 +866,10 @@ class DesktopController:
                 "cap": RESULT_BATCH_SIZE,
                 "period_key": period_key,
                 "offset": already_loaded,
+                "classrooms": self.engine_classrooms(),
+                "time_slots": self.engine_time_slots(),
+                "proctor_config": self.engine_proctor_config(),
+                "allow_unassigned_classrooms": self._allow_unassigned_classrooms,
             },
             daemon=True,
         )
@@ -807,3 +989,19 @@ class DesktopController:
         exporter.export_schedules(schedules_by_period, courses_by_id)
 
         logger.info("Exported schedules to %s", output_path)
+
+    def proctor_report_text(self, schedule: Schedule) -> str:
+        """Return the spec 4.6 proctor report text for one schedule."""
+        courses_by_id = {course.id: course for course in self._courses}
+        return build_proctor_report(schedule, courses_by_id)
+
+    def export_proctor_report(self, schedule: Schedule, output_path: Path) -> None:
+        """Write the spec 4.6 proctor report for one schedule to a .txt file."""
+        if self._results_stale:
+            raise ValueError(
+                "Cannot export stale schedules. Generate schedules again first."
+            )
+
+        text = self.proctor_report_text(schedule)
+        Path(output_path).write_text(text, encoding="utf-8")
+        logger.info("Exported proctor report to %s", output_path)

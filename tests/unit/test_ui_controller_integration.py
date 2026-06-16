@@ -175,34 +175,51 @@ def _find_programme_row(screen: ConfigScreen, programme_id: str):
     return row
 
 
-def _write_feature4_files(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _write_classrooms_file(tmp_path: Path) -> Path:
     classrooms = tmp_path / "classrooms.txt"
     classrooms.write_text("$$$$\nRoom 101\n40\n$$$$\nRoom 202\n60\n", encoding="utf-8")
+    return classrooms
 
-    slots = tmp_path / "slots.txt"
-    slots.write_text("$$$$\n09:00, 13:00, 19:00\n$$$$\n", encoding="utf-8")
 
+def _write_slots_file(
+    tmp_path: Path,
+    text: str = "09:00, 13:00, 19:00",
+    filename: str = "slots.txt",
+) -> Path:
+    slots = tmp_path / filename
+    slots.write_text(f"$$$$\n{text}\n$$$$\n", encoding="utf-8")
+    return slots
+
+
+def _write_proctors_file(tmp_path: Path) -> Path:
     proctors = tmp_path / "proctors.txt"
     proctors.write_text("1:20\n", encoding="utf-8")
-    return classrooms, slots, proctors
+    return proctors
 
 
-def test_feature4_activates_only_after_all_three_valid_files(tmp_path, monkeypatch):
+def test_feature4_activates_only_after_toggle_and_all_three_valid_inputs(
+    tmp_path, monkeypatch
+):
     app = _get_qapp()
     controller = DesktopController()
     screen = ConfigScreen(controller)
-    classrooms, slots, proctors = _write_feature4_files(tmp_path)
+    classrooms = _write_classrooms_file(tmp_path)
+    slots = _write_slots_file(tmp_path)
+    proctors = _write_proctors_file(tmp_path)
     _patch_file_dialog(monkeypatch, [classrooms, slots, proctors])
+
+    screen._on_feature4_toggled(True)
+    assert controller.feature4_enabled is True
 
     screen._load_classrooms()
     assert controller.feature4_active is False
     assert "2 room(s)" in screen._classrooms_label.text()
 
-    screen._load_slots()
+    screen._load_time_slots()
     assert controller.feature4_active is False
     assert "3 slot(s)" in screen._slots_label.text()
 
-    screen._load_proctors()
+    screen._load_proctor_config()
     app.processEvents()
 
     assert controller.feature4_active is True
@@ -211,16 +228,19 @@ def test_feature4_activates_only_after_all_three_valid_files(tmp_path, monkeypat
     screen.close()
 
 
-def test_invalid_feature4_file_shows_inline_error_and_deactivates(
+def test_invalid_feature4_file_shows_error_and_deactivates(
     tmp_path,
     monkeypatch,
 ):
     app = _get_qapp()
     controller = DesktopController()
     screen = ConfigScreen(controller)
-    classrooms, slots, proctors = _write_feature4_files(tmp_path)
-    invalid_slots = tmp_path / "invalid_slots.txt"
-    invalid_slots.write_text("09:00, 11:00\n", encoding="utf-8")
+    classrooms = _write_classrooms_file(tmp_path)
+    slots = _write_slots_file(tmp_path)
+    proctors = _write_proctors_file(tmp_path)
+    invalid_slots = _write_slots_file(
+        tmp_path, "09:00, 11:00", "invalid_slots.txt"
+    )
     _patch_file_dialog(monkeypatch, [classrooms, slots, proctors, invalid_slots])
     shown_errors = []
     monkeypatch.setattr(
@@ -229,21 +249,22 @@ def test_invalid_feature4_file_shows_inline_error_and_deactivates(
         lambda _parent, title, text: shown_errors.append((title, text)),
     )
 
+    screen._on_feature4_toggled(True)
     screen._load_classrooms()
-    screen._load_slots()
-    screen._load_proctors()
+    screen._load_time_slots()
+    screen._load_proctor_config()
     assert controller.feature4_active is True
 
-    screen._load_slots()
+    # Slots only 2h apart violate the >=4h rule (spec 2.3.4) -> cleared.
+    screen._load_time_slots()
     app.processEvents()
 
     assert controller.feature4_active is False
     assert controller.time_slots == []
-    assert screen._slots_label.text() == "invalid_slots.txt - Invalid file"
-    assert screen._feature4_status.text().startswith("INACTIVE")
+    assert "Invalid file" in screen._slots_label.text()
+    assert screen._feature4_status.text().startswith("INCOMPLETE")
     assert shown_errors
     assert shown_errors[0][0] == "Invalid Feature 4 File"
-    assert "invalid_slots.txt" in shown_errors[0][1]
     assert "at least 4 hours apart" in shown_errors[0][1]
     screen.close()
 
@@ -251,9 +272,14 @@ def test_invalid_feature4_file_shows_inline_error_and_deactivates(
 def test_capacity_warning_cancel_prevents_generation(monkeypatch):
     app = _get_qapp()
     controller = DesktopController()
+    controller._feature4_enabled = True
     controller._classrooms = [Classroom("Room 1", 20)]
     controller._time_slots = [TimeSlot(time(9, 0))]
     controller._proctor_config = ProctorConfig(20)
+    controller._selected_programs = ["83101"]
+    controller._exam_periods = [
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    ]
     controller._courses = [
         Course(
             "11111",
@@ -284,9 +310,14 @@ def test_capacity_warning_cancel_prevents_generation(monkeypatch):
 def test_capacity_warning_proceed_returns_true(monkeypatch):
     app = _get_qapp()
     controller = DesktopController()
+    controller._feature4_enabled = True
     controller._classrooms = [Classroom("Room 1", 20)]
     controller._time_slots = [TimeSlot(time(9, 0))]
     controller._proctor_config = ProctorConfig(20)
+    controller._selected_programs = ["83101"]
+    controller._exam_periods = [
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    ]
     controller._courses = [
         Course(
             "11111",
@@ -307,9 +338,9 @@ def test_capacity_warning_proceed_returns_true(monkeypatch):
 
     assert screen._confirm_capacity_warning() is True
     assert shown
-    assert "Classroom capacity: 20" in shown[0][1]
-    assert "Students: 50" in shown[0][1]
-    assert "Missing seats: 30" in shown[0][1]
+    assert "Total classroom capacity: 20" in shown[0][1]
+    assert "Largest exam: 50 students" in shown[0][1]
+    assert "Shortfall: 30" in shown[0][1]
     app.processEvents()
     screen.close()
 

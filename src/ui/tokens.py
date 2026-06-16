@@ -14,7 +14,6 @@ COLOR_SECONDARY  = "#004494"                   # Darker brand blue
 COLOR_CAL_ACTIVE_BG   = "#DBEAFE"  # Blue-100 active days
 COLOR_CAL_ACTIVE_FG   = "#1D4ED8"  # Blue-700 active day text
 COLOR_CAL_EXCLUDED_BG = "#FEE2E2"  # Red-100 excluded days
-COLOR_CAL_EXCLUDED_FG = "#DC2626"  # Red-600 excluded day text
 
 # ── 3. Shared Period Tab QSS ─────────────────────────────────────────────────
 PERIOD_TAB_STYLE: str = """
@@ -31,10 +30,8 @@ PERIOD_TAB_STYLE: str = """
 """
 
 # ── 4. Layout Spacing Tokens ─────────────────────────────────────────────────
-SPACING_PANEL_GAP  = 12
-CALENDAR_CELL_SIZE = 30
 
-# ── 4. Programme Slot Colors (max 5) ─────────────────────────────────────────
+# ── 5. Programme Slot Colors (max 5) ─────────────────────────────────────────
 PROGRAMME_COLOURS: tuple[str, str, str, str, str] = (
     "#7C3AED",  # Violet-700
     "#2563EB",  # Blue-600
@@ -43,7 +40,7 @@ PROGRAMME_COLOURS: tuple[str, str, str, str, str] = (
     "#DC2626",  # Red-600
 )
 
-# ── 5. Program ID → Official Hebrew Name Mapping ─────────────────────────────
+# ── 6. Program ID → Official Hebrew Name Mapping ─────────────────────────────
 PROGRAM_NAMES_MAPPING: dict[str, str] = {
     "83101": "הנדסת מחשבים",
     "83102": "הנדסת חשמל",
@@ -56,3 +53,9 @@ PROGRAM_NAMES_MAPPING: dict[str, str] = {
     "83115": "הנדסת חשמל – מגמת הנדסה ביו-רפואית",
     "83182": "הנדסת חשמל – מגמת הנדסה קוונטית",
 }
+
+
+def programme_display_name(program_id: str) -> str:
+    """Return a programme code together with its official degree name."""
+    name = PROGRAM_NAMES_MAPPING.get(program_id)
+    return f"{program_id} - {name}" if name else program_id

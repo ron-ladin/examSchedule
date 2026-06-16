@@ -16,8 +16,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from queue import Empty as _QueueEmpty
 
-from PyQt6.QtCore import Qt, QRect, QSize, QTimer
-from PyQt6.QtGui import QBrush, QColor, QFont, QPen
+from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -26,7 +26,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QStyledItemDelegate,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -35,7 +34,16 @@ from PyQt6.QtWidgets import (
 )
 
 from src.ui.assets.animated_widgets import AnimatedPlaceholder
-from src.ui.tokens import COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG, PERIOD_TAB_STYLE
+from src.ui.calendar_cell_delegate import (
+    _CalendarCellDelegate,
+    _course_ids_for_click_position,
+    _group_exams_by_slot,
+)
+from src.ui.tokens import (
+    COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG,
+    PERIOD_TAB_STYLE,
+    programme_display_name,
+)
 
 from src.controller import DesktopController, RESULT_BATCH_SIZE
 from src.domain.course import Course
@@ -44,6 +52,22 @@ from src.domain.semester import display_semester
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
 
 logger = logging.getLogger(__name__)
+
+
+class _CalendarTable(QTableWidget):
+    """Calendar table that reports where inside a date cell the user clicked."""
+
+    calendarCellClicked = pyqtSignal(int, int, QPoint)
+
+    def mouseReleaseEvent(self, event) -> None:
+        index = self.indexAt(event.position().toPoint())
+        if index.isValid() and event.button() == Qt.MouseButton.LeftButton:
+            self.calendarCellClicked.emit(
+                index.row(),
+                index.column(),
+                event.position().toPoint(),
+            )
+        super().mouseReleaseEvent(event)
 
 
 def _standard_period_keys() -> list[str]:
@@ -86,101 +110,19 @@ def _merge_period_keys(
 _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
-class _CalendarCellDelegate(QStyledItemDelegate):
-    """Custom painter for schedule calendar cells.
+_NAV_REPEAT_DELAY_MS = 450
+_NAV_REPEAT_INTERVAL_MS = 120
 
-    Dates WITH exams: bold purple header (signals clickability).
-    Dates without exams: muted gray header.
-    Course lines: name darker, meta line lighter.
-    """
 
-    _DATE_FG_EXAM = QColor("#7C3AED")
-    _DATE_FG_EMPTY = QColor("#94A3B8")
-    _COURSE_FG = QColor("#1F2937")
-    _META_FG = QColor("#6B7280")
-    _SEP_COLOR = QColor("#BFDBFE")
-
-    def paint(self, painter, option, index) -> None:
-        text: str = index.data(Qt.ItemDataRole.DisplayRole) or ""
-        bg = index.data(Qt.ItemDataRole.BackgroundRole)
-
-        painter.save()
-
-        rect = option.rect
-        if bg is not None:
-            painter.fillRect(rect, bg)
-        else:
-            painter.fillRect(rect, Qt.GlobalColor.white)
-
-        if text:
-            self._draw_cell(painter, rect, text, bg)
-
-        painter.restore()
-
-    def _draw_cell(self, painter, rect, text: str, bg=None) -> None:
-        lines = text.split("\n")
-        pad = 5
-
-        has_exams = len(lines) > 2
-        left_offset = pad
-
-        if has_exams and bg is not None:
-            stripe_color = bg.color() if isinstance(bg, QBrush) else QColor(bg)
-            stripe_color.setAlpha(210)
-            painter.fillRect(
-                QRect(rect.left(), rect.top(), 4, rect.height()),
-                stripe_color,
-            )
-            left_offset = 9
-
-        r = rect.adjusted(left_offset, pad, -pad, -pad)
-        y = r.top()
-
-        date_font = QFont(painter.font())
-        date_font.setBold(True)
-        date_font.setPointSize(9)
-        painter.setFont(date_font)
-        painter.setPen(self._DATE_FG_EXAM if has_exams else self._DATE_FG_EMPTY)
-        painter.drawText(
-            QRect(r.left(), y, r.width(), 18),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            lines[0],
-        )
-        y += 18
-
-        rest_start = 1
-        if len(lines) > 1 and "─" in lines[1]:
-            painter.setPen(QPen(self._SEP_COLOR, 1))
-            painter.drawLine(r.left(), y + 1, r.left() + min(r.width(), 70), y + 1)
-            y += 6
-            rest_start = 2
-
-        body_font = QFont(painter.font())
-        body_font.setBold(False)
-        body_font.setPointSize(8)
-        painter.setFont(body_font)
-
-        for line in lines[rest_start:]:
-            if y + 12 > r.bottom():
-                break
-
-            is_meta = "·" in line
-            painter.setPen(self._META_FG if is_meta else self._COURSE_FG)
-            painter.drawText(
-                QRect(r.left(), y, r.width(), 13),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                line.strip(),
-            )
-            y += 13
-
-    def sizeHint(self, option, index) -> QSize:
-        text: str = index.data(Qt.ItemDataRole.DisplayRole) or ""
-        n = max(1, text.count("\n") + 1)
-        return QSize(option.rect.width() or 120, max(52, 24 + n * 13))
+def _enable_press_and_hold(button: QPushButton) -> None:
+    """Repeat button clicks while it remains pressed."""
+    button.setAutoRepeat(True)
+    button.setAutoRepeatDelay(_NAV_REPEAT_DELAY_MS)
+    button.setAutoRepeatInterval(_NAV_REPEAT_INTERVAL_MS)
 
 
 def _make_data_table(headers: list[str]) -> QTableWidget:
-    table = QTableWidget()
+    table = _CalendarTable()
     table.setColumnCount(len(headers))
     table.setHorizontalHeaderLabels(headers)
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -238,22 +180,29 @@ class _ResultsPanel(QWidget):
         self._empty_labels: dict[str, QLabel] = {}
 
         self._has_stale_results: bool = False
+        # §1: never auto-load endlessly. Each "load more" restarts generation and
+        # skips already-loaded schedules via offset, so background auto-loading
+        # gets quadratically more expensive (loading 100k–101k re-skips 100k).
+        # Loading is therefore manual/on-demand: the user clicks "+N more options".
+        self._auto_load_results: bool = False
         self._stale_banner: QLabel = QLabel()
         self._save_btn: QPushButton = QPushButton()
 
         self._setup_ui()
 
     def mark_stale(self) -> None:
-        """Show the stale-data warning and disable Export."""
+        """Show the stale-data warning and disable schedule/report exports."""
         self._has_stale_results = True
         self._stale_banner.setVisible(True)
         self._save_btn.setEnabled(False)
+        self._proctor_btn.setEnabled(False)
 
     def clear_stale(self) -> None:
         """Hide the stale-data warning and re-enable Export."""
         self._has_stale_results = False
         self._stale_banner.setVisible(False)
         self._save_btn.setEnabled(True)
+        self._proctor_btn.setEnabled(True)
 
     def load(
         self,
@@ -312,6 +261,15 @@ class _ResultsPanel(QWidget):
         # QGraphicsOpacityEffect caused QPainter warnings and visual flicker.
         self._content.setGraphicsEffect(None)
 
+        if self._auto_load_results:
+            QTimer.singleShot(0, self._start_automatic_loads)
+
+    def _start_automatic_loads(self) -> None:
+        """Continue loading every truncated period in the background."""
+        for period_key in list(self._truncated_periods):
+            if period_key not in self._lm_procs:
+                self._on_load_more(period_key)
+
     def _setup_ui(self) -> None:
         self.setStyleSheet("background: transparent;")
 
@@ -344,6 +302,11 @@ class _ResultsPanel(QWidget):
         self._save_btn = QPushButton("⬇  Export Schedule")
         self._save_btn.clicked.connect(self._on_save)
         action_row.addWidget(self._save_btn)
+
+        # Spec 4.6: per-schedule proctor report (GUI view + .txt export).
+        self._proctor_btn = QPushButton("🧑‍🏫  Proctor Report")
+        self._proctor_btn.clicked.connect(self._on_proctor_report)
+        action_row.addWidget(self._proctor_btn)
 
         cl.addLayout(action_row)
 
@@ -389,6 +352,7 @@ class _ResultsPanel(QWidget):
 
         prev_btn = QPushButton("◀  Prev")
         prev_btn.setFixedWidth(90)
+        _enable_press_and_hold(prev_btn)
         prev_btn.clicked.connect(lambda _=False, k=period_key: self._go_prev_period(k))
 
         counter = QLabel("Loading…")
@@ -402,6 +366,7 @@ class _ResultsPanel(QWidget):
 
         next_btn = QPushButton("Next  ▶")
         next_btn.setFixedWidth(90)
+        _enable_press_and_hold(next_btn)
         next_btn.clicked.connect(lambda _=False, k=period_key: self._go_next_period(k))
 
         nav.addWidget(prev_btn)
@@ -423,7 +388,7 @@ class _ResultsPanel(QWidget):
             "padding: 6px 12px; font-size: 11px; font-weight: 600;"
             "background: rgba(0, 90, 194, 0.06);"
         )
-        chunk_btn.setVisible(has_more)
+        chunk_btn.setVisible(has_more and not self._auto_load_results)
         chunk_btn.clicked.connect(lambda _=False, k=period_key: self._on_load_more(k))
 
         lm_row.addWidget(chunk_btn)
@@ -471,8 +436,10 @@ class _ResultsPanel(QWidget):
         self._next_btns[period_key] = next_btn
         self._load_more_btns[period_key] = chunk_btn
 
-        table.cellClicked.connect(
-            lambda row, col, k=period_key: self._on_cell_clicked(k, row, col)
+        table.calendarCellClicked.connect(
+            lambda row, col, pos, k=period_key: self._on_cell_clicked(
+                k, row, col, pos
+            )
         )
 
         self._refresh_period_card(period_key)
@@ -503,7 +470,9 @@ class _ResultsPanel(QWidget):
         self._next_btns[period_key].setEnabled(idx < total - 1 or has_more)
 
         if period_key in self._load_more_btns:
-            self._load_more_btns[period_key].setVisible(has_more)
+            self._load_more_btns[period_key].setVisible(
+                has_more and not self._auto_load_results
+            )
 
         if schedules:
             self._populate_calendar(
@@ -560,7 +529,7 @@ class _ResultsPanel(QWidget):
         self._lm_chunk_sizes[period_key] = RESULT_BATCH_SIZE
 
         btn = self._load_more_btns.get(period_key)
-        if btn is not None:
+        if btn is not None and not self._auto_load_results:
             btn.setEnabled(False)
             btn.setText(f"⠋  Loading {RESULT_BATCH_SIZE:,}…")
 
@@ -583,7 +552,7 @@ class _ResultsPanel(QWidget):
         self._lm_ticks[period_key] = tick + 1
 
         btn = self._load_more_btns.get(period_key)
-        if btn:
+        if btn and not self._auto_load_results:
             btn.setText(f"{spinner}  Loading {RESULT_BATCH_SIZE:,}…")
 
         try:
@@ -594,7 +563,7 @@ class _ResultsPanel(QWidget):
             # If the subprocess already ended and no result arrived, recover the UI
             # instead of leaving the button disabled forever.
             if proc is not None and not proc.is_alive() and tick > 2:
-                if btn:
+                if btn and not self._auto_load_results:
                     btn.setEnabled(True)
                     btn.setText("⚠  Load failed — retry")
 
@@ -606,7 +575,7 @@ class _ResultsPanel(QWidget):
 
             return
         except OSError as exc:
-            if btn:
+            if btn and not self._auto_load_results:
                 btn.setEnabled(True)
                 btn.setText("⚠  Load failed — retry")
 
@@ -632,7 +601,7 @@ class _ResultsPanel(QWidget):
                 else result
             )
 
-            if btn:
+            if btn and not self._auto_load_results:
                 btn.setEnabled(True)
                 btn.setText("⚠  Load failed — retry")
 
@@ -668,9 +637,12 @@ class _ResultsPanel(QWidget):
         self._cleanup_load_more_state(period_key)
         self._refresh_period_card(period_key)
 
-        if still_more and btn:
+        if still_more and btn and not self._auto_load_results:
             btn.setEnabled(True)
             btn.setText(f"⟳  +{RESULT_BATCH_SIZE:,} more options")
+
+        if self._auto_load_results and still_more and extra:
+            QTimer.singleShot(50, lambda k=period_key: self._on_load_more(k))
 
     def _cleanup_load_more_state(
         self,
@@ -770,50 +742,14 @@ class _ResultsPanel(QWidget):
         for course_id, exam_date in schedule.assignments.items():
             date_to_ids.setdefault(exam_date, []).append(course_id)
 
-        if period_obj and period_obj.date_ranges:
-            start, end = period_obj.get_overall_date_boundaries()
-        else:
-            all_dates = sorted(date_to_ids)
-            start, end = all_dates[0], all_dates[-1]
-
-        week_start = start - timedelta(days=(start.weekday() + 1) % 7)
-        last_saturday = end + timedelta(days=(5 - end.weekday()) % 7)
-        num_weeks = (last_saturday - week_start).days // 7 + 1
-
+        week_start, num_weeks = self._calendar_bounds(period_obj, date_to_ids)
         table.setRowCount(num_weeks)
 
         for week in range(num_weeks):
             for dow in range(7):
                 current_date = week_start + timedelta(days=week * 7 + dow)
                 course_ids = date_to_ids.get(current_date, [])
-                first_prog = None
-                course_lines: list[str] = []
-
-                for course_id in course_ids:
-                    course = self._courses_by_id.get(course_id)
-
-                    if not course:
-                        course_lines.append(course_id)
-                        continue
-
-                    relevant = next(
-                        (
-                            offering
-                            for offering in course.offerings
-                            if offering.program_id in self._prog_color_map
-                        ),
-                        None,
-                    )
-
-                    req = "E" if (relevant and relevant.is_elective()) else "O"
-                    prog_id = relevant.program_id if relevant else ""
-
-                    if first_prog is None:
-                        first_prog = prog_id
-
-                    course_lines.append(f"  {course.name[:18]}")
-                    prog_label = prog_id if prog_id else "—"
-                    course_lines.append(f"  {course_id}  ·  {req}  ·  {prog_label}")
+                course_lines, first_prog = self._build_cell_lines(course_ids, schedule)
 
                 date_header = current_date.strftime("%a %d/%m")
                 cell_text = (
@@ -830,6 +766,29 @@ class _ResultsPanel(QWidget):
                 if course_ids:
                     item.setToolTip("Click to view exam details")
 
+                # §4.5: when exams have slot assignments, render them as
+                # side-by-side per-slot colored columns (with >3 collapse).
+                slot_groups: list[dict] | None = None
+                if any(
+                    schedule.classroom_assignments.get(course_id)
+                    for course_id in course_ids
+                ):
+                    slot_groups = _group_exams_by_slot(
+                        course_ids, schedule, self._courses_by_id
+                    )
+                    item.setData(
+                        Qt.ItemDataRole.UserRole,
+                        {"header": date_header, "groups": slot_groups},
+                    )
+                    tooltip_lines = [f"{len(course_ids)} exams on {date_header}"]
+                    for group in slot_groups:
+                        tooltip_lines.append(
+                            f"{group['slot']} ({len(group['course_ids'])}): "
+                            + ", ".join(group["names"])
+                        )
+                    tooltip_lines.append("Click a time group to view its exams.")
+                    item.setToolTip("\n".join(tooltip_lines))
+
                 if first_prog and first_prog in self._prog_color_map:
                     color = QColor(self._prog_color_map[first_prog])
                     color.setAlpha(75)
@@ -841,20 +800,136 @@ class _ResultsPanel(QWidget):
                 self._cell_data[period_key][(week, dow)] = (
                     current_date,
                     list(course_ids),
+                    {
+                        course_id: list(
+                            schedule.classroom_assignments.get(course_id, [])
+                        )
+                        for course_id in course_ids
+                    },
+                    {
+                        course_id: schedule.unassigned_classroom_exams[course_id]
+                        for course_id in course_ids
+                        if course_id in schedule.unassigned_classroom_exams
+                    },
+                    slot_groups,
                 )
 
         table.resizeRowsToContents()
 
-    def _on_cell_clicked(self, period_key: str, row: int, col: int) -> None:
+    @staticmethod
+    def _calendar_bounds(period_obj, date_to_ids: dict) -> tuple[date, int]:
+        """Return (week_start Sunday, week count) spanning the period's dates."""
+        if period_obj and period_obj.date_ranges:
+            start, end = period_obj.get_overall_date_boundaries()
+        else:
+            all_dates = sorted(date_to_ids)
+            start, end = all_dates[0], all_dates[-1]
+
+        week_start = start - timedelta(days=(start.weekday() + 1) % 7)
+        last_saturday = end + timedelta(days=(5 - end.weekday()) % 7)
+        num_weeks = (last_saturday - week_start).days // 7 + 1
+        return week_start, num_weeks
+
+    def _build_cell_lines(
+        self,
+        course_ids: list[str],
+        schedule: Schedule,
+    ) -> tuple[list[str], str | None]:
+        """Build the text lines for one calendar cell and its first programme."""
+        first_prog: str | None = None
+        course_lines: list[str] = []
+
+        for course_id in course_ids:
+            course = self._courses_by_id.get(course_id)
+
+            if not course:
+                course_lines.append(course_id)
+                continue
+
+            relevant = next(
+                (
+                    offering
+                    for offering in course.offerings
+                    if offering.program_id in self._prog_color_map
+                ),
+                None,
+            )
+
+            req = "E" if (relevant and relevant.is_elective()) else "O"
+            prog_id = relevant.program_id if relevant else ""
+
+            if first_prog is None:
+                first_prog = prog_id
+
+            course_lines.append(f"  {course.name[:18]}")
+            course_lines.append(f"  {course_id}  ·  {req}")
+
+            relevant_programs = list(dict.fromkeys(
+                offering.program_id
+                for offering in course.offerings
+                if offering.program_id in self._prog_color_map
+            ))
+            if relevant_programs:
+                degree_label = "; ".join(
+                    programme_display_name(program_id)
+                    for program_id in relevant_programs
+                )
+                course_lines.append(f"  Degree: {degree_label}")
+
+            room_assignments = schedule.classroom_assignments.get(course_id, [])
+            if room_assignments:
+                slot_text = room_assignments[0].slot.time.strftime("%H:%M")
+                rooms_text = ", ".join(
+                    f"{assignment.room.room_id} "
+                    f"({assignment.students_assigned}/"
+                    f"{assignment.room.capacity})"
+                    for assignment in room_assignments
+                )
+                course_lines.append(f"  {slot_text}  ·  {rooms_text}")
+            elif course_id in schedule.unassigned_classroom_exams:
+                missing = schedule.unassigned_classroom_exams[course_id]
+                course_lines.append(f"  NO CLASSROOM  ·  {missing} students")
+
+        return course_lines, first_prog
+
+    def _on_cell_clicked(
+        self,
+        period_key: str,
+        row: int,
+        col: int,
+        click_pos: QPoint | None = None,
+    ) -> None:
         cell_info = self._cell_data.get(period_key, {}).get((row, col))
 
         if cell_info is None:
             return
 
-        exam_date, course_ids = cell_info
+        exam_date, course_ids, classroom_assignments, unassigned_exams, groups = (
+            cell_info
+        )
 
         if not course_ids:
             return
+
+        all_course_ids = list(course_ids)
+        all_classroom_assignments = classroom_assignments
+        all_unassigned_exams = unassigned_exams
+
+        # Spec 4.5: when the cell renders multiple side-by-side slot columns,
+        # open only the exams of the column the user actually clicked.
+        visible_ids = self._slot_filter_for_click(
+            period_key, row, col, groups, click_pos
+        )
+        if visible_ids is not None:
+            course_ids = visible_ids
+            classroom_assignments = {
+                cid: classroom_assignments.get(cid, []) for cid in course_ids
+            }
+            unassigned_exams = {
+                cid: unassigned_exams[cid]
+                for cid in course_ids
+                if cid in unassigned_exams
+            }
 
         from src.ui.exam_detail_dialog import ExamDetailDialog
 
@@ -863,9 +938,45 @@ class _ResultsPanel(QWidget):
             course_ids,
             self._courses_by_id,
             self._prog_color_map,
+            classroom_assignments,
+            unassigned_exams,
             parent=self,
+            all_course_ids=all_course_ids,
+            all_classroom_assignments=all_classroom_assignments,
+            all_unassigned_exams=all_unassigned_exams,
         )
         dialog.exec()
+
+    def _slot_filter_for_click(
+        self,
+        period_key: str,
+        row: int,
+        col: int,
+        groups: "list[dict] | None",
+        click_pos: QPoint | None = None,
+    ) -> "list[str] | None":
+        """Return the course ids of the slot column under the cursor, or None.
+
+        None means "no per-slot narrowing" — caller shows the whole date. When
+        the cell is split into N slot columns, map the cursor's x offset within
+        the cell to the matching column and return just its course ids.
+        """
+        if not groups or click_pos is None:
+            return None
+
+        table = self._cal_tables.get(period_key)
+        if table is None:
+            return None
+
+        item = table.item(row, col)
+        if item is None:
+            return None
+
+        rect = table.visualItemRect(item)
+        if rect.width() <= 0:
+            return None
+
+        return _course_ids_for_click_position(groups, rect, click_pos)
 
     def _show_message(
         self,
@@ -906,6 +1017,55 @@ class _ResultsPanel(QWidget):
             }
         """)
         msg.exec()
+
+    def _selected_schedules(self) -> dict[str, "Schedule"]:
+        """Currently displayed schedule per period (one each)."""
+        return {
+            key: self._schedules_by_period[key][self._period_indices[key]]
+            for key in self._schedules_by_period
+            if self._schedules_by_period[key]
+        }
+
+    def _on_proctor_report(self) -> None:
+        """Build and show the spec 4.6 proctor report for displayed schedules."""
+        if self._has_stale_results:
+            self._show_message(
+                "Stale Schedules",
+                "Exam period dates have changed since the last generation.\n\n"
+                "Please click  ▶  Generate again before viewing/exporting the proctor report.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        selected = self._selected_schedules()
+        if not selected:
+            self._show_message(
+                "No Schedules",
+                "Generate schedules before viewing the proctor report.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        sections: list[str] = []
+        for period_key, schedule in selected.items():
+            body = self._controller.proctor_report_text(schedule)
+            sections.append(f"=== {_display_period_key(period_key)} ===\n{body}")
+        report_text = "\n\n".join(sections)
+
+        if not any(s.classroom_assignments for s in selected.values()):
+            self._show_message(
+                "No Room Assignments",
+                "These schedules have no classroom assignments. Enable Feature 4 "
+                "(classrooms, slots, proctor ratio) and generate again to produce a "
+                "proctor report.",
+                QMessageBox.Icon.Information,
+            )
+            return
+
+        from src.ui.proctor_report_dialog import ProctorReportDialog
+
+        dialog = ProctorReportDialog(report_text, parent=self)
+        dialog.exec()
 
     def _on_save(self) -> None:
         if self._has_stale_results:
@@ -956,7 +1116,7 @@ class _ResultsPanel(QWidget):
                 f"Schedule saved to:\n{path}",
                 QMessageBox.Icon.Information,
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("Save failed")
             self._show_message(
                 "Save Error",

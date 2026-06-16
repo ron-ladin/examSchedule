@@ -27,7 +27,18 @@ class ProctorConfigReader:
 
     def read(self) -> ProctorConfig:
         line = self._read_ratio_line()
-        students_per_proctor = self._parse_ratio_line(line)
+        return self.parse_line(line)
+
+    @classmethod
+    def parse_line(cls, line: str) -> ProctorConfig:
+        """
+        Parse a single '1:X' ratio string into a ProctorConfig.
+
+        Shared by the file path (read) and the GUI text-input path so both
+        enforce the identical '1:X' rule (spec 5.3 / 2.4.1). Raises ValueError
+        on any malformed or invalid ratio.
+        """
+        students_per_proctor = cls._parse_ratio_line(line)
         return ProctorConfig(students_per_proctor=students_per_proctor)
 
     def _read_ratio_line(self) -> str:
@@ -47,19 +58,20 @@ class ProctorConfigReader:
 
         return lines[0]
 
-    def _parse_ratio_line(self, line: str) -> int:
+    @classmethod
+    def _parse_ratio_line(cls, line: str) -> int:
         parts = [
             part.strip()
             for part in line.split(":")
         ]
 
-        if len(parts) != self.RATIO_FIELD_COUNT:
+        if len(parts) != cls.RATIO_FIELD_COUNT:
             raise ValueError(f"Invalid proctor ratio (expected '1:X'): {line}")
 
         numerator, denominator = parts
 
         # The ratio must always start with "1:" (spec 5.3).
-        if numerator != self.RATIO_NUMERATOR:
+        if numerator != cls.RATIO_NUMERATOR:
             raise ValueError(f"Proctor ratio must start with '1:': {line}")
 
         # X must be a positive integer greater than 0 (spec 2.4.1).

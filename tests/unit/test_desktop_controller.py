@@ -6,7 +6,7 @@ All file I/O uses tmp_path; no PyQt6 imports.
 """
 
 import logging
-from datetime import time
+from datetime import date, time
 from pathlib import Path
 
 import pytest
@@ -15,6 +15,7 @@ from src.controller import DesktopController
 from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
+from src.domain.exam_period import ExamPeriod
 from src.domain.proctor import ProctorConfig
 from src.domain.time_slot import TimeSlot
 
@@ -52,11 +53,24 @@ def _write_programs(path: Path, content: str = "83101,83102") -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _fall_period() -> ExamPeriod:
+    return ExamPeriod(
+        semester="FALL",
+        moed="Aleph",
+        date_ranges=[(date(2026, 1, 5), date(2026, 1, 9))],
+    )
+
+
 def _active_feature4_controller(total_capacity: int, student_count: int) -> DesktopController:
     ctrl = DesktopController()
+    ctrl._feature4_enabled = True
     ctrl._classrooms = [Classroom("Room 1", total_capacity)]
     ctrl._time_slots = [TimeSlot(time(9, 0))]
     ctrl._proctor_config = ProctorConfig(20)
+    # Selected programmes + a loaded period define which offerings are "relevant"
+    # for the spec 4.3/4.4 pre-generation checks.
+    ctrl._selected_programs = ["83101", "83102"]
+    ctrl._exam_periods = [_fall_period()]
     ctrl._courses = [
         Course(
             id="11111",
@@ -78,7 +92,7 @@ def test_feature4_capacity_shortfall_returns_totals_when_capacity_is_low():
 
 
 def test_feature4_capacity_shortfall_is_none_when_capacity_is_sufficient():
-    ctrl = _active_feature4_controller(total_capacity=80, student_count=75)
+    ctrl = _active_feature4_controller(total_capacity=100, student_count=75)
 
     assert ctrl.feature4_capacity_shortfall() is None
 
@@ -88,6 +102,172 @@ def test_feature4_capacity_shortfall_is_none_when_feature_is_inactive():
     ctrl.clear_proctor_config()
 
     assert ctrl.feature4_capacity_shortfall() is None
+
+
+def test_feature4_capacity_shortfall_is_none_when_toggle_disabled():
+    ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
+    ctrl.set_feature4_enabled(False)
+
+    assert ctrl.feature4_capacity_shortfall() is None
+
+
+def test_feature4_capacity_compares_largest_single_exam_not_sum():
+    """Spec 4.4: warn when capacity < ANY single exam, not the sum of exams."""
+    ctrl = _active_feature4_controller(total_capacity=120, student_count=80)
+    # Second exam: 100 students across two program lines (60 + 40).
+    ctrl._courses.append(
+        Course(
+            id="22222",
+            name="Physics",
+            instructor="Dr. Levi",
+            evaluation_type="Exam",
+            offerings=[
+                CourseOffering("83101", 1, "FALL", "Obligatory", 60),
+                CourseOffering("83102", 1, "FALL", "Obligatory", 40),
+            ],
+        )
+    )
+    # Sum of all students = 180 > 120, but the largest single exam is 100 < 120,
+    # so per spec 4.4 no warning should fire.
+    assert ctrl.feature4_capacity_shortfall() is None
+
+
+def test_feature4_ready_requires_student_counts_on_exam_courses():
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
+    assert ctrl.feature4_ready() is True
+
+    ctrl._courses[0].offerings[0] = CourseOffering(
+        "83101", 1, "FALL", "Obligatory", None
+    )
+    assert ctrl.feature4_missing_student_counts() is True
+    assert ctrl.feature4_ready() is False
+
+
+# ── §2: Feature 4 toggle gates engine inputs ─────────────────────────────────
+
+def test_engine_inputs_pass_feature4_data_when_active():
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
+    assert ctrl.feature4_active is True
+    assert ctrl.engine_classrooms() == ctrl.classrooms
+    assert ctrl.engine_time_slots() == ctrl.time_slots
+    assert ctrl.engine_proctor_config() is ctrl.proctor_config
+
+
+def test_engine_inputs_empty_when_toggle_disabled_but_files_loaded():
+    """§2: disabling the toggle must disable classroom assignment even though
+    classroom/slot/proctor files remain loaded in memory."""
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
+    ctrl.set_feature4_enabled(False)
+
+    assert ctrl.feature4_active is False
+    assert ctrl.engine_classrooms() == []
+    assert ctrl.engine_time_slots() == []
+    assert ctrl.engine_proctor_config() is None
+
+
+# ── §3: missing StudentCount is filtered by selected programmes/semester ──────
+
+def test_missing_count_in_unselected_programme_does_not_block():
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
+    ctrl._selected_programs = ["83101"]
+    # An unrelated programme (83999) with a missing count must be ignored.
+    ctrl._courses.append(
+        Course(
+            id="99999",
+            name="Unrelated",
+            instructor="Dr. X",
+            evaluation_type="Exam",
+            offerings=[CourseOffering("83999", 1, "FALL", "Obligatory", None)],
+        )
+    )
+    assert ctrl.feature4_missing_student_counts() is False
+
+
+def test_missing_count_in_selected_programme_blocks():
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
+    ctrl._selected_programs = ["83101"]
+    ctrl._courses[0].offerings[0] = CourseOffering(
+        "83101", 1, "FALL", "Obligatory", None
+    )
+    assert ctrl.feature4_missing_student_counts() is True
+    assert ctrl.feature4_ready() is False
+
+
+def test_missing_count_in_other_semester_does_not_block():
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
+    ctrl._selected_programs = ["83101"]
+    # Same selected programme but a SPRING offering — not relevant to the FALL
+    # period, so its missing count must not block generation.
+    ctrl._courses.append(
+        Course(
+            id="77777",
+            name="Spring Course",
+            instructor="Dr. Y",
+            evaluation_type="Exam",
+            offerings=[CourseOffering("83101", 1, "SPRI", "Obligatory", None)],
+        )
+    )
+    assert ctrl.feature4_missing_student_counts() is False
+
+
+def test_non_exam_course_missing_count_never_blocks():
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
+    ctrl._courses.append(
+        Course(
+            id="88888",
+            name="Project Course",
+            instructor="Dr. Z",
+            evaluation_type="Project",
+            offerings=[CourseOffering("83101", 1, "FALL", "Obligatory", None)],
+        )
+    )
+    assert ctrl.feature4_missing_student_counts() is False
+
+
+# ── §4: capacity warning uses only selected relevant offerings ────────────────
+
+def test_capacity_warning_ignores_unselected_programme():
+    """A large exam in an unselected programme must not trigger the warning."""
+    ctrl = _active_feature4_controller(total_capacity=120, student_count=50)
+    ctrl._selected_programs = ["83101"]
+    ctrl._courses.append(
+        Course(
+            id="66666",
+            name="Huge Unselected",
+            instructor="Dr. Big",
+            evaluation_type="Exam",
+            offerings=[CourseOffering("83999", 1, "FALL", "Obligatory", 5000)],
+        )
+    )
+    # Only the relevant 50-student exam counts; 120 capacity is enough.
+    assert ctrl.feature4_capacity_shortfall() is None
+
+
+def test_capacity_warning_fires_for_large_selected_exam():
+    ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
+    ctrl._selected_programs = ["83101"]
+    assert ctrl.feature4_capacity_shortfall() == (40, 75)
+
+
+# ── §7: changing programmes marks results stale and blocks export ─────────────
+
+def test_set_selected_programs_marks_results_stale():
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
+    ctrl.clear_results_stale()
+    assert ctrl.results_stale is False
+
+    ctrl.set_selected_programs(["83101"])
+
+    assert ctrl.results_stale is True
+
+
+def test_export_refuses_stale_results_after_programme_change(tmp_path):
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
+    ctrl.clear_results_stale()
+    ctrl.set_selected_programs(["83101"])
+
+    with pytest.raises(ValueError, match="stale"):
+        ctrl.export({}, tmp_path / "out.txt")
 
 
 # ── load_courses ──────────────────────────────────────────────────────────────
@@ -901,3 +1081,52 @@ def test_selecting_more_than_five_programmes_is_rejected_and_previous_selection_
         "83104",
         "83105",
     ]
+
+
+# ── spec 4.3: missing-StudentCount detection and file-load abort support ──────
+
+def _exam_course(student_count, program="83101", course_id="11111"):
+    return Course(
+        id=course_id,
+        name="Calculus",
+        instructor="Dr. Cohen",
+        evaluation_type="Exam",
+        offerings=[CourseOffering(program, 1, "FALL", "Obligatory", student_count)],
+    )
+
+
+def test_any_exam_missing_student_count_detects_missing_unfiltered():
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(None)]
+
+    # No programmes selected, no periods loaded — still detected (file-load abort).
+    assert ctrl.any_exam_missing_student_count() is True
+
+
+def test_any_exam_missing_student_count_false_when_all_present():
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(40)]
+
+    assert ctrl.any_exam_missing_student_count() is False
+
+
+def test_missing_student_counts_not_vacuous_without_selected_programmes():
+    """HIGH-12: enabling Feature 4 before selecting programmes still flags gaps."""
+    ctrl = DesktopController()
+    ctrl._feature4_enabled = True
+    ctrl._courses = [_exam_course(None)]
+    # No selected programmes — must fall back to the unfiltered check.
+    assert ctrl._selected_programs == []
+    assert ctrl.feature4_missing_student_counts() is True
+
+
+def test_snapshot_and_restore_courses_round_trip():
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(40)]
+    snapshot = ctrl.snapshot_courses()
+
+    ctrl._courses = [_exam_course(None, course_id="22222")]
+    ctrl.restore_courses(snapshot)
+
+    assert [c.id for c in ctrl._courses] == ["11111"]
+    assert ctrl.any_exam_missing_student_count() is False
