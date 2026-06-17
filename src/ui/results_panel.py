@@ -250,6 +250,10 @@ class _ResultsPanel(QWidget):
         for key in set(self._lm_procs) | set(self._lm_timers) | set(self._lm_queues):
             self._cleanup_load_more_state(key, terminate=True)
 
+        # Stop idle persistent load-more workers from the previous result set.
+        # They will be recreated lazily if the user clicks Load More / Auto again.
+        self._controller.shutdown_load_workers()
+
         self._auto_load_periods.clear()
         self._auto_load_modes.clear()
         self._pending_auto_modes.clear()

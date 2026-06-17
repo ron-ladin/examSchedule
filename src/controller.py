@@ -18,6 +18,7 @@ Notes:
 """
 
 import logging
+import multiprocessing
 from collections.abc import Callable, Iterator
 from itertools import chain, islice
 from pathlib import Path
@@ -167,7 +168,7 @@ def _run_generation_process(
     classroom_variant_mode: str = CLASSROOM_VARIANT_MODE_FIRST,
 ) -> None:
     """
-    Entry point for multiprocessing.Process-based schedule generation.
+    Entry point for background-worker schedule generation.
 
     Puts (True, schedules_by_period, courses_by_id, truncated_periods) on success
     or (False, error_message) on failure.
@@ -307,6 +308,35 @@ def _run_classroom_variants_process(
         result_queue.put((False, str(exc)))
 
 
+def _run_load_more_worker(task_queue, result_queue) -> None:
+    """Persistent worker process for ResultsPanel Load More / Auto Load tasks.
+
+    The old implementation opened a fresh multiprocessing.Process for every
+    Load More / Auto Dates / Auto Variants batch. On Windows, each new process
+    can briefly flash a small console window. This worker is started once per
+    period and then reused for subsequent batches, so Auto Load does not create
+    a new Python process for every page.
+    """
+    while True:
+        task = task_queue.get()
+
+        if task is None:
+            return
+
+        try:
+            task_type, args, kwargs = task
+        except ValueError:
+            result_queue.put((False, "Invalid background worker task."))
+            continue
+
+        if task_type == "date_options":
+            _run_generation_process(result_queue, *args, **kwargs)
+        elif task_type == "variants":
+            _run_classroom_variants_process(result_queue, *args, **kwargs)
+        else:
+            result_queue.put((False, f"Unknown background worker task: {task_type}"))
+
+
 class DesktopController:
     """
     Manages application state and orchestrates the scheduling pipeline
@@ -335,6 +365,15 @@ class DesktopController:
         # Cache of the last threshold-valid results, kept so a sort-only change
         # can re-rank in place instead of regenerating from scratch.
         self._last_results: dict[str, list[Schedule]] | None = None
+
+        # Persistent Load More / Auto Load workers.
+        # One worker is kept per period and reused across batches, instead of
+        # opening a new multiprocessing.Process for every Auto batch. This
+        # keeps multiprocessing performance while greatly reducing the number
+        # of short Windows console popups during automatic loading.
+        self._load_worker_tasks: dict[str, multiprocessing.Queue] = {}
+        self._load_worker_results: dict[str, multiprocessing.Queue] = {}
+        self._load_worker_procs: dict[str, multiprocessing.Process] = {}
 
     @property
     def settings(self) -> Settings:
@@ -945,43 +984,124 @@ class DesktopController:
         self._iterator_overflows.clear()
         self._has_more_schedules = {key: True for key in truncated_periods}
 
+    def _get_or_start_load_worker(
+        self,
+        period_key: str,
+    ) -> "tuple[multiprocessing.Queue, multiprocessing.Queue, multiprocessing.Process]":
+        """Return a reusable background worker for one period.
+
+        Starting a multiprocessing process is expensive on Windows and may flash
+        a small console window. Auto Load can request many batches, so this
+        method starts the worker once and keeps it alive for the next batch.
+        """
+        proc = self._load_worker_procs.get(period_key)
+        task_queue = self._load_worker_tasks.get(period_key)
+        result_queue = self._load_worker_results.get(period_key)
+
+        if (
+            proc is not None
+            and task_queue is not None
+            and result_queue is not None
+            and proc.is_alive()
+        ):
+            return task_queue, result_queue, proc
+
+        self._cleanup_load_worker(period_key, terminate=True)
+
+        task_queue = multiprocessing.Queue()
+        result_queue = multiprocessing.Queue()
+        proc = multiprocessing.Process(
+            target=_run_load_more_worker,
+            args=(task_queue, result_queue),
+            daemon=True,
+        )
+        proc.start()
+
+        self._load_worker_tasks[period_key] = task_queue
+        self._load_worker_results[period_key] = result_queue
+        self._load_worker_procs[period_key] = proc
+
+        return task_queue, result_queue, proc
+
+    def _cleanup_load_worker(self, period_key: str, terminate: bool = False) -> None:
+        """Stop and remove one persistent Load More worker."""
+        task_queue = self._load_worker_tasks.pop(period_key, None)
+        result_queue = self._load_worker_results.pop(period_key, None)
+        proc = self._load_worker_procs.pop(period_key, None)
+
+        if task_queue is not None:
+            try:
+                if not terminate:
+                    task_queue.put(None)
+            except Exception:
+                logger.debug("Could not send shutdown task to load worker", exc_info=True)
+
+        if proc is not None:
+            try:
+                if terminate and proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=0.5)
+
+                    if proc.is_alive():
+                        proc.kill()
+                        proc.join(timeout=0.5)
+                else:
+                    proc.join(timeout=0.5)
+            except Exception:
+                logger.debug("Failed cleaning up load worker", exc_info=True)
+
+        for q in (task_queue, result_queue):
+            if q is None:
+                continue
+            try:
+                q.cancel_join_thread()
+            except Exception:
+                pass
+            try:
+                q.close()
+            except Exception:
+                pass
+
+    def shutdown_load_workers(self) -> None:
+        """Stop all persistent Load More / Auto Load workers."""
+        for period_key in list(self._load_worker_procs):
+            self._cleanup_load_worker(period_key, terminate=True)
+
     def start_load_more_date_options_for_period(
         self,
         period_key: str,
         already_loaded_date_options: int,
     ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
-        """Load the next batch of different date options for one period.
+        """Queue the next batch of different date options for one period.
 
-        Feature 4 classroom data is attached using only the first valid
-        classroom/time-slot variant per date schedule. This keeps date loading
-        focused on new date blocks instead of expanding all room variants first.
+        A persistent worker process is reused per period, so Auto Dates does
+        not open a new Python process for every batch.
         """
-        import multiprocessing as _mp
+        task_queue, result_queue, proc = self._get_or_start_load_worker(period_key)
 
-        q: _mp.Queue = _mp.Queue()
-        proc = _mp.Process(
-            target=_run_generation_process,
-            args=(
-                q,
-                list(self._courses),
-                list(self._exam_periods),
-                list(self._selected_programs),
-            ),
-            kwargs={
-                "settings": self._settings,
-                "cap": RESULT_BATCH_SIZE,
-                "period_key": period_key,
-                "offset": already_loaded_date_options,
-                "classrooms": self.engine_classrooms(),
-                "time_slots": self.engine_time_slots(),
-                "proctor_config": self.engine_proctor_config(),
-                "allow_unassigned_classrooms": self._allow_unassigned_classrooms,
-                "classroom_variant_mode": CLASSROOM_VARIANT_MODE_FIRST,
-            },
-            daemon=True,
+        task_queue.put(
+            (
+                "date_options",
+                (
+                    list(self._courses),
+                    list(self._exam_periods),
+                    list(self._selected_programs),
+                ),
+                {
+                    "settings": self._settings,
+                    "cap": RESULT_BATCH_SIZE,
+                    "period_key": period_key,
+                    "offset": already_loaded_date_options,
+                    "classrooms": self.engine_classrooms(),
+                    "time_slots": self.engine_time_slots(),
+                    "proctor_config": self.engine_proctor_config(),
+                    "allow_unassigned_classrooms": self._allow_unassigned_classrooms,
+                    "classroom_variant_mode": CLASSROOM_VARIANT_MODE_FIRST,
+                },
+            )
         )
-        proc.start()
-        return q, proc
+
+        return result_queue, proc
 
     def start_load_variants_for_schedule(
         self,
@@ -989,36 +1109,35 @@ class DesktopController:
         schedule: Schedule,
         already_loaded_variants: int,
     ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
-        """Load the next classroom/time-slot variants for the current dates.
+        """Queue the next classroom/time-slot variants for the current dates.
 
-        The date assignments are fixed from the provided schedule. Only room and
-        slot allocations are expanded.
+        A persistent worker process is reused per period, so Auto Variants does
+        not open a new Python process for every batch.
         """
-        import multiprocessing as _mp
+        task_queue, result_queue, proc = self._get_or_start_load_worker(period_key)
 
-        q: _mp.Queue = _mp.Queue()
-        proc = _mp.Process(
-            target=_run_classroom_variants_process,
-            args=(
-                q,
-                period_key,
-                schedule,
-                list(self._courses),
-                list(self._selected_programs),
-            ),
-            kwargs={
-                "settings": self._settings,
-                "cap": VARIANT_BATCH_SIZE,
-                "offset": already_loaded_variants,
-                "classrooms": self.engine_classrooms(),
-                "time_slots": self.engine_time_slots(),
-                "proctor_config": self.engine_proctor_config(),
-                "allow_unassigned_classrooms": self._allow_unassigned_classrooms,
-            },
-            daemon=True,
+        task_queue.put(
+            (
+                "variants",
+                (
+                    period_key,
+                    schedule,
+                    list(self._courses),
+                    list(self._selected_programs),
+                ),
+                {
+                    "settings": self._settings,
+                    "cap": VARIANT_BATCH_SIZE,
+                    "offset": already_loaded_variants,
+                    "classrooms": self.engine_classrooms(),
+                    "time_slots": self.engine_time_slots(),
+                    "proctor_config": self.engine_proctor_config(),
+                    "allow_unassigned_classrooms": self._allow_unassigned_classrooms,
+                },
+            )
         )
-        proc.start()
-        return q, proc
+
+        return result_queue, proc
 
     def start_load_more_for_period(
         self,
