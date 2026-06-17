@@ -17,13 +17,14 @@ from pathlib import Path
 from queue import Empty as _QueueEmpty
 
 from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QIntValidator
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTabWidget,
@@ -52,6 +53,8 @@ from src.domain.semester import display_semester
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
 
 logger = logging.getLogger(__name__)
+
+_DateSignature = tuple[tuple[str, date], ...]
 
 
 class _CalendarTable(QTableWidget):
@@ -112,6 +115,7 @@ _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇",
 
 _NAV_REPEAT_DELAY_MS = 450
 _NAV_REPEAT_INTERVAL_MS = 120
+AUTO_LOAD_DELAY_MS = 500
 
 
 def _enable_press_and_hold(button: QPushButton) -> None:
@@ -162,11 +166,28 @@ class _ResultsPanel(QWidget):
         self._period_indices: dict[str, int] = {}
         self._truncated_periods: set[str] = set()
 
+        # Navigation cache: date option -> schedule indexes, and index ->
+        # (date option position, variant position). This prevents every button
+        # click from rescanning thousands of loaded schedules.
+        self._date_option_cache: dict[str, list[tuple[_DateSignature, list[int]]]] = {}
+        self._index_nav_cache: dict[str, dict[int, tuple[int, int]]] = {}
+
+        # Date-level navigation: different exam dates.
+        self._date_counter_labels: dict[str, QLabel] = {}
+        self._date_jump_inputs: dict[str, QLineEdit] = {}
+        self._prev_date_btns: dict[str, QPushButton] = {}
+        self._next_date_btns: dict[str, QPushButton] = {}
+
+        # Variant-level navigation: same exam dates, different Feature 4
+        # classroom/time-slot allocations.
         self._counter_labels: dict[str, QLabel] = {}
+        self._variant_jump_inputs: dict[str, QLineEdit] = {}
         self._cal_tables: dict[str, QTableWidget] = {}
         self._prev_btns: dict[str, QPushButton] = {}
         self._next_btns: dict[str, QPushButton] = {}
         self._load_more_btns: dict[str, QPushButton] = {}
+        self._auto_load_btns: dict[str, QPushButton] = {}
+        self._auto_load_periods: set[str] = set()
 
         self._lm_queues: dict[str, multiprocessing.Queue] = {}
         self._lm_chunk_sizes: dict[str, int | None] = {}
@@ -180,11 +201,9 @@ class _ResultsPanel(QWidget):
         self._empty_labels: dict[str, QLabel] = {}
 
         self._has_stale_results: bool = False
-        # §1: never auto-load endlessly. Each "load more" restarts generation and
-        # skips already-loaded schedules via offset, so background auto-loading
-        # gets quadratically more expensive (loading 100k–101k re-skips 100k).
-        # Loading is therefore manual/on-demand: the user clicks "+N more options".
-        self._auto_load_results: bool = False
+        # Per-period Auto Load is user-controlled. It loads one batch, waits
+        # AUTO_LOAD_DELAY_MS, then requests the next batch until there is no more
+        # data or the user presses Stop Auto Load. Never use a blocking while-loop.
         self._stale_banner: QLabel = QLabel()
         self._save_btn: QPushButton = QPushButton()
 
@@ -219,6 +238,8 @@ class _ResultsPanel(QWidget):
         for key in set(self._lm_procs) | set(self._lm_timers) | set(self._lm_queues):
             self._cleanup_load_more_state(key, terminate=True)
 
+        self._auto_load_periods.clear()
+
         self._schedules_by_period = schedules_by_period
         self._courses_by_id = courses_by_id
         self._prog_color_map = prog_color_map
@@ -236,14 +257,23 @@ class _ResultsPanel(QWidget):
 
         self._schedules_by_period = merged
         self._period_indices = {k: 0 for k in merged}
+        self._date_option_cache.clear()
+        self._index_nav_cache.clear()
+        self._rebuild_navigation_cache()
 
         self._period_tabs.clear()
 
+        self._date_counter_labels.clear()
+        self._date_jump_inputs.clear()
+        self._prev_date_btns.clear()
+        self._next_date_btns.clear()
         self._counter_labels.clear()
+        self._variant_jump_inputs.clear()
         self._cal_tables.clear()
         self._prev_btns.clear()
         self._next_btns.clear()
         self._load_more_btns.clear()
+        self._auto_load_btns.clear()
         self._cell_data.clear()
         self._empty_labels.clear()
 
@@ -261,14 +291,21 @@ class _ResultsPanel(QWidget):
         # QGraphicsOpacityEffect caused QPainter warnings and visual flicker.
         self._content.setGraphicsEffect(None)
 
-        if self._auto_load_results:
-            QTimer.singleShot(0, self._start_automatic_loads)
-
     def _start_automatic_loads(self) -> None:
-        """Continue loading every truncated period in the background."""
+        """Start automatic loading for all currently truncated periods.
+
+        This method is kept for compatibility with existing tests and older
+        auto-load behavior. The current UI still uses per-period Auto Load /
+        Stop Auto Load buttons, but tests can call this method directly to
+        start loading every truncated period.
+        """
         for period_key in list(self._truncated_periods):
-            if period_key not in self._lm_procs:
-                self._on_load_more(period_key)
+            if period_key in self._lm_procs:
+                continue
+
+            self._auto_load_periods.add(period_key)
+            self._update_auto_load_button(period_key)
+            self._on_load_more(period_key)
 
     def _setup_ui(self) -> None:
         self.setStyleSheet("background: transparent;")
@@ -348,14 +385,79 @@ class _ResultsPanel(QWidget):
         layout = QVBoxLayout(card)
         layout.setSpacing(8)
 
+        # Top navigation row: date-level schedules.
+        # These buttons skip classroom-only variants and move between schedules
+        # whose exam dates are different. This preserves the original high-level
+        # browsing experience before Feature 4 variants were added.
+        date_nav = QHBoxLayout()
+
+        prev_date_btn = QPushButton("◀  Prev Dates")
+        prev_date_btn.setFixedWidth(120)
+        _enable_press_and_hold(prev_date_btn)
+        prev_date_btn.clicked.connect(
+            lambda _=False, k=period_key: self._go_prev_date_option(k)
+        )
+
+        date_counter = QLabel("Date option: Loading…")
+        date_counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        date_counter.setStyleSheet(
+            "font-weight: 700; color: #334155; font-size: 12px;"
+            "background: rgba(100, 116, 139, 0.08);"
+            "border: 1px solid rgba(100, 116, 139, 0.16);"
+            "border-radius: 10px; padding: 5px 16px;"
+        )
+
+        date_jump_input = QLineEdit()
+        date_jump_input.setFixedWidth(72)
+        date_jump_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        date_jump_input.setPlaceholderText("#")
+        date_jump_input.setValidator(QIntValidator(1, 999999999, self))
+        date_jump_input.setToolTip("Enter a date-option number and press Go.")
+        date_jump_input.setStyleSheet(
+            "QLineEdit { background:white; border:1px solid #CBD5E1;"
+            " border-radius:8px; padding:5px 6px; font-weight:600;"
+            " color:#111827; }"
+            "QLineEdit:focus { border-color:#2563EB; }"
+        )
+        date_jump_input.returnPressed.connect(
+            lambda k=period_key: self._jump_to_date_option(k)
+        )
+
+        date_jump_btn = QPushButton("Go")
+        date_jump_btn.setFixedWidth(44)
+        date_jump_btn.clicked.connect(
+            lambda _=False, k=period_key: self._jump_to_date_option(k)
+        )
+
+        next_date_btn = QPushButton("Next Dates  ▶")
+        next_date_btn.setFixedWidth(120)
+        _enable_press_and_hold(next_date_btn)
+        next_date_btn.clicked.connect(
+            lambda _=False, k=period_key: self._go_next_date_option(k)
+        )
+
+        date_nav.addWidget(prev_date_btn)
+        date_nav.addStretch()
+        date_nav.addWidget(date_counter)
+        date_nav.addSpacing(8)
+        date_nav.addWidget(date_jump_input)
+        date_nav.addWidget(date_jump_btn)
+        date_nav.addStretch()
+        date_nav.addWidget(next_date_btn)
+
+        layout.addLayout(date_nav)
+
+        # Bottom navigation row: Feature 4 variants for the same date schedule.
+        # These buttons move between different classroom/time-slot allocations
+        # while keeping the exam dates unchanged.
         nav = QHBoxLayout()
 
-        prev_btn = QPushButton("◀  Prev")
-        prev_btn.setFixedWidth(90)
+        prev_btn = QPushButton("◀  Prev Variant")
+        prev_btn.setFixedWidth(120)
         _enable_press_and_hold(prev_btn)
         prev_btn.clicked.connect(lambda _=False, k=period_key: self._go_prev_period(k))
 
-        counter = QLabel("Loading…")
+        counter = QLabel("Variant: Loading…")
         counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
         counter.setStyleSheet(
             "font-weight: 700; color: #005ac2; font-size: 13px;"
@@ -364,14 +466,41 @@ class _ResultsPanel(QWidget):
             "border-radius: 10px; padding: 6px 20px;"
         )
 
-        next_btn = QPushButton("Next  ▶")
-        next_btn.setFixedWidth(90)
+        variant_jump_input = QLineEdit()
+        variant_jump_input.setFixedWidth(72)
+        variant_jump_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        variant_jump_input.setPlaceholderText("#")
+        variant_jump_input.setValidator(QIntValidator(1, 999999999, self))
+        variant_jump_input.setToolTip(
+            "Enter a classroom/time-slot variant number for these dates and press Go."
+        )
+        variant_jump_input.setStyleSheet(
+            "QLineEdit { background:white; border:1px solid #CBD5E1;"
+            " border-radius:8px; padding:5px 6px; font-weight:600;"
+            " color:#111827; }"
+            "QLineEdit:focus { border-color:#2563EB; }"
+        )
+        variant_jump_input.returnPressed.connect(
+            lambda k=period_key: self._jump_to_variant(k)
+        )
+
+        variant_jump_btn = QPushButton("Go")
+        variant_jump_btn.setFixedWidth(44)
+        variant_jump_btn.clicked.connect(
+            lambda _=False, k=period_key: self._jump_to_variant(k)
+        )
+
+        next_btn = QPushButton("Next Variant  ▶")
+        next_btn.setFixedWidth(120)
         _enable_press_and_hold(next_btn)
         next_btn.clicked.connect(lambda _=False, k=period_key: self._go_next_period(k))
 
         nav.addWidget(prev_btn)
         nav.addStretch()
         nav.addWidget(counter)
+        nav.addSpacing(8)
+        nav.addWidget(variant_jump_input)
+        nav.addWidget(variant_jump_btn)
         nav.addStretch()
         nav.addWidget(next_btn)
 
@@ -388,10 +517,22 @@ class _ResultsPanel(QWidget):
             "padding: 6px 12px; font-size: 11px; font-weight: 600;"
             "background: rgba(0, 90, 194, 0.06);"
         )
-        chunk_btn.setVisible(has_more and not self._auto_load_results)
+        chunk_btn.setVisible(has_more)
         chunk_btn.clicked.connect(lambda _=False, k=period_key: self._on_load_more(k))
 
+        auto_btn = QPushButton("⚡  Auto Load")
+        auto_btn.setStyleSheet(
+            "color: #047857; border: 2px solid #047857; border-radius: 8px;"
+            "padding: 6px 12px; font-size: 11px; font-weight: 700;"
+            "background: rgba(4, 120, 87, 0.07);"
+        )
+        auto_btn.setVisible(has_more)
+        auto_btn.clicked.connect(
+            lambda _=False, k=period_key: self._toggle_auto_load(k)
+        )
+
         lm_row.addWidget(chunk_btn)
+        lm_row.addWidget(auto_btn)
         lm_row.addStretch()
 
         layout.addLayout(lm_row)
@@ -429,12 +570,18 @@ class _ResultsPanel(QWidget):
         empty_lbl.setVisible(False)
         layout.addWidget(empty_lbl)
 
+        self._date_counter_labels[period_key] = date_counter
+        self._date_jump_inputs[period_key] = date_jump_input
+        self._prev_date_btns[period_key] = prev_date_btn
+        self._next_date_btns[period_key] = next_date_btn
         self._counter_labels[period_key] = counter
+        self._variant_jump_inputs[period_key] = variant_jump_input
         self._cal_tables[period_key] = table
         self._empty_labels[period_key] = empty_lbl
         self._prev_btns[period_key] = prev_btn
         self._next_btns[period_key] = next_btn
         self._load_more_btns[period_key] = chunk_btn
+        self._auto_load_btns[period_key] = auto_btn
 
         table.calendarCellClicked.connect(
             lambda row, col, pos, k=period_key: self._on_cell_clicked(
@@ -445,39 +592,199 @@ class _ResultsPanel(QWidget):
         self._refresh_period_card(period_key)
         return card
 
+    @staticmethod
+    def _date_signature(schedule: Schedule) -> _DateSignature:
+        """Date-only identity of a schedule, ignoring Feature 4 variants."""
+        return tuple(sorted(schedule.assignments.items()))
+
+    def _rebuild_navigation_cache(self, period_key: str | None = None) -> None:
+        """Build fast navigation indexes for loaded schedules.
+
+        Without this cache, every click on Next Dates, Next Variant, or Go
+        scans the entire loaded schedule list. After Auto Load reaches thousands
+        of schedules, that scan becomes noticeable. This cache is rebuilt after
+        initial load and after each Load More batch, so button clicks are O(1)
+        for the common navigation work.
+        """
+        keys = [period_key] if period_key is not None else list(self._schedules_by_period)
+
+        for key in keys:
+            options: list[tuple[_DateSignature, list[int]]] = []
+            signature_to_pos: dict[_DateSignature, int] = {}
+            index_nav: dict[int, tuple[int, int]] = {}
+
+            for idx, schedule in enumerate(self._schedules_by_period.get(key, [])):
+                signature = self._date_signature(schedule)
+                date_pos = signature_to_pos.get(signature)
+
+                if date_pos is None:
+                    date_pos = len(options)
+                    signature_to_pos[signature] = date_pos
+                    options.append((signature, []))
+
+                variant_indices = options[date_pos][1]
+                variant_pos = len(variant_indices)
+                variant_indices.append(idx)
+                index_nav[idx] = (date_pos, variant_pos)
+
+            self._date_option_cache[key] = options
+            self._index_nav_cache[key] = index_nav
+
+    def _date_options_for_period(
+        self,
+        period_key: str,
+    ) -> list[tuple[_DateSignature, list[int]]]:
+        """Return cached date options, rebuilding if the cache is missing/stale."""
+        schedules_count = len(self._schedules_by_period.get(period_key, []))
+        cached_indexes_count = len(self._index_nav_cache.get(period_key, {}))
+
+        if (
+            period_key not in self._date_option_cache
+            or cached_indexes_count != schedules_count
+        ):
+            self._rebuild_navigation_cache(period_key)
+
+        return self._date_option_cache.get(period_key, [])
+
+    def _nav_position_for_index(
+        self,
+        period_key: str,
+        idx: int,
+    ) -> tuple[int, int] | None:
+        """Return (date option position, variant position) for a schedule index."""
+        schedules_count = len(self._schedules_by_period.get(period_key, []))
+        cached_indexes_count = len(self._index_nav_cache.get(period_key, {}))
+
+        if (
+            period_key not in self._index_nav_cache
+            or cached_indexes_count != schedules_count
+        ):
+            self._rebuild_navigation_cache(period_key)
+
+        return self._index_nav_cache.get(period_key, {}).get(idx)
+
+    def _ordered_date_signatures(self, period_key: str) -> list[_DateSignature]:
+        """Return loaded date-level schedule options in first-seen order."""
+        return [
+            signature
+            for signature, _indices in self._date_options_for_period(period_key)
+        ]
+
+    def _indices_for_signature(
+        self,
+        period_key: str,
+        signature: _DateSignature,
+    ) -> list[int]:
+        """Return loaded schedule indexes that share the same exam dates."""
+        for cached_signature, indices in self._date_options_for_period(period_key):
+            if cached_signature == signature:
+                return indices
+        return []
+
     def _refresh_period_card(self, period_key: str) -> None:
         schedules = self._schedules_by_period[period_key]
-        idx = self._period_indices[period_key]
         total = len(schedules)
         has_more = self._controller.has_more_schedules(period_key)
 
-        known_total = self._total_by_period.get(period_key)
-        display_total = known_total if known_total is not None else total
+        # The navigation cache should already be current after load/load-more,
+        # but this keeps the method safe if tests mutate schedules directly.
+        options = self._date_options_for_period(period_key)
+        index_nav = self._index_nav_cache.get(period_key, {})
 
-        if total == 0:
-            nav_text = "0 / 0"
+        if total > 0:
+            idx = self._period_indices.get(period_key, 0)
+            if idx < 0 or idx >= total:
+                idx = 0
+                self._period_indices[period_key] = idx
+
+            nav_pos = index_nav.get(idx)
+            if nav_pos is None:
+                self._rebuild_navigation_cache(period_key)
+                options = self._date_options_for_period(period_key)
+                index_nav = self._index_nav_cache.get(period_key, {})
+                nav_pos = index_nav.get(idx)
+        else:
+            idx = 0
+            nav_pos = None
+
+        if total == 0 or nav_pos is None or not options:
+            date_nav_text = "Date option: 0 / 0"
+            variant_nav_text = "Variant: 0 / 0"
+            same_date_indices: list[int] = []
+            date_option_pos = -1
+            variant_pos = -1
+
             if period_key in self._empty_labels:
                 self._empty_labels[period_key].setVisible(True)
                 self._cal_tables[period_key].setVisible(False)
         else:
-            nav_text = f"{idx + 1:,} / {display_total:,}"
+            date_option_pos, variant_pos = nav_pos
+            same_date_indices = options[date_option_pos][1]
+
+            date_total_text = f"{len(options):,}"
+            if has_more:
+                date_total_text += "+"
+
+            date_nav_text = (
+                f"Date option: {date_option_pos + 1:,} / {date_total_text}"
+            )
+            variant_nav_text = (
+                f"Variant for these dates: {variant_pos + 1:,} / {len(same_date_indices):,}"
+            )
+
             if period_key in self._empty_labels:
                 self._empty_labels[period_key].setVisible(False)
                 self._cal_tables[period_key].setVisible(True)
 
-        self._counter_labels[period_key].setText(nav_text)
-        self._prev_btns[period_key].setEnabled(idx > 0)
-        self._next_btns[period_key].setEnabled(idx < total - 1 or has_more)
+        self._date_counter_labels[period_key].setText(date_nav_text)
+        self._counter_labels[period_key].setText(variant_nav_text)
+
+        if period_key in self._date_jump_inputs:
+            self._date_jump_inputs[period_key].setEnabled(total > 0)
+            self._date_jump_inputs[period_key].setPlaceholderText(
+                str(date_option_pos + 1) if total > 0 and date_option_pos >= 0 else "#"
+            )
+
+        if period_key in self._variant_jump_inputs:
+            self._variant_jump_inputs[period_key].setEnabled(total > 0)
+            self._variant_jump_inputs[period_key].setPlaceholderText(
+                str(variant_pos + 1) if total > 0 and variant_pos >= 0 else "#"
+            )
+
+        self._prev_date_btns[period_key].setEnabled(total > 0 and date_option_pos > 0)
+        self._next_date_btns[period_key].setEnabled(
+            total > 0 and (date_option_pos < len(options) - 1 or has_more)
+        )
+
+        if total > 0 and same_date_indices:
+            self._prev_btns[period_key].setEnabled(variant_pos > 0)
+            self._next_btns[period_key].setEnabled(
+                variant_pos < len(same_date_indices) - 1
+            )
+        else:
+            self._prev_btns[period_key].setEnabled(False)
+            self._next_btns[period_key].setEnabled(False)
 
         if period_key in self._load_more_btns:
-            self._load_more_btns[period_key].setVisible(
-                has_more and not self._auto_load_results
+            self._load_more_btns[period_key].setVisible(has_more)
+            self._load_more_btns[period_key].setEnabled(
+                has_more
+                and period_key not in self._lm_procs
+                and period_key not in self._auto_load_periods
             )
+
+        if period_key in self._auto_load_btns:
+            if not has_more:
+                self._auto_load_periods.discard(period_key)
+            self._auto_load_btns[period_key].setVisible(
+                has_more or period_key in self._auto_load_periods
+            )
+            self._update_auto_load_button(period_key)
 
         if schedules:
             self._populate_calendar(
                 self._cal_tables[period_key],
-                schedules[idx],
+                schedules[self._period_indices[period_key]],
                 period_key,
             )
         else:
@@ -487,34 +794,254 @@ class _ResultsPanel(QWidget):
 
         self._update_summary()
 
+    @staticmethod
+    def _parse_jump_number(text: str) -> int | None:
+        """Parse a 1-based positive jump number from a QLineEdit."""
+        stripped = text.strip()
+        if not stripped:
+            return None
+        try:
+            value = int(stripped)
+        except ValueError:
+            return None
+        return value if value >= 1 else None
+
+    def _jump_to_date_option(self, period_key: str) -> None:
+        """Jump to a loaded date-level schedule option by 1-based number."""
+        schedules = self._schedules_by_period.get(period_key, [])
+        jump_input = self._date_jump_inputs.get(period_key)
+        target = self._parse_jump_number(jump_input.text() if jump_input else "")
+
+        if target is None:
+            self._show_message(
+                "Invalid Date Option",
+                "Enter a valid date-option number.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        if not schedules:
+            self._show_message(
+                "No Date Options",
+                "There are no schedules for this period.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        options = self._date_options_for_period(period_key)
+        if target > len(options):
+            extra = ""
+            if self._controller.has_more_schedules(period_key):
+                extra = "\n\nMore results may exist. Click '+ more options' and try again."
+            self._show_message(
+                "Date Option Not Found",
+                f"There is no loaded date option #{target:,} for this period.{extra}",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        self._period_indices[period_key] = options[target - 1][1][0]
+        if jump_input is not None:
+            jump_input.clear()
+        self._refresh_period_card(period_key)
+
+    def _jump_to_variant(self, period_key: str) -> None:
+        """Jump to a classroom/time-slot variant for the current date option."""
+        schedules = self._schedules_by_period.get(period_key, [])
+        jump_input = self._variant_jump_inputs.get(period_key)
+        target = self._parse_jump_number(jump_input.text() if jump_input else "")
+
+        if target is None:
+            self._show_message(
+                "Invalid Variant",
+                "Enter a valid variant number.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        if not schedules:
+            self._show_message(
+                "No Variants",
+                "There are no schedules for this period.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        idx = self._period_indices[period_key]
+        nav_pos = self._nav_position_for_index(period_key, idx)
+        options = self._date_options_for_period(period_key)
+
+        if nav_pos is None:
+            self._show_message(
+                "Variant Not Found",
+                "The current schedule variant could not be found.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        date_pos, _variant_pos = nav_pos
+        same_date_indices = options[date_pos][1]
+
+        if target > len(same_date_indices):
+            self._show_message(
+                "Variant Not Found",
+                f"There is no variant #{target:,} for the current date option.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        self._period_indices[period_key] = same_date_indices[target - 1]
+        if jump_input is not None:
+            jump_input.clear()
+        self._refresh_period_card(period_key)
+
     def _go_prev_period(self, period_key: str) -> None:
-        if self._period_indices[period_key] > 0:
-            self._period_indices[period_key] -= 1
+        """Move to the previous classroom/time-slot variant for the same dates."""
+        schedules = self._schedules_by_period.get(period_key, [])
+        if not schedules:
+            return
+
+        idx = self._period_indices[period_key]
+        nav_pos = self._nav_position_for_index(period_key, idx)
+        if nav_pos is None:
+            return
+
+        date_pos, variant_pos = nav_pos
+        same_date_indices = self._date_options_for_period(period_key)[date_pos][1]
+
+        if variant_pos > 0:
+            self._period_indices[period_key] = same_date_indices[variant_pos - 1]
             self._refresh_period_card(period_key)
 
     def _go_next_period(self, period_key: str) -> None:
-        idx = self._period_indices[period_key]
-        target = idx + 1
-        schedules = self._schedules_by_period[period_key]
+        """Move to the next classroom/time-slot variant for the same dates."""
+        schedules = self._schedules_by_period.get(period_key, [])
+        if not schedules:
+            return
 
-        if target >= len(schedules) and self._controller.has_more_schedules(period_key):
+        idx = self._period_indices[period_key]
+        nav_pos = self._nav_position_for_index(period_key, idx)
+        if nav_pos is None:
+            return
+
+        date_pos, variant_pos = nav_pos
+        same_date_indices = self._date_options_for_period(period_key)[date_pos][1]
+
+        if variant_pos < len(same_date_indices) - 1:
+            self._period_indices[period_key] = same_date_indices[variant_pos + 1]
+            self._refresh_period_card(period_key)
+
+    def _go_prev_date_option(self, period_key: str) -> None:
+        """Move to the previous date-level schedule option."""
+        schedules = self._schedules_by_period.get(period_key, [])
+        if not schedules:
+            return
+
+        idx = self._period_indices[period_key]
+        nav_pos = self._nav_position_for_index(period_key, idx)
+        if nav_pos is None:
+            return
+
+        date_pos, _variant_pos = nav_pos
+        if date_pos <= 0:
+            return
+
+        options = self._date_options_for_period(period_key)
+        self._period_indices[period_key] = options[date_pos - 1][1][0]
+        self._refresh_period_card(period_key)
+
+    def _go_next_date_option(self, period_key: str) -> None:
+        """Move to the next schedule whose exam dates are different."""
+        schedules = self._schedules_by_period.get(period_key, [])
+        if not schedules:
+            return
+
+        idx = self._period_indices[period_key]
+        nav_pos = self._nav_position_for_index(period_key, idx)
+        if nav_pos is None:
+            return
+
+        date_pos, _variant_pos = nav_pos
+        options = self._date_options_for_period(period_key)
+
+        if date_pos < len(options) - 1:
+            self._period_indices[period_key] = options[date_pos + 1][1][0]
+            self._refresh_period_card(period_key)
+            return
+
+        if self._controller.has_more_schedules(period_key):
             self._lm_advance_after_load.add(period_key)
             self._on_load_more(period_key)
             return
 
-        if target < len(schedules):
-            self._period_indices[period_key] = target
+    def _toggle_auto_load(self, period_key: str) -> None:
+        """Start/stop delayed automatic Load More for one period.
 
-        remaining_loaded = len(schedules) - self._period_indices[period_key] - 1
+        Stop does not kill the currently running batch; it prevents scheduling
+        the next one after the current batch finishes.
+        """
+        if period_key in self._auto_load_periods:
+            self._auto_load_periods.remove(period_key)
+            self._update_auto_load_button(period_key)
+            self._refresh_period_card(period_key)
+            return
 
-        if (
-            remaining_loaded <= 100
-            and self._controller.has_more_schedules(period_key)
-            and period_key not in self._lm_procs
-        ):
-            self._on_load_more(period_key)
+        if not self._controller.has_more_schedules(period_key):
+            self._show_message(
+                "No More Results",
+                "There are no more options to load for this period.",
+                QMessageBox.Icon.Information,
+            )
+            return
 
-        self._refresh_period_card(period_key)
+        self._auto_load_periods.add(period_key)
+        self._update_auto_load_button(period_key)
+        self._auto_load_next_batch(period_key)
+
+    def _auto_load_next_batch(self, period_key: str) -> None:
+        """Request the next batch if Auto Load is still active for this period."""
+        if period_key not in self._auto_load_periods:
+            self._update_auto_load_button(period_key)
+            return
+
+        if period_key in self._lm_procs:
+            return
+
+        if not self._controller.has_more_schedules(period_key):
+            self._auto_load_periods.discard(period_key)
+            self._update_auto_load_button(period_key)
+            self._refresh_period_card(period_key)
+            return
+
+        self._on_load_more(period_key)
+
+    def _update_auto_load_button(self, period_key: str) -> None:
+        """Refresh the Auto Load / Stop Auto Load button text and state."""
+        btn = self._auto_load_btns.get(period_key)
+        if btn is None:
+            return
+
+        is_auto = period_key in self._auto_load_periods
+        is_loading = period_key in self._lm_procs
+        has_more = self._controller.has_more_schedules(period_key)
+
+        if is_auto:
+            btn.setText("⏹  Stop Auto Load")
+            btn.setStyleSheet(
+                "color: #B91C1C; border: 2px solid #B91C1C; border-radius: 8px;"
+                "padding: 6px 12px; font-size: 11px; font-weight: 700;"
+                "background: rgba(185, 28, 28, 0.07);"
+            )
+            btn.setEnabled(True)
+            return
+
+        btn.setText("⚡  Auto Load")
+        btn.setStyleSheet(
+            "color: #047857; border: 2px solid #047857; border-radius: 8px;"
+            "padding: 6px 12px; font-size: 11px; font-weight: 700;"
+            "background: rgba(4, 120, 87, 0.07);"
+        )
+        btn.setEnabled(has_more and not is_loading)
 
     def _on_load_more(self, period_key: str, chunk_size: int | None = None) -> None:
         if period_key in self._lm_procs:
@@ -529,9 +1056,12 @@ class _ResultsPanel(QWidget):
         self._lm_chunk_sizes[period_key] = RESULT_BATCH_SIZE
 
         btn = self._load_more_btns.get(period_key)
-        if btn is not None and not self._auto_load_results:
+        if btn is not None:
             btn.setEnabled(False)
-            btn.setText(f"⠋  Loading {RESULT_BATCH_SIZE:,}…")
+            if period_key not in self._auto_load_periods:
+                btn.setText(f"⠋  Loading {RESULT_BATCH_SIZE:,}…")
+
+        self._update_auto_load_button(period_key)
 
         timer = QTimer(self)
         timer.timeout.connect(lambda: self._poll_load_more(period_key))
@@ -552,7 +1082,7 @@ class _ResultsPanel(QWidget):
         self._lm_ticks[period_key] = tick + 1
 
         btn = self._load_more_btns.get(period_key)
-        if btn and not self._auto_load_results:
+        if btn and period_key not in self._auto_load_periods:
             btn.setText(f"{spinner}  Loading {RESULT_BATCH_SIZE:,}…")
 
         try:
@@ -563,9 +1093,12 @@ class _ResultsPanel(QWidget):
             # If the subprocess already ended and no result arrived, recover the UI
             # instead of leaving the button disabled forever.
             if proc is not None and not proc.is_alive() and tick > 2:
-                if btn and not self._auto_load_results:
+                if btn:
                     btn.setEnabled(True)
                     btn.setText("⚠  Load failed — retry")
+
+                self._auto_load_periods.discard(period_key)
+                self._update_auto_load_button(period_key)
 
                 logger.error(
                     "Load more process ended without returning a result for %s",
@@ -575,9 +1108,12 @@ class _ResultsPanel(QWidget):
 
             return
         except OSError as exc:
-            if btn and not self._auto_load_results:
+            if btn:
                 btn.setEnabled(True)
                 btn.setText("⚠  Load failed — retry")
+
+            self._auto_load_periods.discard(period_key)
+            self._update_auto_load_button(period_key)
 
             logger.error("Load more queue failed for %s: %s", period_key, exc)
             self._cleanup_load_more_state(period_key, terminate=True)
@@ -601,9 +1137,12 @@ class _ResultsPanel(QWidget):
                 else result
             )
 
-            if btn and not self._auto_load_results:
+            if btn:
                 btn.setEnabled(True)
                 btn.setText("⚠  Load failed — retry")
+
+            self._auto_load_periods.discard(period_key)
+            self._update_auto_load_button(period_key)
 
             logger.error("Load more failed for %s: %s", period_key, error_details)
             self._cleanup_load_more_state(period_key, terminate=True)
@@ -615,17 +1154,29 @@ class _ResultsPanel(QWidget):
         extra = all_by_period.get(period_key, [])
         still_more = period_key in truncated_periods
 
+        should_advance_to_next_date = period_key in self._lm_advance_after_load
+
         if extra:
             self._schedules_by_period[period_key].extend(extra)
+            self._rebuild_navigation_cache(period_key)
             # Keep _last_results in sync so resort() includes load-more schedules
             # (C2 fix: previously _last_results was never updated on load-more,
             # causing a subsequent re-sort to silently drop the appended batch).
             self._controller.cache_generated_results(dict(self._schedules_by_period))
 
-        if period_key in self._lm_advance_after_load:
+        if should_advance_to_next_date:
             self._lm_advance_after_load.discard(period_key)
+            options = self._date_options_for_period(period_key)
+            current_idx = self._period_indices.get(period_key, 0)
+            nav_pos = self._nav_position_for_index(period_key, current_idx)
 
-            if extra and old_len < len(self._schedules_by_period[period_key]):
+            if nav_pos is not None:
+                date_pos, _variant_pos = nav_pos
+                if date_pos < len(options) - 1:
+                    self._period_indices[period_key] = options[date_pos + 1][1][0]
+                elif extra and old_len < len(self._schedules_by_period[period_key]):
+                    self._period_indices[period_key] = old_len
+            elif extra and old_len < len(self._schedules_by_period[period_key]):
                 self._period_indices[period_key] = old_len
 
         self._controller.set_has_more_for_period(period_key, still_more)
@@ -641,12 +1192,20 @@ class _ResultsPanel(QWidget):
         self._cleanup_load_more_state(period_key)
         self._refresh_period_card(period_key)
 
-        if still_more and btn and not self._auto_load_results:
-            btn.setEnabled(True)
+        if still_more and btn:
+            btn.setEnabled(period_key not in self._auto_load_periods)
             btn.setText(f"⟳  +{RESULT_BATCH_SIZE:,} more options")
 
-        if self._auto_load_results and still_more and extra:
-            QTimer.singleShot(50, lambda k=period_key: self._on_load_more(k))
+        if period_key in self._auto_load_periods:
+            if still_more and extra:
+                QTimer.singleShot(
+                    AUTO_LOAD_DELAY_MS,
+                    lambda k=period_key: self._auto_load_next_batch(k),
+                )
+            else:
+                self._auto_load_periods.discard(period_key)
+
+        self._update_auto_load_button(period_key)
 
     def _cleanup_load_more_state(
         self,
