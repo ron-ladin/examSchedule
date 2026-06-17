@@ -445,3 +445,43 @@ def test_assigner_leaves_no_silent_empty_assignment_on_distribution_failure():
     assert allowed is not None
     assert allowed.classroom_assignments["11111"] == []
     assert allowed.unassigned_classroom_exams == {"11111": 40}
+
+
+# ── H1: multi-offering exam uses primary (largest) offering as representative ──
+
+def test_assigner_uses_primary_offering_for_multi_offering_course():
+    """H1 fix: for a course with multiple offerings, exam field must reference
+    the offering with the most students, not always offerings[0]."""
+    # Two offerings: small first, large second — so offerings[0] is the small one.
+    small_offering = CourseOffering("83101", 1, "FALL", "Obligatory", 10)
+    large_offering = CourseOffering("83102", 1, "FALL", "Obligatory", 60)
+
+    course = Course(
+        "77777",
+        "Multi Program Exam",
+        "Dr. Test",
+        "Exam",
+        [small_offering, large_offering],
+    )
+
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 5))])
+    schedule = Schedule(period, {"77777": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [course],
+        ["83101", "83102"],
+        [Classroom("Room 1", 100)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    assert assigned is not None
+    rooms = assigned.classroom_assignments["77777"]
+    assert len(rooms) == 1
+    # The representative offering must be the LARGE one (60 students), not small (10)
+    assert rooms[0].exam is large_offering, (
+        "Expected primary_offering to be the largest offering, "
+        f"but got {rooms[0].exam}"
+    )
+    assert rooms[0].exam is not small_offering

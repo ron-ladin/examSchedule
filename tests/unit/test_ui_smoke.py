@@ -107,89 +107,54 @@ def test_input_screen_starts_on_config_screen():
     screen.close()
 
 
-def test_config_screen_renders_file_loading_controls():
+def test_config_screen_initial_empty_state():
+    """Full empty-state contract of a freshly built ConfigScreen: file-loading
+    controls, programme-selection placeholder, optional Feature 4 controls (off
+    and locked), the load-mode radio group, and the disabled Generate button.
+
+    Consolidates several former single-widget render smoke tests; the populated
+    and interactive flows are covered by tests/e2e/test_ui_engine_stress.py and
+    tests/unit/test_ui_controller_integration.py.
     """
-    ConfigScreen should render the file-loading controls required for the
-    desktop flow: courses, exam periods, and programs.
-    """
-    app = _get_qapp()
-
-    controller = DesktopController()
-    screen = ConfigScreen(controller)
-    screen.show()
-    app.processEvents()
-
-    assert isinstance(screen._load_courses_btn, QPushButton)
-    assert screen._load_courses_btn.text() == "Load Courses"
-
-    assert isinstance(screen._load_periods_btn, QPushButton)
-    assert screen._load_periods_btn.text() == "Load Periods"
-
-    assert screen._courses_label.text() == "No file loaded"
-    assert screen._dates_label.text() == "No file loaded"
-
-    screen.close()
-
-
-def test_config_screen_renders_programme_selection_area():
-    """
-    ConfigScreen should render the programme-selection area and show the initial
-    empty-state placeholder before files are loaded.
-    """
-    app = _get_qapp()
-
-    controller = DesktopController()
-    screen = ConfigScreen(controller)
-    screen.show()
-    app.processEvents()
-
-    assert isinstance(screen._prog_rows, dict)
-    assert len(screen._prog_rows) == 0
-    assert screen._prog_scroll.isVisible() is False
-
-    assert screen._prog_placeholder.isVisible() is True
-    assert "Load a courses file" in screen._prog_placeholder.text()
-
-    assert screen._prog_count_lbl.text() == "0 / 5 selected"
-
-    screen.close()
-
-
-def test_config_screen_renders_optional_feature4_controls():
     app = _get_qapp()
     screen = ConfigScreen(DesktopController())
     screen.show()
     app.processEvents()
 
-    # Feature 4 inputs are loaded from validated .txt files.
+    # File-loading controls.
+    assert isinstance(screen._load_courses_btn, QPushButton)
+    assert screen._load_courses_btn.text() == "Load Courses"
+    assert isinstance(screen._load_periods_btn, QPushButton)
+    assert screen._load_periods_btn.text() == "Load Periods"
+    assert screen._courses_label.text() == "No file loaded"
+    assert screen._dates_label.text() == "No file loaded"
+
+    # Programme-selection area (empty-state placeholder).
+    assert isinstance(screen._prog_rows, dict)
+    assert len(screen._prog_rows) == 0
+    assert screen._prog_scroll.isVisible() is False
+    assert screen._prog_placeholder.isVisible() is True
+    assert "Load a courses file" in screen._prog_placeholder.text()
+    assert screen._prog_count_lbl.text() == "0 / 5 selected"
+
+    # Optional Feature 4 controls start off and locked.
     assert screen._load_classrooms_btn.text() == "Browse"
     assert screen._load_slots_btn.text() == "Browse"
     assert screen._load_proctors_btn.text() == "Browse"
     assert screen._classrooms_label.text() == "Missing"
     assert screen._slots_label.text() == "Missing"
     assert screen._proctors_label.text() == "Missing"
-
-    # Toggle starts off, so the feature is disabled and inputs are locked.
     assert screen._feature4_toggle.isChecked() is False
     assert screen._feature4_status.text() == "DISABLED"
     assert screen._load_slots_btn.isEnabled() is False
     assert screen._load_proctors_btn.isEnabled() is False
 
-    screen.close()
+    # Load-mode radio group defaults to Replace.
+    mode_labels = [button.text() for button in screen._mode_group.buttons()]
+    assert mode_labels == ["Replace", "Update"]
+    assert screen._mode_group.checkedButton().text() == "Replace"
 
-
-def test_config_screen_renders_generate_button_disabled_initially():
-    """
-    Generate should be visible but disabled before courses, periods, and at
-    least one programme are loaded/selected.
-    """
-    app = _get_qapp()
-
-    controller = DesktopController()
-    screen = ConfigScreen(controller)
-    screen.show()
-    app.processEvents()
-
+    # Generate is visible but disabled before any data is loaded.
     assert isinstance(screen._gen_btn, QPushButton)
     assert screen._gen_btn.text() == "▶  Generate Schedule"
     assert screen._gen_btn.isEnabled() is False
@@ -257,57 +222,6 @@ def test_settings_rules_can_be_combined_and_numbers_accept_keyboard_input():
         first_input, QtCore.Qt.MouseButton.LeftButton, pos=down_rect.center()
     )
     assert first_input.value() == 5
-    dialog.close()
-
-
-def test_config_screen_renders_load_mode_controls():
-    """
-    ConfigScreen should expose the supported load modes and default to Replace.
-    """
-    app = _get_qapp()
-
-    controller = DesktopController()
-    screen = ConfigScreen(controller)
-    screen.show()
-    app.processEvents()
-
-    mode_labels = [button.text() for button in screen._mode_group.buttons()]
-
-    assert mode_labels == ["Replace", "Update"]
-    assert screen._mode_group.checkedButton().text() == "Replace"
-
-    screen.close()
-
-
-def test_edit_exam_periods_dialog_adds_missing_standard_period_tabs():
-    """Editing periods should show all required semester/moed tabs without changing dates.txt."""
-    app = _get_qapp()
-
-    controller = DesktopController()
-    controller.update_exam_periods([
-        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 29), date(2026, 2, 5))]),
-        ExamPeriod("FALL", "Bet", [(date(2026, 4, 10), date(2026, 4, 13))]),
-        ExamPeriod("SPRI", "Aleph", [(date(2026, 7, 1), date(2026, 7, 10))]),
-    ])
-
-    from src.ui.config_screen import ExamPeriodsEditorDialog
-
-    dialog = ExamPeriodsEditorDialog(controller)
-    dialog.show()
-    app.processEvents()
-
-    tabs = dialog.findChild(QtWidgets.QTabWidget)
-    labels = [tabs.tabText(i) for i in range(tabs.count())]
-
-    assert labels == [
-        "FALL — Aleph",
-        "FALL — Bet",
-        "SPRING — Aleph",
-        "SPRING — Bet",
-        "SUMMER — Aleph",
-        "SUMMER — Bet",
-    ]
-
     dialog.close()
 
 

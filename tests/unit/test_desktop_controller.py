@@ -85,30 +85,28 @@ def _active_feature4_controller(total_capacity: int, student_count: int) -> Desk
     return ctrl
 
 
-def test_feature4_capacity_shortfall_returns_totals_when_capacity_is_low():
-    ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
-
-    assert ctrl.feature4_capacity_shortfall() == (40, 75)
-
-
-def test_feature4_capacity_shortfall_is_none_when_capacity_is_sufficient():
-    ctrl = _active_feature4_controller(total_capacity=100, student_count=75)
-
-    assert ctrl.feature4_capacity_shortfall() is None
-
-
-def test_feature4_capacity_shortfall_is_none_when_feature_is_inactive():
-    ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
-    ctrl.clear_proctor_config()
-
-    assert ctrl.feature4_capacity_shortfall() is None
-
-
-def test_feature4_capacity_shortfall_is_none_when_toggle_disabled():
-    ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
-    ctrl.set_feature4_enabled(False)
-
-    assert ctrl.feature4_capacity_shortfall() is None
+@pytest.mark.parametrize(
+    "capacity, mutate, expected",
+    [
+        # Capacity below the largest exam -> warn with (capacity, largest).
+        (40, None, (40, 75)),
+        # Sufficient capacity -> no warning.
+        (100, None, None),
+        # Feature 4 inactive (no proctor config) -> no warning regardless of capacity.
+        (40, "clear_proctor_config", None),
+        # Toggle disabled -> no warning even with files loaded.
+        (40, "disable_toggle", None),
+    ],
+    ids=["low_capacity_warns", "sufficient_none", "inactive_none", "toggle_off_none"],
+)
+def test_feature4_capacity_shortfall_branches(capacity, mutate, expected):
+    """Spec 4.4 pre-generation capacity warning across all gating branches."""
+    ctrl = _active_feature4_controller(total_capacity=capacity, student_count=75)
+    if mutate == "clear_proctor_config":
+        ctrl.clear_proctor_config()
+    elif mutate == "disable_toggle":
+        ctrl.set_feature4_enabled(False)
+    assert ctrl.feature4_capacity_shortfall() == expected
 
 
 def test_feature4_capacity_compares_largest_single_exam_not_sum():
@@ -947,112 +945,12 @@ def test_rapid_generate_back_generate_again_does_not_corrupt_state(tmp_path):
     assert out_new.stat().st_size > 0
 
 
-# ── SCRUM-261: threshold filter + sort wiring ─────────────────────────────────
-
-def test_generate_applies_threshold_filter_and_excludes_invalid_schedules(tmp_path):
-    """
-    When an enabled threshold (MIN_DAYS_BETWEEN_MANDATORY_EXAMS=5) is configured,
-    generate() should return only schedules that satisfy it.
-
-    Two obligatory courses in the same programme + a 5-day window (Jan 5-9)
-    produces 20 raw schedules (5*4). With MIN_DAYS_BETWEEN_MANDATORY_EXAMS=5
-    only the pairs that are at least 5 days apart survive — but the window is
-    only 4 days wide so NO schedule satisfies the constraint.  We verify the
-    result is empty instead of 20.
-    """
-    from src.domain.settings import Settings
-    from src.domain.sorting import SortingConfig
-    from src.domain.threshold import Criterion, ThresholdEntry, ThresholdSettings
-
-    cp = tmp_path / "courses.txt"
-    dp = tmp_path / "dates.txt"
-
-    cp.write_text(
-        "Calculus\n11111\nDr. Cohen\n83101, 1, FALL, Obligatory\nExam\n$$$$\n"
-        "Algebra\n22222\nDr. Levi\n83101, 1, FALL, Obligatory\nExam\n",
-        encoding="utf-8",
-    )
-    dp.write_text("FALL, Aleph\n05-01-2026, 09-01-2026\n", encoding="utf-8")
-
-    ctrl = DesktopController()
-    ctrl.load_courses(cp)
-    ctrl.load_periods(dp)
-    ctrl.set_selected_programs(["83101"])
-
-    strict_settings = Settings(
-        thresholds=ThresholdSettings(
-            entries=(
-                ThresholdEntry(
-                    criterion=Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
-                    enabled=True,
-                    k=5,
-                ),
-            )
-        ),
-        sorting=SortingConfig(),
-    )
-    ctrl.apply_settings(strict_settings)
-
-    schedules_by_period, _, _ = ctrl.generate()
-
-    period_key = next(iter(schedules_by_period))
-    assert schedules_by_period[period_key] == [], (
-        "All schedules should be filtered out when no pair is >= 5 days apart"
-    )
-
-
-def test_generate_sorting_orders_schedules_by_active_sort_rule(tmp_path):
-    """
-    When a sort rule is active, generate() should return schedules already
-    sorted (most-spread-apart first for SORT_MIN_DAYS_MANDATORY).
-
-    Two obligatory courses in a 3-day window produce 6 schedules (3*2).
-    With SORT_MIN_DAYS_MANDATORY the schedule with the largest gap should
-    appear first.
-    """
-    from src.domain.settings import Settings
-    from src.domain.sorting import SortCriterion, SortRule, SortingConfig
-    from src.domain.threshold import ThresholdSettings
-
-    cp = tmp_path / "courses.txt"
-    dp = tmp_path / "dates.txt"
-
-    cp.write_text(
-        "Calculus\n11111\nDr. Cohen\n83101, 1, FALL, Obligatory\nExam\n$$$$\n"
-        "Algebra\n22222\nDr. Levi\n83101, 1, FALL, Obligatory\nExam\n",
-        encoding="utf-8",
-    )
-    dp.write_text("FALL, Aleph\n05-01-2026, 07-01-2026\n", encoding="utf-8")
-
-    ctrl = DesktopController()
-    ctrl.load_courses(cp)
-    ctrl.load_periods(dp)
-    ctrl.set_selected_programs(["83101"])
-
-    sort_settings = Settings(
-        thresholds=ThresholdSettings(),
-        sorting=SortingConfig(rules=[SortRule(priority=1, criterion=SortCriterion.SORT_MIN_DAYS_MANDATORY)]),
-    )
-    ctrl.apply_settings(sort_settings)
-
-    schedules_by_period, courses_by_id, _ = ctrl.generate()
-
-    period_key = next(iter(schedules_by_period))
-    schedules = schedules_by_period[period_key]
-    courses = list(courses_by_id.values())
-
-    assert len(schedules) == 6
-
-    # Verify descending gap order: first schedule should have the largest gap.
-    from itertools import combinations
-    from datetime import date as _date
-
-    def _min_gap(sched) -> int:
-        dates = list(sched.assignments.values())
-        return min(abs((b - a).days) for a, b in combinations(dates, 2))
-
-    gaps = [_min_gap(s) for s in schedules]
-    assert gaps == sorted(gaps, reverse=True), "schedules should be sorted by descending min gap"
+# NOTE: threshold-filter-via-generate and descending-sort-via-generate (using
+# the file-loaded controller path) are covered with equal/stronger assertions by
+# tests/unit/test_controller_sprint3_integration.py
+# ::test_generate_rejects_schedules_violating_enabled_threshold and
+# ::test_generate_sorts_descending_by_active_config. The end-to-end UI-driven
+# variants live in tests/e2e/test_ui_engine_stress.py.
 
 
 def test_selecting_more_than_five_programmes_is_rejected_and_previous_selection_kept():
@@ -1130,3 +1028,145 @@ def test_snapshot_and_restore_courses_round_trip():
 
     assert [c.id for c in ctrl._courses] == ["11111"]
     assert ctrl.any_exam_missing_student_count() is False
+
+
+# ── C2: cache_generated_results keeps _last_results in sync ──────────────────
+
+def test_cache_generated_results_stores_sorted_schedules():
+    """cache_generated_results must populate _last_results so resort() works."""
+    from src.domain.schedule import Schedule
+    from src.domain.exam_period import ExamPeriod
+
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(30)]
+
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    s1 = Schedule(period, {"11111": date(2026, 1, 5)})
+    s2 = Schedule(period, {"11111": date(2026, 1, 6)})
+
+    result = ctrl.cache_generated_results({"FALL_Aleph": [s1, s2]})
+
+    # Return value matches what was stored
+    assert result == {"FALL_Aleph": [s1, s2]}
+    # _last_results must be populated — otherwise resort() raises
+    assert ctrl._last_results is not None
+    assert ctrl._last_results == result
+
+
+def test_cache_generated_results_enables_resort():
+    """After cache_generated_results, resort() must include ALL cached schedules."""
+    from src.domain.schedule import Schedule
+    from src.domain.exam_period import ExamPeriod
+    from src.domain.sorting import SortingConfig
+
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(30)]
+
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    s1 = Schedule(period, {"11111": date(2026, 1, 5)})
+    s2 = Schedule(period, {"11111": date(2026, 1, 6)})
+
+    ctrl.cache_generated_results({"FALL_Aleph": [s1, s2]})
+
+    # resort() must not raise and must return both schedules
+    resorted = ctrl.resort(SortingConfig(rules=[]))
+    assert len(resorted["FALL_Aleph"]) == 2
+
+
+def test_cache_generated_results_with_load_more_includes_extra_schedules():
+    """Simulates the C2 bug: load-more schedules must survive a subsequent resort."""
+    from src.domain.schedule import Schedule
+    from src.domain.exam_period import ExamPeriod
+    from src.domain.sorting import SortingConfig
+
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(30)]
+
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    initial = [Schedule(period, {"11111": date(2026, 1, 5)})]
+    extra = [Schedule(period, {"11111": date(2026, 1, 6)})]
+
+    # Simulate initial generation
+    ctrl.cache_generated_results({"FALL_Aleph": initial})
+
+    # Simulate load-more appending extra schedules and then re-caching (C2 fix)
+    all_schedules = {"FALL_Aleph": initial + extra}
+    ctrl.cache_generated_results(all_schedules)
+
+    # Both schedules must be present after re-sort
+    resorted = ctrl.resort(SortingConfig(rules=[]))
+    assert len(resorted["FALL_Aleph"]) == 2
+
+
+# ── C1: feature4 toggle ON with missing student counts resets toggle ──────────
+
+def test_set_feature4_enabled_round_trip():
+    """set_feature4_enabled toggling OFF clears the feature4_enabled flag."""
+    ctrl = DesktopController()
+    ctrl.set_feature4_enabled(True)
+    assert ctrl.feature4_enabled is True
+
+    ctrl.set_feature4_enabled(False)
+    assert ctrl.feature4_enabled is False
+    # Disabling marks results stale (any toggle change is an input change)
+    assert ctrl.results_stale is True
+
+
+# ── M4: engine-level schedule rejection count ─────────────────────────────────
+
+def test_pipeline_rejects_unassignable_schedules(tmp_path):
+    """Schedules where any exam cannot be assigned rooms must be dropped (spec §4.4).
+
+    Guarantee that the generator emits at least one candidate before the assigner
+    runs: one course + one valid date (Monday 2026-01-05) → exactly one schedule
+    produced by backtracking. Classrooms are intentionally undersized so the
+    assigner must return None for that schedule, proving the §4.4 rejection path.
+    """
+    from queue import Queue
+    from src.controller import _run_generation_process
+    from src.domain.exam_period import ExamPeriod
+    from src.domain.classroom import Classroom
+    from src.domain.time_slot import TimeSlot
+    from src.domain.proctor import ProctorConfig
+    from src.domain.course import Course
+    from src.domain.course_offering import CourseOffering
+
+    # One course with 200 students, one weekday in the period window → the generator
+    # MUST emit exactly one schedule (there is only one valid date assignment).
+    big_course = Course(
+        "99999",
+        "Huge Exam",
+        "Dr. Test",
+        "Exam",
+        [CourseOffering("83101", 1, "FALL", "Obligatory", 200)],
+    )
+    # 2026-01-05 is a Monday — guaranteed valid date; single-day window forces
+    # exactly one generated schedule before the assigner is exercised.
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 5))])
+    classrooms = [Classroom("Room A", 25), Classroom("Room B", 25)]  # total 50 < 200
+    slots = [TimeSlot(time(9, 0))]
+
+    q: Queue = Queue()
+    _run_generation_process(
+        q,
+        [big_course],
+        [period],
+        ["83101"],
+        classrooms=classrooms,
+        time_slots=slots,
+        proctor_config=ProctorConfig(20),
+        allow_unassigned_classrooms=False,
+    )
+
+    ok, schedules_by_period, _courses_by_id, truncated_periods = q.get_nowait()
+    assert ok is True
+    # The period key must be present — the generator produced a candidate but the
+    # assigner rejected it (rooms too small), so the list is empty, not missing.
+    period_key = "FALL - Aleph"
+    assert period_key in schedules_by_period, (
+        "Period key missing: generator produced no candidates — "
+        "test fixture must guarantee at least one schedule before assigner runs"
+    )
+    assert schedules_by_period[period_key] == [], (
+        "Schedules with unassignable exams must be rejected by the assigner (spec §4.4)"
+    )

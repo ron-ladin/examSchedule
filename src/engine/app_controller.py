@@ -54,12 +54,13 @@ def _apply_filter(
     threshold_filter,
     threshold_settings,
     courses: list,
+    selected_programs: list[str] | None = None,
 ) -> Iterator[Schedule]:
     # Accepts courses as a function argument so the value is captured
     # eagerly at call time — not by reference to the enclosing loop variable.
     return (
         s for s in raw_iter
-        if threshold_filter.is_valid(s, courses, threshold_settings)
+        if threshold_filter.is_valid(s, courses, threshold_settings, selected_programs)
     )
 
 
@@ -161,6 +162,7 @@ class AppController:
                     self._threshold_filter,
                     self._threshold_settings,
                     relevant_courses,
+                    self._selected_programs,
                 )
 
             if self._classrooms and self._time_slots and self._proctor_config:

@@ -436,3 +436,54 @@ class TestMultipleCriteriaActive:
             [c1, c2, unrelated],
             settings,
         ) is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: selected_programs isolation
+# ---------------------------------------------------------------------------
+
+class TestSelectedProgramsIsolation:
+    """Offerings from unselected programs must not influence threshold metrics."""
+
+    def _cross_listed(self, course_id: str, selected_prog: str, other_prog: str) -> Course:
+        """Course with one offering in each of two programmes."""
+        c = Course(
+            id=course_id,
+            name=f"Course {course_id}",
+            instructor="Prof. X",
+            evaluation_type="Exam",
+        )
+        c.add_offering(_offering(selected_prog, 1, "Obligatory"))
+        c.add_offering(_offering(other_prog, 1, "Obligatory"))
+        return c
+
+    def test_unselected_offering_does_not_inflate_groups_on_passing_schedule(self):
+        """Unselected PROGRAM_B offering must not create extra groups that affect pass/fail."""
+        course_a = self._cross_listed("11111", PROGRAM_A, PROGRAM_B)
+        course_b = _mandatory("22222", program=PROGRAM_A, year=1)
+
+        schedule = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 8),
+        })
+        settings = _settings_only(Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS, k=3)
+
+        # With filtering: only (PROGRAM_A, 1) group; gap=3 → pass.
+        assert ThresholdFilter.is_valid(
+            schedule, [course_a, course_b], settings, selected_programs=[PROGRAM_A]
+        ) is True
+
+    def test_unselected_offering_does_not_hide_failure(self):
+        """A failing schedule must still fail when an unselected offering exists."""
+        course_a = self._cross_listed("11111", PROGRAM_A, PROGRAM_B)
+        course_b = _mandatory("22222", program=PROGRAM_A, year=1)
+
+        schedule = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 6),  # only 1 day apart → fail k=3
+        })
+        settings = _settings_only(Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS, k=3)
+
+        assert ThresholdFilter.is_valid(
+            schedule, [course_a, course_b], settings, selected_programs=[PROGRAM_A]
+        ) is False

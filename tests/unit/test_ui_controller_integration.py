@@ -269,42 +269,10 @@ def test_invalid_feature4_file_shows_error_and_deactivates(
     screen.close()
 
 
-def test_capacity_warning_cancel_prevents_generation(monkeypatch):
-    app = _get_qapp()
-    controller = DesktopController()
-    controller._feature4_enabled = True
-    controller._classrooms = [Classroom("Room 1", 20)]
-    controller._time_slots = [TimeSlot(time(9, 0))]
-    controller._proctor_config = ProctorConfig(20)
-    controller._selected_programs = ["83101"]
-    controller._exam_periods = [
-        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
-    ]
-    controller._courses = [
-        Course(
-            "11111",
-            "Calculus",
-            "Dr. Cohen",
-            "Exam",
-            [CourseOffering("83101", 1, "FALL", "Obligatory", 50)],
-        )
-    ]
-    screen = ConfigScreen(controller)
-    started = []
-    screen.generation_started.connect(started.append)
-
-    monkeypatch.setattr(
-        QMessageBox,
-        "warning",
-        lambda *_args, **_kwargs: QMessageBox.StandardButton.No,
-    )
-
-    screen._on_generate()
-    app.processEvents()
-
-    assert started == []
-    assert screen._gen_process is None
-    screen.close()
+# NOTE: the capacity-warning *cancel* path (warning -> No -> generation blocked)
+# is covered end-to-end by tests/e2e/test_ui_engine_stress.py
+# ::test_capacity_shortfall_warns_before_generation, which also asserts the
+# shortfall tuple. The proceed path (message content + Yes) is kept below.
 
 
 def test_capacity_warning_proceed_returns_true(monkeypatch):
@@ -347,56 +315,21 @@ def test_capacity_warning_proceed_returns_true(monkeypatch):
 
 # ── File loading modes update controller state ─────────────────────
 
-def test_config_screen_replace_courses_updates_controller_state(tmp_path, monkeypatch):
-    """
-    Loading courses through ConfigScreen in Replace mode should replace the
-    controller course state and refresh the programme list.
+def test_config_screen_course_load_replace_then_update(tmp_path, monkeypatch):
+    """ConfigScreen course loading drives both load modes end-to-end:
+
+    Replace clears prior state, a second Replace swaps it out entirely, and
+    Update merges new offerings into existing courses while refreshing the
+    programme list and the courses label. Consolidates the former separate
+    replace/update course-load tests.
     """
     app = _get_qapp()
 
     first = tmp_path / "courses_first.txt"
     second = tmp_path / "courses_second.txt"
-    _write_courses_one(first)
-    _write_courses_replacement(second)
-
-    controller = DesktopController()
-    screen = ConfigScreen(controller)
-    screen.show()
-    app.processEvents()
-
-    _patch_file_dialog(monkeypatch, [first, second])
-
-    _set_load_mode(screen, "Replace")
-    screen._load_courses()
-
-    assert [course.id for course in controller.courses] == ["11111"]
-    assert controller.get_programme_ids() == ["83101"]
-    assert len(screen._prog_rows) == 1
-    assert "courses_first.txt" in screen._courses_label.text()
-
-    screen._load_courses()
-
-    assert [course.id for course in controller.courses] == ["33333"]
-    assert controller.get_programme_ids() == ["83108"]
-    assert len(screen._prog_rows) == 1
-    assert "courses_second.txt" in screen._courses_label.text()
-
-    screen.close()
-
-
-def test_config_screen_update_courses_merges_into_controller_state(
-    tmp_path,
-    monkeypatch,
-):
-    """
-    Loading courses through ConfigScreen in Update mode should merge new course
-    data into the controller instead of clearing unrelated existing data.
-    """
-    app = _get_qapp()
-
-    first = tmp_path / "courses_first.txt"
     update = tmp_path / "courses_update.txt"
     _write_courses_one(first)
+    _write_courses_replacement(second)
     _write_courses_update(update)
 
     controller = DesktopController()
@@ -404,28 +337,40 @@ def test_config_screen_update_courses_merges_into_controller_state(
     screen.show()
     app.processEvents()
 
-    _patch_file_dialog(monkeypatch, [first, update])
+    _patch_file_dialog(monkeypatch, [first, second, update])
 
+    # First Replace load.
     _set_load_mode(screen, "Replace")
     screen._load_courses()
+    assert [course.id for course in controller.courses] == ["11111"]
+    assert controller.get_programme_ids() == ["83101"]
+    assert len(screen._prog_rows) == 1
+    assert "courses_first.txt" in screen._courses_label.text()
 
+    # Second Replace swaps the whole course set out.
+    screen._load_courses()
+    assert [course.id for course in controller.courses] == ["33333"]
+    assert controller.get_programme_ids() == ["83108"]
+    assert len(screen._prog_rows) == 1
+    assert "courses_second.txt" in screen._courses_label.text()
+
+    # Reset to a known base, then Update merges offerings into existing courses.
+    _patch_file_dialog(monkeypatch, [first, update])
+    _set_load_mode(screen, "Replace")
+    screen._load_courses()
     assert [course.id for course in controller.courses] == ["11111"]
 
     _set_load_mode(screen, "Update")
     screen._load_courses()
-
-    course_ids = [course.id for course in controller.courses]
-    assert course_ids == ["11111", "22222"]
+    assert [course.id for course in controller.courses] == ["11111", "22222"]
 
     calculus = next(course for course in controller.courses if course.id == "11111")
     offering_keys = {
         (offering.program_id, offering.year, offering.semester, offering.requirement)
         for offering in calculus.offerings
     }
-
     assert ("83101", 1, "FALL", "Obligatory") in offering_keys
     assert ("83108", 1, "FALL", "Elective") in offering_keys
-
     assert set(controller.get_programme_ids()) == {"83101", "83108"}
     assert len(screen._prog_rows) == 2
     assert "courses_update.txt" in screen._courses_label.text()
@@ -433,20 +378,21 @@ def test_config_screen_update_courses_merges_into_controller_state(
     screen.close()
 
 
-def test_config_screen_replace_periods_updates_controller_state(
-    tmp_path,
-    monkeypatch,
-):
-    """
-    Loading exam periods through ConfigScreen in Replace mode should replace
-    the controller exam-period state.
+def test_config_screen_period_load_replace_then_update(tmp_path, monkeypatch):
+    """ConfigScreen period loading drives both load modes end-to-end:
+
+    Replace swaps the period set, a second Replace replaces it with a different
+    semester/moed, and Update updates the matching period key in place.
+    Consolidates the former separate replace/update period-load tests.
     """
     app = _get_qapp()
 
     first = tmp_path / "periods_first.txt"
     second = tmp_path / "periods_second.txt"
+    update = tmp_path / "periods_update.txt"
     _write_periods_one(first)
     _write_periods_replacement(second)
+    _write_periods_update(update)
 
     controller = DesktopController()
     screen = ConfigScreen(controller)
@@ -455,62 +401,32 @@ def test_config_screen_replace_periods_updates_controller_state(
 
     _patch_file_dialog(monkeypatch, [first, second])
 
+    # First Replace load.
     _set_load_mode(screen, "Replace")
     screen._load_dates()
-
-    assert [period.get_key() for period in controller.get_exam_periods()] == [
-        "FALL - Aleph"
-    ]
+    assert [p.get_key() for p in controller.get_exam_periods()] == ["FALL - Aleph"]
     assert "periods_first.txt" in screen._dates_label.text()
 
+    # Second Replace swaps to a different semester/moed.
     screen._load_dates()
-
-    assert [period.get_key() for period in controller.get_exam_periods()] == [
-        "SPRI - Bet"
-    ]
+    assert [p.get_key() for p in controller.get_exam_periods()] == ["SPRI - Bet"]
     assert "periods_second.txt" in screen._dates_label.text()
 
-    screen.close()
-
-
-def test_config_screen_update_periods_replaces_matching_period_by_key(
-    tmp_path,
-    monkeypatch,
-):
-    """
-    Loading exam periods through ConfigScreen in Update mode should update the
-    matching period key inside the controller state.
-    """
-    app = _get_qapp()
-
-    first = tmp_path / "periods_first.txt"
-    update = tmp_path / "periods_update.txt"
-    _write_periods_one(first)
-    _write_periods_update(update)
-
-    controller = DesktopController()
-    screen = ConfigScreen(controller)
-    screen.show()
-    app.processEvents()
-
+    # Reset to the base FALL period, then Update the matching key in place.
     _patch_file_dialog(monkeypatch, [first, update])
-
     _set_load_mode(screen, "Replace")
     screen._load_dates()
-
-    original_period = controller.get_exam_periods()[0]
-    assert original_period.get_key() == "FALL - Aleph"
-    assert original_period.date_ranges[0][0].day == 5
+    original = controller.get_exam_periods()[0]
+    assert original.get_key() == "FALL - Aleph"
+    assert original.date_ranges[0][0].day == 5
 
     _set_load_mode(screen, "Update")
     screen._load_dates()
-
-    updated_periods = controller.get_exam_periods()
-
-    assert len(updated_periods) == 1
-    assert updated_periods[0].get_key() == "FALL - Aleph"
-    assert updated_periods[0].date_ranges[0][0].day == 12
-    assert updated_periods[0].date_ranges[0][1].day == 16
+    updated = controller.get_exam_periods()
+    assert len(updated) == 1
+    assert updated[0].get_key() == "FALL - Aleph"
+    assert updated[0].date_ranges[0][0].day == 12
+    assert updated[0].date_ranges[0][1].day == 16
     assert "periods_update.txt" in screen._dates_label.text()
 
     screen.close()
@@ -712,6 +628,63 @@ def test_generation_failed_signal_returns_to_config_screen(monkeypatch):
         ("Generation Error", "Generation failed for test.")
     ]
 
+    screen.close()
+
+
+def test_capacity_warning_uses_newly_selected_programmes_not_stale_ones(monkeypatch):
+    """Regression: capacity warning must fire based on the *current* UI selection.
+
+    Old flow: _confirm_capacity_warning() ran before set_selected_programs(),
+    so the warning was calculated using stale selected_programs.
+
+    New flow: set_selected_programs(selected) runs first, then the warning.
+    This test verifies: switching from programme A to B in the UI, where only B
+    has a capacity shortfall, causes the warning to appear.
+    """
+    app = _get_qapp()
+
+    PROG_A = "83101"
+    PROG_B = "83102"
+
+    course = Course(
+        "99999",
+        "Big Exam",
+        "Dr. Test",
+        "Exam",
+        [
+            CourseOffering(PROG_A, 1, "FALL", "Obligatory", 5),    # fits in room
+            CourseOffering(PROG_B, 1, "FALL", "Obligatory", 999),  # shortfall
+        ],
+    )
+
+    controller = DesktopController()
+    controller._feature4_enabled = True
+    controller._classrooms = [Classroom("Room 1", 50)]
+    controller._time_slots = [TimeSlot(time(9, 0))]
+    controller._proctor_config = ProctorConfig(20)
+    controller._courses = [course]
+    controller._exam_periods = [
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    ]
+    controller._selected_programs = [PROG_A]  # stale — no shortfall for A
+
+    screen = ConfigScreen(controller)
+    # Simulate user switching UI selection to PROG_B before clicking Generate.
+    monkeypatch.setattr(screen, "_get_selected_ids", lambda: [PROG_B])
+
+    shown_warnings: list[tuple] = []
+
+    def capture_warning(_parent, title, text, buttons, default):
+        shown_warnings.append((title, text))
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(QMessageBox, "warning", capture_warning)
+
+    screen._on_generate()
+    app.processEvents()
+
+    assert shown_warnings, "Capacity warning must fire for the newly selected PROG_B"
+    assert "Insufficient Classroom Capacity" in shown_warnings[0][0]
     screen.close()
 
 
