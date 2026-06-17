@@ -74,7 +74,11 @@ def _apply_classroom_assignment(
     allow_unassigned: bool,
 ) -> Iterator[Schedule]:
     for schedule in raw_iter:
-        assigned = ClassroomAssigner.assign(
+        # A date-only schedule is only a candidate. When Feature 4 is active,
+        # expose every valid classroom/time-slot allocation variant, up to the
+        # limits defined in ClassroomAssigner. If no allocation is possible, the
+        # candidate schedule is rejected and never reaches the UI/exporter.
+        yield from ClassroomAssigner.assign_variants(
             schedule,
             courses,
             selected_programs,
@@ -83,8 +87,6 @@ def _apply_classroom_assignment(
             proctor_config,
             allow_unassigned=allow_unassigned,
         )
-        if assigned is not None:
-            yield assigned
 
 
 class AppController:
