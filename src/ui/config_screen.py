@@ -707,18 +707,27 @@ class ConfigScreen(QWidget):
         )
 
     def _on_feature4_toggled(self, checked: bool) -> None:
-        self._controller.set_feature4_enabled(checked)
-        self._apply_feature4_enabled_state()
-        # Spec 4.3: surface an immediate error if exam courses lack StudentCount
-        # at the moment the feature is switched on (generation stays blocked).
+        # Spec §4.3: if F4 is toggled ON but loaded courses already have Exam
+        # entries missing StudentCount, treat it like a failed file load: reset
+        # the toggle back to OFF so the user cannot proceed without valid data.
+        # Determine the final enabled state FIRST to avoid an intermediate invalid
+        # controller state (set_feature4_enabled is called exactly once).
         if checked and self._controller.feature4_missing_student_counts():
-            QMessageBox.warning(
+            self._controller.set_feature4_enabled(False)
+            self._feature4_toggle.setChecked(False)
+            self._apply_feature4_enabled_state()
+            QMessageBox.critical(
                 self,
                 "Missing Student Counts",
-                "Feature 4 requires a StudentCount for every exam course.\n\n"
-                "Generation stays disabled until the courses file provides them "
-                "(spec 4.3).",
+                "Feature 4 requires a StudentCount (5th column) for every Exam "
+                "course, but the currently loaded courses file is missing at least "
+                "one.\n\n"
+                "Feature 4 has been disabled (spec §4.3). Reload a valid courses "
+                "file before enabling Feature 4.",
             )
+        else:
+            self._controller.set_feature4_enabled(checked)
+            self._apply_feature4_enabled_state()
         self._refresh_feature4_status()
         self._update_gen_btn()
 

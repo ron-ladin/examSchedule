@@ -617,6 +617,10 @@ class _ResultsPanel(QWidget):
 
         if extra:
             self._schedules_by_period[period_key].extend(extra)
+            # Keep _last_results in sync so resort() includes load-more schedules
+            # (C2 fix: previously _last_results was never updated on load-more,
+            # causing a subsequent re-sort to silently drop the appended batch).
+            self._controller.cache_generated_results(dict(self._schedules_by_period))
 
         if period_key in self._lm_advance_after_load:
             self._lm_advance_after_load.discard(period_key)

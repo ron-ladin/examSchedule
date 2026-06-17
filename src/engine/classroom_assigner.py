@@ -137,12 +137,15 @@ class ClassroomAssigner:
                 result[course_id] = []
                 continue
 
-            if not offerings:
-                if allow_unassigned:
-                    result[course_id] = []
-                    unassigned[course_id] = student_count
-                    continue
-                return None
+            # H1 fix: pick the offering with the largest student_count as the
+            # representative for each room assignment, rather than always
+            # using offerings[0].  For single-offering courses (the common case)
+            # this is a no-op.  For multi-offering courses it ensures each
+            # ClassroomAssignment.exam points to the primary offering — the one
+            # whose students make up the largest share of the room population —
+            # so downstream code reading assignment.exam gets the most
+            # representative program context.
+            primary_offering = max(offerings, key=lambda o: o.student_count or 0)
 
             allocated = None
             for slot in slots:
@@ -166,7 +169,7 @@ class ClassroomAssigner:
                 for room, placed in distribution:
                     allocated.append(
                         ClassroomAssignment(
-                            exam=offerings[0],
+                            exam=primary_offering,
                             room=room,
                             slot=slot,
                             date=exam_date,
