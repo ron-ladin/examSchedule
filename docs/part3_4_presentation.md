@@ -166,16 +166,16 @@ Feature is optional and toggle-gated — existing workflow unchanged when off.
 |-------|--------|
 | Domain models (Classroom, Proctor, Assignment) | ✅ Done |
 | File readers (Classrooms, Proctor, Slots) | ✅ Done |
-| ClassroomAssigner algorithm | 🔄 In progress |
-| Pipeline wiring | ⏳ Blocked |
-| UI: Feature 4 inputs + proctor report | ⏳ Planned |
-| Tests: ClassroomAssigner | ⏳ Planned |
+| ClassroomAssigner algorithm | ✅ Done |
+| Pipeline wiring | ✅ Done |
+| UI: Feature 4 toggle, inputs, proctor report dialog | ✅ Done |
+| Tests: ClassroomAssigner + UI integration | ✅ Done |
 
 ---
 
 ## Slide 13 — Testing
 
-- **384 tests** — all pass, 0 failures
+- **456 tests** — all pass, 0 failures (as of 2026-06-17)
 - **≥ 85 % coverage** (excluding UI layer)
 - New tests for Feature 3: threshold criteria, sorting engine, settings reader, pipeline integration
 - New tests for Feature 4 scaffolding: classroom/proctor domain validation, file readers

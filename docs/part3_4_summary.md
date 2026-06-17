@@ -106,10 +106,7 @@ SORT
 
 ## Known Limitations
 
-1. **ClassroomAssigner not yet implemented** (SCRUM-266 in progress). Pipeline integration and UI screens are blocked.
-2. **Feature 4 UI** (SCRUM-268) not started. The toggle, classroom file browser, slot entry, proctor ratio input, and proctor report dialog are pending.
-3. **No cross-platform testing.** All development and CI has been on Linux. macOS rendering differences in QSS and font metrics have not been audited (RISK-1 in CLAUDE.md).
-4. **Student count field** in `courses.txt` (spec §4.3) not yet enforced by `CourseFileReader`. Will be added as part of SCRUM-266.
+1. **No cross-platform testing.** All development and CI has been on Linux. macOS rendering differences in QSS and font metrics have not been audited.
 
 ---
 
@@ -117,9 +114,9 @@ SORT
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| Total tests (measured) | 384 | 364 unit + 20 e2e; `python3.11 -m pytest tests/unit/ tests/e2e/ -q` on 2026-06-14 |
-| Feature 3+4 tests (measured) | 172 | see §4 breakdown in tests_document |
-| Test coverage (excl. `src/ui/`) | target ≥ 85 % | see CI report (`pytest-cov` not available locally) |
+| Total tests (measured) | 456 | `python -m pytest -q` on 2026-06-17 |
+| Feature 3+4 tests (measured) | 172+ | see §4 breakdown in tests_document |
+| Test coverage (excl. `src/ui/`) | ≥ 85 % | enforced via `pytest --cov=src` gate |
 | Pylint score (measured) | 7.63 / 10 | target 8.5; delta from E1131 false positives (pylint version) + R0904 backlog |
 | Open bugs | 0 | |
-| Open tech debt items | 5 (low severity) | |
+| Open tech debt items | 3 (low severity) | |

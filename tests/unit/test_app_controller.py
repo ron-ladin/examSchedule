@@ -379,7 +379,7 @@ class _RejectAllFilter:
     """Stub that rejects every schedule."""
 
     @staticmethod
-    def is_valid(schedule, courses, settings) -> bool:  # noqa: ARG002
+    def is_valid(schedule, courses, settings, selected_programs=None) -> bool:  # noqa: ARG002
         return False
 
 
@@ -387,7 +387,7 @@ class _AcceptAllFilter:
     """Stub that accepts every schedule."""
 
     @staticmethod
-    def is_valid(schedule, courses, settings) -> bool:  # noqa: ARG002
+    def is_valid(schedule, courses, settings, selected_programs=None) -> bool:  # noqa: ARG002
         return True
 
 
@@ -516,7 +516,7 @@ def test_threshold_filter_applied_to_correct_courses_per_period():
         def __init__(self):
             self.courses_per_call: list[list] = []
 
-        def is_valid(self, schedule, courses, settings):  # noqa: ARG002
+        def is_valid(self, schedule, courses, settings, selected_programs=None):  # noqa: ARG002
             self.courses_per_call.append(list(courses))
             return True
 

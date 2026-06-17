@@ -1061,12 +1061,12 @@ class ConfigScreen(QWidget):
             self._settings_dialog.set_generation_state(is_running)
 
     def _on_generate(self) -> None:
+        selected = self._get_selected_ids()
+        self._controller.set_selected_programs(selected)
+
         if not self._confirm_capacity_warning():
             return
 
-        selected = self._get_selected_ids()
-
-        self._controller.set_selected_programs(selected)
         self._controller.set_allow_unassigned_classrooms(
             self._allow_unassigned_generation
         )

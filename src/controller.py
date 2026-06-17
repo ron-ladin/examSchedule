@@ -73,11 +73,13 @@ class _MemoryExporter(IOutputExporter):
         offset_by_period: dict[str, int] | None = None,
         only_period_keys: set[str] | None = None,
         settings: Settings | None = None,
+        selected_programs: list[str] | None = None,
     ) -> None:
         self._cap = cap
         self._offset_by_period = offset_by_period or {}
         self._only_period_keys = only_period_keys
         self._settings = settings
+        self._selected_programs = selected_programs or []
 
         self.schedules_by_period: dict[str, list[Schedule]] = {}
         self.courses_by_id: dict[str, Course] = {}
@@ -127,7 +129,9 @@ class _MemoryExporter(IOutputExporter):
 
     def _sort(self, schedules: list[Schedule], courses: list[Course]) -> list[Schedule]:
         if self._settings and self._settings.sorting.rules:
-            return SortingEngine.sort(schedules, courses, self._settings.sorting)
+            return SortingEngine.sort(
+                schedules, courses, self._settings.sorting, self._selected_programs
+            )
         return schedules
 
 
@@ -177,6 +181,7 @@ def _run_generation_process(
             offset_by_period={period_key: offset} if period_key else None,
             only_period_keys={period_key} if period_key else None,
             settings=active_settings,
+            selected_programs=selected_programs,
         )
 
         engine = _EngineController(
@@ -794,7 +799,7 @@ class DesktopController:
 
         courses = list(self._courses)
         resorted = {
-            period_key: SortingEngine.sort(schedules, courses, config)
+            period_key: SortingEngine.sort(schedules, courses, config, self._selected_programs)
             for period_key, schedules in self._last_results.items()
         }
 
@@ -815,7 +820,7 @@ class DesktopController:
         sorting = self._settings.sorting
 
         resorted = {
-            period_key: SortingEngine.sort(schedules, courses, sorting)
+            period_key: SortingEngine.sort(schedules, courses, sorting, self._selected_programs)
             for period_key, schedules in schedules_by_period.items()
         }
 

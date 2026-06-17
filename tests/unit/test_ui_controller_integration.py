@@ -631,6 +631,63 @@ def test_generation_failed_signal_returns_to_config_screen(monkeypatch):
     screen.close()
 
 
+def test_capacity_warning_uses_newly_selected_programmes_not_stale_ones(monkeypatch):
+    """Regression: capacity warning must fire based on the *current* UI selection.
+
+    Old flow: _confirm_capacity_warning() ran before set_selected_programs(),
+    so the warning was calculated using stale selected_programs.
+
+    New flow: set_selected_programs(selected) runs first, then the warning.
+    This test verifies: switching from programme A to B in the UI, where only B
+    has a capacity shortfall, causes the warning to appear.
+    """
+    app = _get_qapp()
+
+    PROG_A = "83101"
+    PROG_B = "83102"
+
+    course = Course(
+        "99999",
+        "Big Exam",
+        "Dr. Test",
+        "Exam",
+        [
+            CourseOffering(PROG_A, 1, "FALL", "Obligatory", 5),    # fits in room
+            CourseOffering(PROG_B, 1, "FALL", "Obligatory", 999),  # shortfall
+        ],
+    )
+
+    controller = DesktopController()
+    controller._feature4_enabled = True
+    controller._classrooms = [Classroom("Room 1", 50)]
+    controller._time_slots = [TimeSlot(time(9, 0))]
+    controller._proctor_config = ProctorConfig(20)
+    controller._courses = [course]
+    controller._exam_periods = [
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    ]
+    controller._selected_programs = [PROG_A]  # stale — no shortfall for A
+
+    screen = ConfigScreen(controller)
+    # Simulate user switching UI selection to PROG_B before clicking Generate.
+    monkeypatch.setattr(screen, "_get_selected_ids", lambda: [PROG_B])
+
+    shown_warnings: list[tuple] = []
+
+    def capture_warning(_parent, title, text, buttons, default):
+        shown_warnings.append((title, text))
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(QMessageBox, "warning", capture_warning)
+
+    screen._on_generate()
+    app.processEvents()
+
+    assert shown_warnings, "Capacity warning must fire for the newly selected PROG_B"
+    assert "Insufficient Classroom Capacity" in shown_warnings[0][0]
+    screen.close()
+
+
 def test_view_courses_button_opens_correct_programme(
     tmp_path,
     monkeypatch,

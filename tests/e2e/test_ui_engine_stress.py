@@ -132,7 +132,7 @@ def _driven_settings_screen(
 
 def _schedule_satisfies(threshold_entry: ThresholdEntry, schedule, courses) -> bool:
     checker = _CHECKERS[threshold_entry.criterion]
-    return checker(schedule, courses, threshold_entry.k)
+    return checker(schedule, courses, threshold_entry.k, set())
 
 
 # ── Scenario 1: filter × sort combinations ───────────────────────────────────
@@ -303,6 +303,9 @@ def test_capacity_shortfall_warns_before_generation(tmp_path, monkeypatch):
     monkeypatch.setattr(
         QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.No
     )
+    # Ensure _get_selected_ids returns the pre-configured programme so the
+    # capacity check sees the same selection that was set on the controller.
+    monkeypatch.setattr(screen, "_get_selected_ids", lambda: ["83101"])
 
     screen._on_generate()
     assert started == [], "Generation must not start when capacity warning is cancelled"
