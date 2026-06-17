@@ -21,5 +21,6 @@ class IThresholdFilter(ABC):
         schedule: Schedule,
         courses: List[Course],
         settings: ThresholdSettings,
+        selected_programs: List[str] | None = None,
     ) -> bool:
         """Return True if the schedule satisfies all enabled threshold criteria."""
