@@ -1,7 +1,10 @@
 """Assign rooms and time slots to every exam in a generated schedule."""
 
 import heapq
+from collections.abc import Iterator
 from dataclasses import replace
+from datetime import date
+from itertools import combinations
 
 from src.domain.classroom import Classroom
 from src.domain.classroom_assignment import ClassroomAssignment
@@ -9,6 +12,16 @@ from src.domain.course import Course
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.time_slot import TimeSlot
+
+
+# Feature 4 variant limits.
+# Change this value if you want more/fewer classroom allocation options per date.
+MAX_CLASSROOM_OPTIONS_PER_DAY = 10
+
+# No global cap per full date-only schedule.
+# The only limit is MAX_CLASSROOM_OPTIONS_PER_DAY for each separate date.
+# Be careful: with many days, total combinations can still grow quickly.
+MAX_CLASSROOM_OPTIONS_PER_SCHEDULE: int | None = None
 
 
 def _balanced_distribution(
@@ -46,8 +59,125 @@ def _balanced_distribution(
     return list(zip(selected, counts))
 
 
+def _balanced_distribution_for_selected_rooms(
+    rooms: list[Classroom],
+    student_count: int,
+) -> list[tuple[Classroom, int]] | None:
+    """Split students across exactly the given rooms.
+
+    Unlike _balanced_distribution(), this helper does not pick a prefix of the
+    available room list. It is used for variant generation after a candidate
+    room combination has already been selected.
+    """
+    if sum(room.capacity for room in rooms) < student_count:
+        return None
+
+    counts = [0] * len(rooms)
+    heap = [(0, index) for index in range(len(rooms))]
+    heapq.heapify(heap)
+
+    for _ in range(student_count):
+        while heap:
+            count, index = heapq.heappop(heap)
+            if count < rooms[index].capacity:
+                break
+        else:
+            return None
+
+        counts[index] += 1
+        heapq.heappush(heap, (counts[index], index))
+
+    return list(zip(rooms, counts))
+
+
+def _distribution_key(distribution: list[tuple[Classroom, int]]) -> tuple:
+    """Stable key used to avoid duplicate room distributions."""
+    return tuple((room.room_id, placed) for room, placed in distribution)
+
+
+def _room_distribution_variants(
+    available_rooms: list[Classroom],
+    student_count: int,
+    max_options: int,
+) -> list[list[tuple[Classroom, int]]]:
+    """Return up to max_options possible room splits for one exam.
+
+    The first option intentionally matches the legacy behavior: choose rooms in
+    sorted order until capacity is sufficient, then balance students across that
+    prefix. This keeps ClassroomAssigner.assign() backward-compatible while
+    assign_variants() can expose additional valid room combinations.
+    """
+    if student_count == 0 or max_options <= 0:
+        return []
+
+    options: list[list[tuple[Classroom, int]]] = []
+    seen: set[tuple] = set()
+
+    legacy = _balanced_distribution(available_rooms, student_count)
+    if legacy is not None:
+        key = _distribution_key(legacy)
+        options.append(legacy)
+        seen.add(key)
+
+    if len(options) >= max_options:
+        return options
+
+    # Generate extra combinations in deterministic order. Smaller room-count
+    # combinations are tried before larger ones, and room order remains the
+    # capacity-descending order supplied by the caller.
+    for size in range(1, len(available_rooms) + 1):
+        for room_combo in combinations(available_rooms, size):
+            if sum(room.capacity for room in room_combo) < student_count:
+                continue
+
+            distribution = _balanced_distribution_for_selected_rooms(
+                list(room_combo),
+                student_count,
+            )
+            if distribution is None:
+                continue
+
+            key = _distribution_key(distribution)
+            if key in seen:
+                continue
+
+            options.append(distribution)
+            seen.add(key)
+
+            if len(options) >= max_options:
+                return options
+
+    return options
+
+
+def _make_assignments(
+    distribution: list[tuple[Classroom, int]],
+    primary_offering,
+    slot: TimeSlot,
+    exam_date: date,
+    proctor_config: ProctorConfig,
+) -> list[ClassroomAssignment]:
+    """Convert a room distribution into ClassroomAssignment objects."""
+    return [
+        ClassroomAssignment(
+            exam=primary_offering,
+            room=room,
+            slot=slot,
+            date=exam_date,
+            students_assigned=placed,
+            proctor_count=proctor_config.proctors_for(placed),
+        )
+        for room, placed in distribution
+    ]
+
+
 class ClassroomAssigner:
-    """Create a complete room allocation or reject the schedule."""
+    """Create room allocations for a generated date schedule.
+
+    assign() keeps the old single-result behavior.
+    assign_variants() exposes up to a limited number of valid classroom/time-slot
+    allocations for the same date-only schedule.
+    """
 
     @staticmethod
     def _collect_exam_data(
@@ -112,10 +242,50 @@ class ClassroomAssigner:
         proctor_config: ProctorConfig,
         allow_unassigned: bool = False,
     ) -> Schedule | None:
+        """Return the first valid classroom allocation, preserving old API."""
+        return next(
+            ClassroomAssigner.assign_variants(
+                schedule,
+                courses,
+                selected_programs,
+                classrooms,
+                slots,
+                proctor_config,
+                allow_unassigned=allow_unassigned,
+                max_options_per_day=1,
+                max_options_per_schedule=1,
+            ),
+            None,
+        )
+
+    @staticmethod
+    def assign_variants(
+        schedule: Schedule,
+        courses: list[Course],
+        selected_programs: list[str],
+        classrooms: list[Classroom],
+        slots: list[TimeSlot],
+        proctor_config: ProctorConfig,
+        allow_unassigned: bool = False,
+        max_options_per_day: int = MAX_CLASSROOM_OPTIONS_PER_DAY,
+        max_options_per_schedule: int | None = MAX_CLASSROOM_OPTIONS_PER_SCHEDULE,
+    ) -> Iterator[Schedule]:
+        """Yield valid classroom-allocation variants for one date schedule.
+
+        Date generation still decides which exams are on which dates. This method
+        treats that result as a candidate and yields up to
+        max_options_per_schedule versions enriched with classroom assignments.
+        For each date, at most max_options_per_day room/slot allocations are
+        considered, so one busy day cannot explode the result count.
+        """
+        if max_options_per_day <= 0:
+            return
+
+        if max_options_per_schedule is not None and max_options_per_schedule <= 0:
+            return
+
         courses_by_id = {course.id: course for course in courses}
         rooms = sorted(classrooms, key=lambda room: room.capacity, reverse=True)
-        used_rooms: dict[tuple[object, TimeSlot], set[str]] = {}
-        result: dict[str, list[ClassroomAssignment]] = {}
 
         collected = ClassroomAssigner._collect_exam_data(
             schedule,
@@ -124,77 +294,179 @@ class ClassroomAssigner:
             allow_unassigned,
         )
         if collected is None:
-            return None
-        exam_data, unassigned = collected
+            return
+
+        exam_data, initial_unassigned = collected
+
+        by_date: dict[date, list[tuple]] = {}
+        for item in exam_data:
+            _, _, exam_date, _ = item
+            by_date.setdefault(exam_date, []).append(item)
+
+        # No exam courses to assign: keep the date schedule valid and unchanged
+        # except for possible unknown-course unassigned markers.
+        if not by_date:
+            yield replace(
+                schedule,
+                classroom_assignments={},
+                unassigned_classroom_exams=dict(initial_unassigned),
+            )
+            return
+
+        combined: list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]] = [
+            ({}, dict(initial_unassigned))
+        ]
+
+        for exam_date in sorted(by_date):
+            day_options = ClassroomAssigner._day_assignment_options(
+                by_date[exam_date],
+                rooms,
+                slots,
+                proctor_config,
+                allow_unassigned,
+                max_options_per_day,
+            )
+
+            if not day_options:
+                return
+
+            next_combined: list[
+                tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]
+            ] = []
+
+            for current_assignments, current_unassigned in combined:
+                for day_assignments, day_unassigned in day_options:
+                    merged_assignments = dict(current_assignments)
+                    merged_assignments.update(day_assignments)
+
+                    merged_unassigned = dict(current_unassigned)
+                    merged_unassigned.update(day_unassigned)
+
+                    next_combined.append((merged_assignments, merged_unassigned))
+
+                    if (
+                        max_options_per_schedule is not None
+                        and len(next_combined) >= max_options_per_schedule
+                    ):
+                        break
+
+                if (
+                    max_options_per_schedule is not None
+                    and len(next_combined) >= max_options_per_schedule
+                ):
+                    break
+
+            combined = next_combined
+            if not combined:
+                return
+
+        final_options = (
+            combined
+            if max_options_per_schedule is None
+            else combined[:max_options_per_schedule]
+        )
+
+        for assignments, unassigned in final_options:
+            yield replace(
+                schedule,
+                classroom_assignments=assignments,
+                unassigned_classroom_exams=unassigned,
+            )
+
+    @staticmethod
+    def _day_assignment_options(
+        exam_data: list[tuple],
+        rooms: list[Classroom],
+        slots: list[TimeSlot],
+        proctor_config: ProctorConfig,
+        allow_unassigned: bool,
+        max_options: int,
+    ) -> list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]:
+        """Return up to max_options valid room allocations for one date."""
+        options: list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]] = []
+        used_rooms: dict[TimeSlot, set[str]] = {}
+        result: dict[str, list[ClassroomAssignment]] = {}
+        unassigned: dict[str, int] = {}
 
         # Place larger exams first to reduce avoidable assignment failures.
-        for student_count, course_id, exam_date, offerings in sorted(
+        ordered = sorted(
             exam_data,
             key=lambda item: (item[0], item[1]),
             reverse=True,
-        ):
+        )
+
+        def backtrack(index: int) -> None:
+            if len(options) >= max_options:
+                return
+
+            if index >= len(ordered):
+                copied_result = {
+                    course_id: list(assignments)
+                    for course_id, assignments in result.items()
+                }
+                options.append((copied_result, dict(unassigned)))
+                return
+
+            student_count, course_id, exam_date, offerings = ordered[index]
+
             if student_count == 0:
                 result[course_id] = []
-                continue
+                backtrack(index + 1)
+                result.pop(course_id, None)
+                return
 
-            # H1 fix: pick the offering with the largest student_count as the
-            # representative for each room assignment, rather than always
-            # using offerings[0].  For single-offering courses (the common case)
-            # this is a no-op.  For multi-offering courses it ensures each
-            # ClassroomAssignment.exam points to the primary offering — the one
-            # whose students make up the largest share of the room population —
-            # so downstream code reading assignment.exam gets the most
-            # representative program context.
             primary_offering = max(offerings, key=lambda o: o.student_count or 0)
+            assigned_any_option = False
 
-            allocated = None
             for slot in slots:
-                key = (exam_date, slot)
+                used_for_slot = used_rooms.setdefault(slot, set())
                 available = [
                     room
                     for room in rooms
-                    if room.room_id not in used_rooms.get(key, set())
+                    if room.room_id not in used_for_slot
                 ]
+
                 if sum(room.capacity for room in available) < student_count:
                     continue
 
-                distribution = _balanced_distribution(available, student_count)
-                if distribution is None:
-                    # Heap exhaustion on an imbalanced slot: keep allocated as
-                    # None so a later slot (or the unassigned path) can handle
-                    # the course instead of silently recording zero rooms.
-                    continue
-
-                allocated = []
-                for room, placed in distribution:
-                    allocated.append(
-                        ClassroomAssignment(
-                            exam=primary_offering,
-                            room=room,
-                            slot=slot,
-                            date=exam_date,
-                            students_assigned=placed,
-                            proctor_count=proctor_config.proctors_for(placed),
-                        )
-                    )
-
-                used_rooms.setdefault(key, set()).update(
-                    assignment.room.room_id for assignment in allocated
+                remaining_budget = max_options - len(options)
+                distributions = _room_distribution_variants(
+                    available,
+                    student_count,
+                    remaining_budget,
                 )
-                break
 
-            if allocated is None:
-                if allow_unassigned:
-                    result[course_id] = []
-                    unassigned[course_id] = student_count
-                    continue
-                return None
+                for distribution in distributions:
+                    assignments = _make_assignments(
+                        distribution,
+                        primary_offering,
+                        slot,
+                        exam_date,
+                        proctor_config,
+                    )
+                    room_ids = {assignment.room.room_id for assignment in assignments}
 
-            result[course_id] = allocated
+                    result[course_id] = assignments
+                    used_for_slot.update(room_ids)
+                    assigned_any_option = True
 
-        # Return a new Schedule rather than mutating the input (immutability rule).
-        return replace(
-            schedule,
-            classroom_assignments=result,
-            unassigned_classroom_exams=unassigned,
-        )
+                    backtrack(index + 1)
+
+                    used_for_slot.difference_update(room_ids)
+                    result.pop(course_id, None)
+
+                    if len(options) >= max_options:
+                        break
+
+                if len(options) >= max_options:
+                    break
+
+            if not assigned_any_option and allow_unassigned:
+                result[course_id] = []
+                unassigned[course_id] = student_count
+                backtrack(index + 1)
+                result.pop(course_id, None)
+                unassigned.pop(course_id, None)
+
+        backtrack(0)
+        return options
