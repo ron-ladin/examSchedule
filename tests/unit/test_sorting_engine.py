@@ -436,3 +436,58 @@ class TestEdgeCases:
         )
 
         assert result[0] is sched_better_gap
+
+# ---------------------------------------------------------------------------
+# Regression: relevant offering isolation
+# ---------------------------------------------------------------------------
+
+class TestRelevantOfferingIsolation:
+    """Sorting metrics should only use selected-program and current-semester offerings."""
+
+    def test_unselected_programme_offering_does_not_affect_min_gap_sort(self):
+        c1 = _mandatory("11111", program=PROGRAM_A)
+        c1.add_offering(_offering(PROGRAM_B, 1, "Obligatory"))
+        c2 = _mandatory("22222", program=PROGRAM_A)
+
+        sched_far = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 15),
+        })
+        sched_close = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 7),
+        })
+
+        result = SortingEngine.sort(
+            [sched_close, sched_far],
+            [c1, c2],
+            _config_single(SortCriterion.SORT_MIN_DAYS_MANDATORY),
+            selected_programs=[PROGRAM_A],
+        )
+
+        assert result[0] is sched_far
+
+    def test_other_semester_offering_does_not_affect_min_gap_sort(self):
+        c1 = _mandatory("11111", program=PROGRAM_A)
+        c1.add_offering(
+            CourseOffering(PROGRAM_A, 1, "SPRI", "Obligatory")
+        )
+        c2 = _mandatory("22222", program=PROGRAM_A)
+
+        sched_far = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 15),
+        })
+        sched_close = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 7),
+        })
+
+        result = SortingEngine.sort(
+            [sched_close, sched_far],
+            [c1, c2],
+            _config_single(SortCriterion.SORT_MIN_DAYS_MANDATORY),
+            selected_programs=[PROGRAM_A],
+        )
+
+        assert result[0] is sched_far
