@@ -760,7 +760,11 @@ class DesktopController:
         )
         generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
 
-        memory_exporter = _MemoryExporter(cap=None, settings=self._settings)
+        memory_exporter = _MemoryExporter(
+            cap=None,
+            settings=self._settings,
+            selected_programs=self._selected_programs,
+        )
 
         engine = _EngineController(
             data_provider=data_provider,
