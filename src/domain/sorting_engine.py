@@ -5,7 +5,7 @@ Sorts a list of valid Schedules by a SortingConfig (spec sections 3.1–3.5).
 All criteria sort in DESCENDING order (higher score = ranked first).
 
 Public API:
-    SortingEngine.sort(schedules, courses, config) -> List[Schedule]
+    SortingEngine.sort(schedules, courses, config, selected_programs=None) -> List[Schedule]
 
 Returns a new list; the input is not mutated.
 """
@@ -17,6 +17,7 @@ from typing import Dict, List, Tuple
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule
+from src.domain.semester import normalize_semester
 from src.domain.sorting import SortCriterion, SortingConfig
 
 
@@ -46,11 +47,20 @@ class SortingEngine:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _relevant_offerings(course: Course, prog_set: set) -> list:
-    """Return offerings restricted to selected programs (all when prog_set is empty)."""
-    if not prog_set:
-        return course.offerings
-    return [o for o in course.offerings if o.program_id in prog_set]
+def _relevant_offerings(course: Course, prog_set: set, semester: str) -> list:
+    """Return offerings relevant to selected programs and the schedule semester.
+
+    Empty prog_set keeps the previous direct-unit-test behavior of accepting
+    all programs, but offerings from other semesters are still ignored because
+    Feature 3 metrics are period-specific.
+    """
+    target_semester = normalize_semester(semester)
+    return [
+        offering
+        for offering in course.offerings
+        if (not prog_set or offering.program_id in prog_set)
+        and normalize_semester(offering.semester) == target_semester
+    ]
 
 
 def _mandatory_dates_by_group(
@@ -61,7 +71,7 @@ def _mandatory_dates_by_group(
         if course.id not in schedule.assignments:
             continue
         exam_date = schedule.assignments[course.id]
-        for offering in _relevant_offerings(course, prog_set):
+        for offering in _relevant_offerings(course, prog_set, schedule.period.semester):
             if offering.requirement.strip().lower() != "obligatory":
                 continue
             key = (offering.program_id, offering.year)
@@ -77,7 +87,7 @@ def _all_dates_by_group(
         if course.id not in schedule.assignments:
             continue
         exam_date = schedule.assignments[course.id]
-        for offering in _relevant_offerings(course, prog_set):
+        for offering in _relevant_offerings(course, prog_set, schedule.period.semester):
             key = (offering.program_id, offering.year)
             groups.setdefault(key, []).append(exam_date)
     return groups
@@ -91,7 +101,7 @@ def _elective_dates_by_program(
         if course.id not in schedule.assignments:
             continue
         exam_date = schedule.assignments[course.id]
-        for offering in _relevant_offerings(course, prog_set):
+        for offering in _relevant_offerings(course, prog_set, schedule.period.semester):
             if offering.requirement.strip().lower() != "elective":
                 continue
             groups.setdefault(offering.program_id, []).append(exam_date)
