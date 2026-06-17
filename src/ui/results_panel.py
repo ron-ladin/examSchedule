@@ -117,6 +117,9 @@ _NAV_REPEAT_DELAY_MS = 450
 _NAV_REPEAT_INTERVAL_MS = 120
 AUTO_LOAD_DELAY_MS = 500
 
+_AUTO_MODE_DATES = "dates"
+_AUTO_MODE_VARIANTS = "variants"
+
 
 def _enable_press_and_hold(button: QPushButton) -> None:
     """Repeat button clicks while it remains pressed."""
@@ -186,11 +189,20 @@ class _ResultsPanel(QWidget):
         self._prev_btns: dict[str, QPushButton] = {}
         self._next_btns: dict[str, QPushButton] = {}
         self._load_more_btns: dict[str, QPushButton] = {}
+        # Backward-compatible name: date auto-load buttons.
         self._auto_load_btns: dict[str, QPushButton] = {}
+        self._auto_date_btns: dict[str, QPushButton] = {}
+        self._auto_variant_btns: dict[str, QPushButton] = {}
         self._auto_load_periods: set[str] = set()
+        self._auto_load_modes: dict[str, str] = {}
+        # If the user clicks the other Auto button while a batch is already
+        # running, finish the current batch, then start the requested mode.
+        self._pending_auto_modes: dict[str, str] = {}
+        self._variant_more_by_signature: dict[tuple[str, _DateSignature], bool] = {}
 
         self._lm_queues: dict[str, multiprocessing.Queue] = {}
         self._lm_chunk_sizes: dict[str, int | None] = {}
+        self._lm_modes: dict[str, str] = {}
         self._lm_procs: dict[str, multiprocessing.Process] = {}
         self._lm_timers: dict[str, QTimer] = {}
         self._lm_ticks: dict[str, int] = {}
@@ -239,6 +251,9 @@ class _ResultsPanel(QWidget):
             self._cleanup_load_more_state(key, terminate=True)
 
         self._auto_load_periods.clear()
+        self._auto_load_modes.clear()
+        self._pending_auto_modes.clear()
+        self._variant_more_by_signature.clear()
 
         self._schedules_by_period = schedules_by_period
         self._courses_by_id = courses_by_id
@@ -274,6 +289,8 @@ class _ResultsPanel(QWidget):
         self._next_btns.clear()
         self._load_more_btns.clear()
         self._auto_load_btns.clear()
+        self._auto_date_btns.clear()
+        self._auto_variant_btns.clear()
         self._cell_data.clear()
         self._empty_labels.clear()
 
@@ -304,6 +321,7 @@ class _ResultsPanel(QWidget):
                 continue
 
             self._auto_load_periods.add(period_key)
+            self._auto_load_modes[period_key] = _AUTO_MODE_DATES
             self._update_auto_load_button(period_key)
             self._on_load_more(period_key)
 
@@ -520,19 +538,39 @@ class _ResultsPanel(QWidget):
         chunk_btn.setVisible(has_more)
         chunk_btn.clicked.connect(lambda _=False, k=period_key: self._on_load_more(k))
 
-        auto_btn = QPushButton("⚡  Auto Load")
-        auto_btn.setStyleSheet(
+        auto_dates_btn = QPushButton("⚡  Auto Dates")
+        auto_dates_btn.setStyleSheet(
             "color: #047857; border: 2px solid #047857; border-radius: 8px;"
             "padding: 6px 12px; font-size: 11px; font-weight: 700;"
             "background: rgba(4, 120, 87, 0.07);"
         )
-        auto_btn.setVisible(has_more)
-        auto_btn.clicked.connect(
-            lambda _=False, k=period_key: self._toggle_auto_load(k)
+        auto_dates_btn.setVisible(has_more)
+        auto_dates_btn.setToolTip(
+            "Automatically load more date options. Each date option uses only "
+            "the first classroom/time-slot variant."
+        )
+        auto_dates_btn.clicked.connect(
+            lambda _=False, k=period_key: self._toggle_auto_load_dates(k)
+        )
+
+        auto_variants_btn = QPushButton("⚡  Auto Variants")
+        auto_variants_btn.setStyleSheet(
+            "color: #7C3AED; border: 2px solid #7C3AED; border-radius: 8px;"
+            "padding: 6px 12px; font-size: 11px; font-weight: 700;"
+            "background: rgba(124, 58, 237, 0.07);"
+        )
+        auto_variants_btn.setVisible(True)
+        auto_variants_btn.setToolTip(
+            "Automatically load more classroom/time-slot variants for the "
+            "currently displayed dates only."
+        )
+        auto_variants_btn.clicked.connect(
+            lambda _=False, k=period_key: self._toggle_auto_load_variants(k)
         )
 
         lm_row.addWidget(chunk_btn)
-        lm_row.addWidget(auto_btn)
+        lm_row.addWidget(auto_dates_btn)
+        lm_row.addWidget(auto_variants_btn)
         lm_row.addStretch()
 
         layout.addLayout(lm_row)
@@ -581,7 +619,9 @@ class _ResultsPanel(QWidget):
         self._prev_btns[period_key] = prev_btn
         self._next_btns[period_key] = next_btn
         self._load_more_btns[period_key] = chunk_btn
-        self._auto_load_btns[period_key] = auto_btn
+        self._auto_load_btns[period_key] = auto_dates_btn
+        self._auto_date_btns[period_key] = auto_dates_btn
+        self._auto_variant_btns[period_key] = auto_variants_btn
 
         table.calendarCellClicked.connect(
             lambda row, col, pos, k=period_key: self._on_cell_clicked(
@@ -596,6 +636,21 @@ class _ResultsPanel(QWidget):
     def _date_signature(schedule: Schedule) -> _DateSignature:
         """Date-only identity of a schedule, ignoring Feature 4 variants."""
         return tuple(sorted(schedule.assignments.items()))
+
+    @staticmethod
+    def _schedule_has_classroom_data(schedule: Schedule) -> bool:
+        """Return True when Feature 4 classroom data exists on this schedule."""
+        return bool(
+            getattr(schedule, "classroom_assignments", None)
+            or getattr(schedule, "unassigned_classroom_exams", None)
+        )
+
+    def _has_classroom_feature_results(self, period_key: str) -> bool:
+        """Return True if the loaded period contains classroom-assignment data."""
+        return any(
+            self._schedule_has_classroom_data(schedule)
+            for schedule in self._schedules_by_period.get(period_key, [])
+        )
 
     def _rebuild_navigation_cache(self, period_key: str | None = None) -> None:
         """Build fast navigation indexes for loaded schedules.
@@ -773,12 +828,23 @@ class _ResultsPanel(QWidget):
                 and period_key not in self._auto_load_periods
             )
 
-        if period_key in self._auto_load_btns:
-            if not has_more:
-                self._auto_load_periods.discard(period_key)
-            self._auto_load_btns[period_key].setVisible(
-                has_more or period_key in self._auto_load_periods
-            )
+        if period_key in self._auto_date_btns or period_key in self._auto_variant_btns:
+            active_mode = self._auto_load_modes.get(period_key)
+            if not has_more and active_mode == _AUTO_MODE_DATES:
+                self._stop_auto_load(period_key, refresh=False)
+
+            has_classroom_variants = self._has_classroom_feature_results(period_key)
+
+            if period_key in self._auto_date_btns:
+                self._auto_date_btns[period_key].setVisible(
+                    has_more or active_mode == _AUTO_MODE_DATES
+                )
+
+            if period_key in self._auto_variant_btns:
+                self._auto_variant_btns[period_key].setVisible(
+                    has_classroom_variants or active_mode == _AUTO_MODE_VARIANTS
+                )
+
             self._update_auto_load_button(period_key)
 
         if schedules:
@@ -975,31 +1041,104 @@ class _ResultsPanel(QWidget):
             return
 
     def _toggle_auto_load(self, period_key: str) -> None:
-        """Start/stop delayed automatic Load More for one period.
+        """Backward-compatible alias for date auto loading."""
+        self._toggle_auto_load_dates(period_key)
 
-        Stop does not kill the currently running batch; it prevents scheduling
-        the next one after the current batch finishes.
-        """
-        if period_key in self._auto_load_periods:
-            self._auto_load_periods.remove(period_key)
-            self._update_auto_load_button(period_key)
-            self._refresh_period_card(period_key)
+    def _toggle_auto_load_dates(self, period_key: str) -> None:
+        """Start/stop automatic loading of different date options."""
+        if self._auto_load_modes.get(period_key) == _AUTO_MODE_DATES:
+            self._stop_auto_load(period_key)
             return
 
         if not self._controller.has_more_schedules(period_key):
             self._show_message(
-                "No More Results",
-                "There are no more options to load for this period.",
+                "No More Date Options",
+                "There are no more date options to load for this period.",
                 QMessageBox.Icon.Information,
             )
             return
 
+        self._switch_or_start_auto_load(period_key, _AUTO_MODE_DATES)
+
+    def _toggle_auto_load_variants(self, period_key: str) -> None:
+        """Start/stop automatic loading of variants for the current dates."""
+        if self._auto_load_modes.get(period_key) == _AUTO_MODE_VARIANTS:
+            self._stop_auto_load(period_key)
+            return
+
+        if not self._schedules_by_period.get(period_key):
+            return
+
+        if not self._has_classroom_feature_results(period_key):
+            self._show_message(
+                "No Classroom Variants",
+                "Generate schedules with Feature 4 enabled before loading classroom variants.",
+                QMessageBox.Icon.Information,
+            )
+            return
+
+        idx = self._period_indices.get(period_key, 0)
+        signature = self._date_signature(self._schedules_by_period[period_key][idx])
+        maybe_more = self._variant_more_by_signature.get((period_key, signature), True)
+        if not maybe_more:
+            self._show_message(
+                "No More Variants",
+                "No additional variants are known for the current date option.",
+                QMessageBox.Icon.Information,
+            )
+            return
+
+        self._switch_or_start_auto_load(period_key, _AUTO_MODE_VARIANTS)
+
+    def _switch_or_start_auto_load(self, period_key: str, target_mode: str) -> None:
+        """Start an Auto mode, or queue it after the current batch finishes.
+
+        Only one background process may write into a period at a time. When the
+        user clicks the other Auto button while a batch is running, do not start
+        a second process immediately. Instead, stop scheduling the current Auto
+        mode, remember the requested mode, and launch it as soon as the current
+        batch returns.
+        """
+        current_mode = self._auto_load_modes.get(period_key)
+
+        if current_mode == target_mode:
+            self._stop_auto_load(period_key)
+            return
+
+        if period_key in self._lm_procs:
+            self._pending_auto_modes[period_key] = target_mode
+            self._auto_load_periods.discard(period_key)
+            self._auto_load_modes.pop(period_key, None)
+            self._update_auto_load_button(period_key)
+            self._refresh_period_card(period_key)
+            return
+
+        self._stop_auto_load(period_key, refresh=False)
+        self._start_auto_load(period_key, target_mode)
+
+    def _start_auto_load(self, period_key: str, mode: str) -> None:
+        """Start one scoped auto-load mode for a period."""
+        if period_key in self._auto_load_periods:
+            self._stop_auto_load(period_key, refresh=False)
+
+        self._pending_auto_modes.pop(period_key, None)
         self._auto_load_periods.add(period_key)
+        self._auto_load_modes[period_key] = mode
         self._update_auto_load_button(period_key)
+        self._refresh_period_card(period_key)
         self._auto_load_next_batch(period_key)
 
+    def _stop_auto_load(self, period_key: str, refresh: bool = True) -> None:
+        """Stop scheduling additional auto-load batches for a period."""
+        self._auto_load_periods.discard(period_key)
+        self._auto_load_modes.pop(period_key, None)
+        self._pending_auto_modes.pop(period_key, None)
+        self._update_auto_load_button(period_key)
+        if refresh and period_key in self._schedules_by_period:
+            self._refresh_period_card(period_key)
+
     def _auto_load_next_batch(self, period_key: str) -> None:
-        """Request the next batch if Auto Load is still active for this period."""
+        """Request the next batch for the active scoped Auto mode."""
         if period_key not in self._auto_load_periods:
             self._update_auto_load_button(period_key)
             return
@@ -1007,51 +1146,123 @@ class _ResultsPanel(QWidget):
         if period_key in self._lm_procs:
             return
 
-        if not self._controller.has_more_schedules(period_key):
-            self._auto_load_periods.discard(period_key)
-            self._update_auto_load_button(period_key)
-            self._refresh_period_card(period_key)
+        mode = self._auto_load_modes.get(period_key)
+        if mode == _AUTO_MODE_DATES:
+            if not self._controller.has_more_schedules(period_key):
+                self._stop_auto_load(period_key)
+                return
+            self._on_load_more_dates(period_key)
             return
 
-        self._on_load_more(period_key)
+        if mode == _AUTO_MODE_VARIANTS:
+            self._on_load_more_variants(period_key)
+            return
+
+        self._stop_auto_load(period_key)
+
+    def _style_auto_button(
+        self,
+        button: QPushButton,
+        color: str,
+        background: str,
+        enabled: bool,
+    ) -> None:
+        button.setStyleSheet(
+            f"color: {color}; border: 2px solid {color}; border-radius: 8px;"
+            "padding: 6px 12px; font-size: 11px; font-weight: 700;"
+            f"background: {background};"
+        )
+        button.setEnabled(enabled)
 
     def _update_auto_load_button(self, period_key: str) -> None:
-        """Refresh the Auto Load / Stop Auto Load button text and state."""
-        btn = self._auto_load_btns.get(period_key)
-        if btn is None:
-            return
+        """Refresh Auto Dates / Auto Variants button text and state."""
+        date_btn = self._auto_date_btns.get(period_key)
+        variant_btn = self._auto_variant_btns.get(period_key)
 
-        is_auto = period_key in self._auto_load_periods
+        mode = self._auto_load_modes.get(period_key)
+        pending_mode = self._pending_auto_modes.get(period_key)
         is_loading = period_key in self._lm_procs
-        has_more = self._controller.has_more_schedules(period_key)
+        has_more_dates = self._controller.has_more_schedules(period_key)
+        has_classroom = self._has_classroom_feature_results(period_key)
+        variant_maybe_more = True
+        schedules = self._schedules_by_period.get(period_key, [])
+        if schedules:
+            current_idx = self._period_indices.get(period_key, 0)
+            if 0 <= current_idx < len(schedules):
+                signature = self._date_signature(schedules[current_idx])
+                variant_maybe_more = self._variant_more_by_signature.get(
+                    (period_key, signature),
+                    True,
+                )
 
-        if is_auto:
-            btn.setText("⏹  Stop Auto Load")
-            btn.setStyleSheet(
-                "color: #B91C1C; border: 2px solid #B91C1C; border-radius: 8px;"
-                "padding: 6px 12px; font-size: 11px; font-weight: 700;"
-                "background: rgba(185, 28, 28, 0.07);"
-            )
-            btn.setEnabled(True)
-            return
+        if date_btn is not None:
+            if pending_mode == _AUTO_MODE_DATES:
+                date_btn.setText("⏳  Dates Next")
+                self._style_auto_button(
+                    date_btn,
+                    "#B45309",
+                    "rgba(180, 83, 9, 0.07)",
+                    False,
+                )
+            elif mode == _AUTO_MODE_DATES:
+                date_btn.setText("⏹  Stop Dates")
+                self._style_auto_button(
+                    date_btn,
+                    "#B91C1C",
+                    "rgba(185, 28, 28, 0.07)",
+                    True,
+                )
+            else:
+                date_btn.setText("⚡  Auto Dates")
+                self._style_auto_button(
+                    date_btn,
+                    "#047857",
+                    "rgba(4, 120, 87, 0.07)",
+                    has_more_dates
+                    and pending_mode is None
+                    and (not is_loading or mode == _AUTO_MODE_VARIANTS),
+                )
 
-        btn.setText("⚡  Auto Load")
-        btn.setStyleSheet(
-            "color: #047857; border: 2px solid #047857; border-radius: 8px;"
-            "padding: 6px 12px; font-size: 11px; font-weight: 700;"
-            "background: rgba(4, 120, 87, 0.07);"
-        )
-        btn.setEnabled(has_more and not is_loading)
+        if variant_btn is not None:
+            if pending_mode == _AUTO_MODE_VARIANTS:
+                variant_btn.setText("⏳  Variants Next")
+                self._style_auto_button(
+                    variant_btn,
+                    "#B45309",
+                    "rgba(180, 83, 9, 0.07)",
+                    False,
+                )
+            elif mode == _AUTO_MODE_VARIANTS:
+                variant_btn.setText("⏹  Stop Variants")
+                self._style_auto_button(
+                    variant_btn,
+                    "#B91C1C",
+                    "rgba(185, 28, 28, 0.07)",
+                    True,
+                )
+            else:
+                variant_btn.setText("⚡  Auto Variants")
+                self._style_auto_button(
+                    variant_btn,
+                    "#7C3AED",
+                    "rgba(124, 58, 237, 0.07)",
+                    has_classroom
+                    and variant_maybe_more
+                    and pending_mode is None
+                    and (not is_loading or mode == _AUTO_MODE_DATES),
+                )
 
-    def _on_load_more(self, period_key: str, chunk_size: int | None = None) -> None:
-        if period_key in self._lm_procs:
-            return
-
-        already = len(self._schedules_by_period[period_key])
-        queue, proc = self._controller.start_load_more_for_period(period_key, already)
-
+    def _start_load_more_process(
+        self,
+        period_key: str,
+        queue: multiprocessing.Queue,
+        proc: multiprocessing.Process,
+        mode: str,
+    ) -> None:
+        """Register a background load-more process and start polling it."""
         self._lm_queues[period_key] = queue
         self._lm_procs[period_key] = proc
+        self._lm_modes[period_key] = mode
         self._lm_ticks[period_key] = 0
         self._lm_chunk_sizes[period_key] = RESULT_BATCH_SIZE
 
@@ -1059,7 +1270,8 @@ class _ResultsPanel(QWidget):
         if btn is not None:
             btn.setEnabled(False)
             if period_key not in self._auto_load_periods:
-                btn.setText(f"⠋  Loading {RESULT_BATCH_SIZE:,}…")
+                label = "date options" if mode == _AUTO_MODE_DATES else "variants"
+                btn.setText(f"⠋  Loading {label}…")
 
         self._update_auto_load_button(period_key)
 
@@ -1069,6 +1281,52 @@ class _ResultsPanel(QWidget):
 
         self._lm_timers[period_key] = timer
 
+    def _on_load_more(self, period_key: str, chunk_size: int | None = None) -> None:
+        """Backward-compatible manual action: load more date options."""
+        self._on_load_more_dates(period_key, chunk_size)
+
+    def _on_load_more_dates(
+        self,
+        period_key: str,
+        chunk_size: int | None = None,
+    ) -> None:
+        """Load one batch of different date options."""
+        if period_key in self._lm_procs:
+            return
+
+        already_date_options = len(self._date_options_for_period(period_key))
+        queue, proc = self._controller.start_load_more_date_options_for_period(
+            period_key,
+            already_date_options,
+        )
+        self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_DATES)
+
+    def _on_load_more_variants(
+        self,
+        period_key: str,
+        chunk_size: int | None = None,
+    ) -> None:
+        """Load one batch of variants for the currently displayed date option."""
+        if period_key in self._lm_procs:
+            return
+
+        schedules = self._schedules_by_period.get(period_key, [])
+        if not schedules:
+            self._stop_auto_load(period_key)
+            return
+
+        current_idx = self._period_indices.get(period_key, 0)
+        current_schedule = schedules[current_idx]
+        signature = self._date_signature(current_schedule)
+        existing_variants = len(self._indices_for_signature(period_key, signature))
+
+        queue, proc = self._controller.start_load_variants_for_schedule(
+            period_key,
+            current_schedule,
+            existing_variants,
+        )
+        self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_VARIANTS)
+
     def _poll_load_more(self, period_key: str) -> None:
         queue = self._lm_queues.get(period_key)
         if queue is None:
@@ -1077,13 +1335,15 @@ class _ResultsPanel(QWidget):
             self._cleanup_load_more_state(period_key, terminate=True)
             return
 
+        mode = self._lm_modes.get(period_key, _AUTO_MODE_DATES)
         tick = self._lm_ticks.get(period_key, 0)
         spinner = _SPINNER_CHARS[tick % len(_SPINNER_CHARS)]
         self._lm_ticks[period_key] = tick + 1
 
         btn = self._load_more_btns.get(period_key)
         if btn and period_key not in self._auto_load_periods:
-            btn.setText(f"{spinner}  Loading {RESULT_BATCH_SIZE:,}…")
+            label = "date options" if mode == _AUTO_MODE_DATES else "variants"
+            btn.setText(f"{spinner}  Loading {label}…")
 
         try:
             result = queue.get_nowait()
@@ -1097,8 +1357,7 @@ class _ResultsPanel(QWidget):
                     btn.setEnabled(True)
                     btn.setText("⚠  Load failed — retry")
 
-                self._auto_load_periods.discard(period_key)
-                self._update_auto_load_button(period_key)
+                self._stop_auto_load(period_key, refresh=False)
 
                 logger.error(
                     "Load more process ended without returning a result for %s",
@@ -1112,8 +1371,7 @@ class _ResultsPanel(QWidget):
                 btn.setEnabled(True)
                 btn.setText("⚠  Load failed — retry")
 
-            self._auto_load_periods.discard(period_key)
-            self._update_auto_load_button(period_key)
+            self._stop_auto_load(period_key, refresh=False)
 
             logger.error("Load more queue failed for %s: %s", period_key, exc)
             self._cleanup_load_more_state(period_key, terminate=True)
@@ -1141,8 +1399,7 @@ class _ResultsPanel(QWidget):
                 btn.setEnabled(True)
                 btn.setText("⚠  Load failed — retry")
 
-            self._auto_load_periods.discard(period_key)
-            self._update_auto_load_button(period_key)
+            self._stop_auto_load(period_key, refresh=False)
 
             logger.error("Load more failed for %s: %s", period_key, error_details)
             self._cleanup_load_more_state(period_key, terminate=True)
@@ -1153,6 +1410,15 @@ class _ResultsPanel(QWidget):
         old_len = len(self._schedules_by_period[period_key])
         extra = all_by_period.get(period_key, [])
         still_more = period_key in truncated_periods
+        active_auto_mode = self._auto_load_modes.get(period_key)
+        should_continue_auto = False
+
+        current_signature: _DateSignature | None = None
+        if mode == _AUTO_MODE_VARIANTS and self._schedules_by_period.get(period_key):
+            current_idx = self._period_indices.get(period_key, 0)
+            current_signature = self._date_signature(
+                self._schedules_by_period[period_key][current_idx]
+            )
 
         should_advance_to_next_date = period_key in self._lm_advance_after_load
 
@@ -1164,46 +1430,85 @@ class _ResultsPanel(QWidget):
             # causing a subsequent re-sort to silently drop the appended batch).
             self._controller.cache_generated_results(dict(self._schedules_by_period))
 
-        if should_advance_to_next_date:
-            self._lm_advance_after_load.discard(period_key)
-            options = self._date_options_for_period(period_key)
-            current_idx = self._period_indices.get(period_key, 0)
-            nav_pos = self._nav_position_for_index(period_key, current_idx)
+        if mode == _AUTO_MODE_DATES:
+            if should_advance_to_next_date:
+                self._lm_advance_after_load.discard(period_key)
+                options = self._date_options_for_period(period_key)
+                current_idx = self._period_indices.get(period_key, 0)
+                nav_pos = self._nav_position_for_index(period_key, current_idx)
 
-            if nav_pos is not None:
-                date_pos, _variant_pos = nav_pos
-                if date_pos < len(options) - 1:
-                    self._period_indices[period_key] = options[date_pos + 1][1][0]
+                if nav_pos is not None:
+                    date_pos, _variant_pos = nav_pos
+                    if date_pos < len(options) - 1:
+                        self._period_indices[period_key] = options[date_pos + 1][1][0]
                 elif extra and old_len < len(self._schedules_by_period[period_key]):
                     self._period_indices[period_key] = old_len
-            elif extra and old_len < len(self._schedules_by_period[period_key]):
-                self._period_indices[period_key] = old_len
 
-        self._controller.set_has_more_for_period(period_key, still_more)
+            # Auto Dates appends new date options in the background, but it must
+            # not move the currently displayed date option. The visible counter
+            # grows from "Date option: X / N" to "Date option: X / N+batch" and
+            # the user decides when to move with Next Dates or the Go input.
 
-        if still_more:
-            self._truncated_periods.add(period_key)
-        else:
-            self._truncated_periods.discard(period_key)
-            self._total_by_period[period_key] = len(
-                self._schedules_by_period[period_key]
+            self._controller.set_has_more_for_period(period_key, still_more)
+
+            if still_more:
+                self._truncated_periods.add(period_key)
+            else:
+                self._truncated_periods.discard(period_key)
+                self._total_by_period[period_key] = len(
+                    self._schedules_by_period[period_key]
+                )
+
+            should_continue_auto = (
+                active_auto_mode == _AUTO_MODE_DATES and still_more and bool(extra)
             )
+
+        elif mode == _AUTO_MODE_VARIANTS:
+            signature = current_signature
+            if signature is None and extra:
+                signature = self._date_signature(extra[0])
+
+            if signature is not None:
+                self._variant_more_by_signature[(period_key, signature)] = still_more
+
+            # Keep the currently displayed variant fixed while Auto Variants
+            # appends more options in the background. The user can see the total
+            # variant count grow and then choose when to move with Next Variant
+            # or by using the variant Go input.
+
+            # Do not update controller.has_more_schedules here: variant loading is
+            # separate from date-option loading.
+            should_continue_auto = (
+                active_auto_mode == _AUTO_MODE_VARIANTS and still_more and bool(extra)
+            )
+
+        else:
+            should_continue_auto = False
 
         self._cleanup_load_more_state(period_key)
         self._refresh_period_card(period_key)
 
-        if still_more and btn:
+        if mode == _AUTO_MODE_DATES and still_more and btn:
             btn.setEnabled(period_key not in self._auto_load_periods)
-            btn.setText(f"⟳  +{RESULT_BATCH_SIZE:,} more options")
+            btn.setText(f"⟳  +{RESULT_BATCH_SIZE:,} more date options")
 
-        if period_key in self._auto_load_periods:
-            if still_more and extra:
-                QTimer.singleShot(
-                    AUTO_LOAD_DELAY_MS,
-                    lambda k=period_key: self._auto_load_next_batch(k),
-                )
-            else:
-                self._auto_load_periods.discard(period_key)
+        pending_mode = self._pending_auto_modes.pop(period_key, None)
+        if pending_mode is not None:
+            # The user clicked the other Auto button while this batch was still
+            # running. The current batch is now finished and merged, so start
+            # the requested mode.
+            self._auto_load_periods.discard(period_key)
+            self._auto_load_modes.pop(period_key, None)
+            self._start_auto_load(period_key, pending_mode)
+            return
+
+        if should_continue_auto:
+            QTimer.singleShot(
+                AUTO_LOAD_DELAY_MS,
+                lambda k=period_key: self._auto_load_next_batch(k),
+            )
+        elif active_auto_mode == mode:
+            self._stop_auto_load(period_key, refresh=False)
 
         self._update_auto_load_button(period_key)
 
@@ -1218,6 +1523,7 @@ class _ResultsPanel(QWidget):
 
         self._lm_queues.pop(period_key, None)
         self._lm_chunk_sizes.pop(period_key, None)
+        self._lm_modes.pop(period_key, None)
         self._lm_ticks.pop(period_key, None)
         self._lm_advance_after_load.discard(period_key)
 

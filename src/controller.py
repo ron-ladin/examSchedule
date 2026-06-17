@@ -44,7 +44,12 @@ from src.domain.sorting_engine import SortingEngine
 from src.domain.threshold import ThresholdSettings
 from src.domain.threshold_filter import ThresholdFilter
 from src.domain.time_slot import TimeSlot
-from src.engine.app_controller import AppController as _EngineController
+from src.engine.app_controller import (
+    AppController as _EngineController,
+    CLASSROOM_VARIANT_MODE_ALL,
+    CLASSROOM_VARIANT_MODE_FIRST,
+)
+from src.engine.classroom_assigner import ClassroomAssigner
 from src.engine.proctor_report import build_proctor_report
 from src.engine.schedule_generator import ScheduleGenerator
 from src.interfaces.i_output_exporter import IOutputExporter
@@ -52,8 +57,18 @@ from src.interfaces.i_output_exporter import IOutputExporter
 logger = logging.getLogger(__name__)
 
 
-# Initial UI generation and each Load More request use this batch size.
-RESULT_BATCH_SIZE: int = 1000
+# All result auto-loading uses the same batch size.
+# This controls both:
+# 1. date-option loading / Auto Dates
+# 2. same-date classroom variant loading / Auto Variants
+#
+# Increase this value to load more blocks per request.
+# Decrease it if the UI feels slow or freezes during loading.
+LOAD_BATCH_SIZE: int = 1000
+
+# Backward-compatible names used by the UI/controller code.
+RESULT_BATCH_SIZE: int = LOAD_BATCH_SIZE
+VARIANT_BATCH_SIZE: int = LOAD_BATCH_SIZE
 
 
 class _MemoryExporter(IOutputExporter):
@@ -149,6 +164,7 @@ def _run_generation_process(
     time_slots: "list[TimeSlot] | None" = None,
     proctor_config: "ProctorConfig | None" = None,
     allow_unassigned_classrooms: bool = False,
+    classroom_variant_mode: str = CLASSROOM_VARIANT_MODE_FIRST,
 ) -> None:
     """
     Entry point for multiprocessing.Process-based schedule generation.
@@ -195,6 +211,7 @@ def _run_generation_process(
             time_slots=time_slots,
             proctor_config=proctor_config,
             allow_unassigned_classrooms=allow_unassigned_classrooms,
+            classroom_variant_mode=classroom_variant_mode,
         )
         engine.run()
 
@@ -208,6 +225,85 @@ def _run_generation_process(
         )
     except Exception as exc:
         logger.exception("Generation process failed")
+        result_queue.put((False, str(exc)))
+
+
+
+def _run_classroom_variants_process(
+    result_queue,
+    period_key: "str",
+    schedule: "Schedule",
+    courses: "list[Course]",
+    selected_programs: "list[str]",
+    settings: "Settings | None" = None,
+    cap: "int | None" = None,
+    offset: int = 0,
+    classrooms: "list[Classroom] | None" = None,
+    time_slots: "list[TimeSlot] | None" = None,
+    proctor_config: "ProctorConfig | None" = None,
+    allow_unassigned_classrooms: bool = False,
+) -> None:
+    """Generate classroom/time-slot variants for one already-chosen date schedule.
+
+    This does not run the date generator again. It reuses schedule.assignments as
+    the fixed date block and expands only classroom/time-slot allocations for it.
+    """
+    try:
+        active_settings = settings or Settings(
+            thresholds=ThresholdSettings(),
+            sorting=SortingConfig(),
+        )
+
+        if not classrooms or not time_slots or proctor_config is None:
+            result_queue.put((True, {period_key: []}, {c.id: c for c in courses}, set()))
+            return
+
+        # Important for Auto Variants:
+        # do not ask the classroom assigner to materialise every possible
+        # variant before the UI receives a result.  For a paged request, only
+        # generate enough candidates to answer this page plus one look-ahead item
+        # used to decide whether another page exists.
+        page_limit = None if cap is None else offset + cap + 1
+
+        variant_iter = ClassroomAssigner.assign_variants(
+            schedule,
+            courses,
+            selected_programs,
+            classrooms,
+            time_slots,
+            proctor_config,
+            allow_unassigned=allow_unassigned_classrooms,
+            max_options_per_day=page_limit,
+            max_options_per_schedule=page_limit,
+        )
+
+        if cap is None:
+            batch = list(islice(variant_iter, offset, None))
+            still_more = False
+        else:
+            batch_plus_one = list(islice(variant_iter, offset, offset + cap + 1))
+            still_more = len(batch_plus_one) > cap
+            batch = batch_plus_one[:cap]
+
+        courses_by_id = {course.id: course for course in courses}
+        if active_settings.sorting.rules:
+            batch = SortingEngine.sort(
+                batch,
+                courses,
+                active_settings.sorting,
+                selected_programs,
+            )
+
+        result_queue.put(
+            (
+                True,
+                {period_key: batch},
+                courses_by_id,
+                {period_key} if still_more else set(),
+            )
+        )
+    except Exception as exc:
+        logger.exception("Classroom variant process failed")
         result_queue.put((False, str(exc)))
 
 
@@ -760,7 +856,11 @@ class DesktopController:
         )
         generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
 
-        memory_exporter = _MemoryExporter(cap=None, settings=self._settings)
+        memory_exporter = _MemoryExporter(
+            cap=None,
+            settings=self._settings,
+            selected_programs=self._selected_programs,
+        )
 
         engine = _EngineController(
             data_provider=data_provider,
@@ -772,6 +872,7 @@ class DesktopController:
             classrooms=self.engine_classrooms(),
             time_slots=self.engine_time_slots(),
             proctor_config=self.engine_proctor_config(),
+            classroom_variant_mode=CLASSROOM_VARIANT_MODE_FIRST,
         )
         engine.run()
 
@@ -844,16 +945,16 @@ class DesktopController:
         self._iterator_overflows.clear()
         self._has_more_schedules = {key: True for key in truncated_periods}
 
-    def start_load_more_for_period(
+    def start_load_more_date_options_for_period(
         self,
         period_key: str,
-        already_loaded: int,
+        already_loaded_date_options: int,
     ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
-        """
-        Legacy helper for old batched UI flow.
+        """Load the next batch of different date options for one period.
 
-        Full generation no longer needs Load More. Kept so old UI/tests do not
-        break if they still import or call this method.
+        Feature 4 classroom data is attached using only the first valid
+        classroom/time-slot variant per date schedule. This keeps date loading
+        focused on new date blocks instead of expanding all room variants first.
         """
         import multiprocessing as _mp
 
@@ -870,7 +971,45 @@ class DesktopController:
                 "settings": self._settings,
                 "cap": RESULT_BATCH_SIZE,
                 "period_key": period_key,
-                "offset": already_loaded,
+                "offset": already_loaded_date_options,
+                "classrooms": self.engine_classrooms(),
+                "time_slots": self.engine_time_slots(),
+                "proctor_config": self.engine_proctor_config(),
+                "allow_unassigned_classrooms": self._allow_unassigned_classrooms,
+                "classroom_variant_mode": CLASSROOM_VARIANT_MODE_FIRST,
+            },
+            daemon=True,
+        )
+        proc.start()
+        return q, proc
+
+    def start_load_variants_for_schedule(
+        self,
+        period_key: str,
+        schedule: Schedule,
+        already_loaded_variants: int,
+    ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
+        """Load the next classroom/time-slot variants for the current dates.
+
+        The date assignments are fixed from the provided schedule. Only room and
+        slot allocations are expanded.
+        """
+        import multiprocessing as _mp
+
+        q: _mp.Queue = _mp.Queue()
+        proc = _mp.Process(
+            target=_run_classroom_variants_process,
+            args=(
+                q,
+                period_key,
+                schedule,
+                list(self._courses),
+                list(self._selected_programs),
+            ),
+            kwargs={
+                "settings": self._settings,
+                "cap": VARIANT_BATCH_SIZE,
+                "offset": already_loaded_variants,
                 "classrooms": self.engine_classrooms(),
                 "time_slots": self.engine_time_slots(),
                 "proctor_config": self.engine_proctor_config(),
@@ -880,6 +1019,14 @@ class DesktopController:
         )
         proc.start()
         return q, proc
+
+    def start_load_more_for_period(
+        self,
+        period_key: str,
+        already_loaded: int,
+    ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
+        """Backward-compatible alias for loading more date options."""
+        return self.start_load_more_date_options_for_period(period_key, already_loaded)
 
     def load_more_schedules(
         self,

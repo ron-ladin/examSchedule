@@ -15,13 +15,10 @@ from src.domain.time_slot import TimeSlot
 
 
 # Feature 4 variant limits.
-# None means unlimited classroom allocation options per date.
-# Warning: this can create a very large number of variants when there are many
-# rooms, slots, or multiple exam days in the same schedule.
+# None means there is no total classroom-variant limit.
+# The UI/controller still request variants in pages, so Auto Variants can load
+# them gradually without freezing while trying to compute everything at once.
 MAX_CLASSROOM_OPTIONS_PER_DAY: int | None = None
-
-# None means no global cap per full date-only schedule.
-# Be careful: with many days, total combinations can grow very quickly.
 MAX_CLASSROOM_OPTIONS_PER_SCHEDULE: int | None = None
 
 
@@ -103,11 +100,12 @@ def _room_distribution_variants(
 ) -> list[list[tuple[Classroom, int]]]:
     """Return possible room splits for one exam.
 
-    max_options=None means unlimited. The first option intentionally matches the
-    legacy behavior: choose rooms in sorted order until capacity is sufficient,
-    then balance students across that prefix. This keeps ClassroomAssigner.assign()
-    backward-compatible while assign_variants() can expose additional valid room
-    combinations.
+    max_options=None means unlimited.  Auto Variants passes a small page limit
+    from the controller, so the UI can still load unlimited variants gradually.
+    The first option intentionally matches the legacy behavior: choose rooms in
+    sorted order until capacity is sufficient, then balance students across that
+    prefix. This keeps ClassroomAssigner.assign() backward-compatible while
+    assign_variants() can expose additional valid room combinations.
     """
     if student_count == 0:
         return []
@@ -348,7 +346,6 @@ class ClassroomAssigner:
                     merged_unassigned.update(day_unassigned)
 
                     next_combined.append((merged_assignments, merged_unassigned))
-
                     if (
                         max_options_per_schedule is not None
                         and len(next_combined) >= max_options_per_schedule
