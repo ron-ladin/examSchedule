@@ -15,12 +15,13 @@ from src.domain.time_slot import TimeSlot
 
 
 # Feature 4 variant limits.
-# Change this value if you want more/fewer classroom allocation options per date.
-MAX_CLASSROOM_OPTIONS_PER_DAY = 10
+# None means unlimited classroom allocation options per date.
+# Warning: this can create a very large number of variants when there are many
+# rooms, slots, or multiple exam days in the same schedule.
+MAX_CLASSROOM_OPTIONS_PER_DAY: int | None = None
 
-# No global cap per full date-only schedule.
-# The only limit is MAX_CLASSROOM_OPTIONS_PER_DAY for each separate date.
-# Be careful: with many days, total combinations can still grow quickly.
+# None means no global cap per full date-only schedule.
+# Be careful: with many days, total combinations can grow very quickly.
 MAX_CLASSROOM_OPTIONS_PER_SCHEDULE: int | None = None
 
 
@@ -98,16 +99,20 @@ def _distribution_key(distribution: list[tuple[Classroom, int]]) -> tuple:
 def _room_distribution_variants(
     available_rooms: list[Classroom],
     student_count: int,
-    max_options: int,
+    max_options: int | None,
 ) -> list[list[tuple[Classroom, int]]]:
-    """Return up to max_options possible room splits for one exam.
+    """Return possible room splits for one exam.
 
-    The first option intentionally matches the legacy behavior: choose rooms in
-    sorted order until capacity is sufficient, then balance students across that
-    prefix. This keeps ClassroomAssigner.assign() backward-compatible while
-    assign_variants() can expose additional valid room combinations.
+    max_options=None means unlimited. The first option intentionally matches the
+    legacy behavior: choose rooms in sorted order until capacity is sufficient,
+    then balance students across that prefix. This keeps ClassroomAssigner.assign()
+    backward-compatible while assign_variants() can expose additional valid room
+    combinations.
     """
-    if student_count == 0 or max_options <= 0:
+    if student_count == 0:
+        return []
+
+    if max_options is not None and max_options <= 0:
         return []
 
     options: list[list[tuple[Classroom, int]]] = []
@@ -119,7 +124,7 @@ def _room_distribution_variants(
         options.append(legacy)
         seen.add(key)
 
-    if len(options) >= max_options:
+    if max_options is not None and len(options) >= max_options:
         return options
 
     # Generate extra combinations in deterministic order. Smaller room-count
@@ -144,7 +149,7 @@ def _room_distribution_variants(
             options.append(distribution)
             seen.add(key)
 
-            if len(options) >= max_options:
+            if max_options is not None and len(options) >= max_options:
                 return options
 
     return options
@@ -267,7 +272,7 @@ class ClassroomAssigner:
         slots: list[TimeSlot],
         proctor_config: ProctorConfig,
         allow_unassigned: bool = False,
-        max_options_per_day: int = MAX_CLASSROOM_OPTIONS_PER_DAY,
+        max_options_per_day: int | None = MAX_CLASSROOM_OPTIONS_PER_DAY,
         max_options_per_schedule: int | None = MAX_CLASSROOM_OPTIONS_PER_SCHEDULE,
     ) -> Iterator[Schedule]:
         """Yield valid classroom-allocation variants for one date schedule.
@@ -278,7 +283,7 @@ class ClassroomAssigner:
         For each date, at most max_options_per_day room/slot allocations are
         considered, so one busy day cannot explode the result count.
         """
-        if max_options_per_day <= 0:
+        if max_options_per_day is not None and max_options_per_day <= 0:
             return
 
         if max_options_per_schedule is not None and max_options_per_schedule <= 0:
@@ -380,9 +385,12 @@ class ClassroomAssigner:
         slots: list[TimeSlot],
         proctor_config: ProctorConfig,
         allow_unassigned: bool,
-        max_options: int,
+        max_options: int | None,
     ) -> list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]:
-        """Return up to max_options valid room allocations for one date."""
+        """Return valid room allocations for one date.
+
+        max_options=None means unlimited options for that date.
+        """
         options: list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]] = []
         used_rooms: dict[TimeSlot, set[str]] = {}
         result: dict[str, list[ClassroomAssignment]] = {}
@@ -396,7 +404,7 @@ class ClassroomAssigner:
         )
 
         def backtrack(index: int) -> None:
-            if len(options) >= max_options:
+            if max_options is not None and len(options) >= max_options:
                 return
 
             if index >= len(ordered):
@@ -429,7 +437,11 @@ class ClassroomAssigner:
                 if sum(room.capacity for room in available) < student_count:
                     continue
 
-                remaining_budget = max_options - len(options)
+                remaining_budget = (
+                    None
+                    if max_options is None
+                    else max_options - len(options)
+                )
                 distributions = _room_distribution_variants(
                     available,
                     student_count,
@@ -455,10 +467,10 @@ class ClassroomAssigner:
                     used_for_slot.difference_update(room_ids)
                     result.pop(course_id, None)
 
-                    if len(options) >= max_options:
+                    if max_options is not None and len(options) >= max_options:
                         break
 
-                if len(options) >= max_options:
+                if max_options is not None and len(options) >= max_options:
                     break
 
             if not assigned_any_option and allow_unassigned:
