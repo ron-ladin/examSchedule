@@ -5,7 +5,7 @@ Validates a Schedule against a ThresholdSettings configuration.
 Implements spec sections 2.1–2.5 (sprint3_source_of_truth.md).
 
 Public API:
-    ThresholdFilter.is_valid(schedule, courses, settings) -> bool
+    ThresholdFilter.is_valid(schedule, courses, settings, selected_programs=None) -> bool
 
 Returns True only if every *enabled* criterion is satisfied.
 """
@@ -18,6 +18,7 @@ from typing import Dict, List, Tuple
 from src.domain.course import Course
 from src.domain.interfaces import IThresholdFilter
 from src.domain.schedule import Schedule
+from src.domain.semester import normalize_semester
 from src.domain.threshold import Criterion, ThresholdSettings
 
 
@@ -43,11 +44,20 @@ class ThresholdFilter(IThresholdFilter):
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _relevant_offerings(course: Course, prog_set: set) -> list:
-    """Return offerings restricted to selected programs (all when prog_set is empty)."""
-    if not prog_set:
-        return course.offerings
-    return [o for o in course.offerings if o.program_id in prog_set]
+def _relevant_offerings(course: Course, prog_set: set, semester: str) -> list:
+    """Return offerings relevant to selected programs and the schedule semester.
+
+    Empty prog_set keeps the previous direct-unit-test behavior of accepting
+    all programs, but offerings from other semesters are still ignored because
+    Feature 3 metrics are period-specific.
+    """
+    target_semester = normalize_semester(semester)
+    return [
+        offering
+        for offering in course.offerings
+        if (not prog_set or offering.program_id in prog_set)
+        and normalize_semester(offering.semester) == target_semester
+    ]
 
 
 def _mandatory_dates_by_group(
@@ -59,7 +69,7 @@ def _mandatory_dates_by_group(
         if course.id not in schedule.assignments:
             continue
         exam_date = schedule.assignments[course.id]
-        for offering in _relevant_offerings(course, prog_set):
+        for offering in _relevant_offerings(course, prog_set, schedule.period.semester):
             if offering.requirement.strip().lower() != "obligatory":
                 continue
             key = (offering.program_id, offering.year)
@@ -76,7 +86,7 @@ def _all_dates_by_group(
         if course.id not in schedule.assignments:
             continue
         exam_date = schedule.assignments[course.id]
-        for offering in _relevant_offerings(course, prog_set):
+        for offering in _relevant_offerings(course, prog_set, schedule.period.semester):
             key = (offering.program_id, offering.year)
             groups.setdefault(key, []).append(exam_date)
     return groups
@@ -91,7 +101,7 @@ def _elective_dates_by_program(
         if course.id not in schedule.assignments:
             continue
         exam_date = schedule.assignments[course.id]
-        for offering in _relevant_offerings(course, prog_set):
+        for offering in _relevant_offerings(course, prog_set, schedule.period.semester):
             if offering.requirement.strip().lower() != "elective":
                 continue
             groups.setdefault(offering.program_id, []).append(exam_date)
