@@ -21,16 +21,11 @@ periods_changed()           → after exam periods are (re)loaded
 """
 
 import logging
-import multiprocessing
-import time
 from pathlib import Path
-from queue import Empty as _QueueEmpty
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
-    QButtonGroup,
-    QCheckBox,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -39,26 +34,27 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
-from src.controller import DesktopController, LOAD_BATCH_SIZE, _run_generation_process
+from src.controller import DesktopController
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
-from src.ui.assets.icons import BookIcon, CalendarIcon
+from src.ui.generation_poller import GenerationPoller
 from src.ui.periods_editor_dialog import ExamPeriodsEditorDialog
 from src.ui.results_panel import _display_period_key
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
+from src.ui.widgets.config_input_cards import FilesCard, LoadModeCard
+from src.ui.widgets.feature4_card import Feature4Card
+from src.ui.widgets.programme_row import ProgrammeRow
 
 logger = logging.getLogger(__name__)
 
 _LOGO_PNG = str(Path(__file__).parent / "assets" / "logo.png")
 
 _MAX_PROGS = 5
-_MAX_GEN_SECS = 180
 
 
 def _section_lbl(text: str) -> QLabel:
@@ -87,83 +83,6 @@ def _card() -> QFrame:
     return f
 
 
-_VIEW_BTN_STYLE = (
-    "QPushButton { background:rgba(0,67,148,0.07);"
-    " border:1px solid rgba(0,67,148,0.2); border-radius:6px;"
-    " padding:0px 10px; font-size:11px; font-weight:600; color:#004394; }"
-    "QPushButton:hover:enabled { background:rgba(0,67,148,0.13); border-color:#004394; }"
-    "QPushButton:disabled { color:#94A3B8; border-color:rgba(194,198,214,0.4);"
-    " background:transparent; }"
-)
-
-
-class _ProgrammeRow(QWidget):
-    """One programme row: checkbox · label · View Courses button."""
-
-    toggled = pyqtSignal(str, bool)           # pid, is_checked
-    view_courses_clicked = pyqtSignal(str)    # pid
-
-    def __init__(self, pid: str, name: str, parent=None) -> None:
-        super().__init__(parent)
-        self._pid = pid
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(10)
-
-        self._checkbox = QCheckBox()
-        self._checkbox.setFixedSize(22, 22)
-        self._checkbox.setStyleSheet(
-            "QCheckBox::indicator { width:18px; height:18px; border-radius:5px;"
-            " border:2px solid rgba(194,198,214,0.9); background:white; }"
-            "QCheckBox::indicator:hover { border-color:#004394; }"
-            "QCheckBox::indicator:checked { background:#004394; border-color:#004394; }"
-        )
-        layout.addWidget(self._checkbox)
-
-        self._label = QLabel(f"\u200e{pid}  —  {name}")
-        self._label.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self._label.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
-        self._label.setStyleSheet(
-            "font-size:13px; color:#171c20; font-weight:500; background:transparent;"
-        )
-
-        layout.addWidget(self._label)
-        layout.addStretch(1)
-
-        self._view_btn = QPushButton("View Courses ▶")
-
-        self._view_btn.setEnabled(False)
-        self._view_btn.setFixedHeight(26)
-        self._view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._view_btn.setStyleSheet(_VIEW_BTN_STYLE)
-        self._view_btn.clicked.connect(lambda: self.view_courses_clicked.emit(self._pid))
-        layout.addWidget(self._view_btn)
-
-        self._checkbox.stateChanged.connect(self._on_state_changed)
-
-    def is_checked(self) -> bool:
-        return self._checkbox.isChecked()
-
-    def set_checked(self, checked: bool) -> None:
-        self._checkbox.blockSignals(True)
-        self._checkbox.setChecked(checked)
-        self._checkbox.blockSignals(False)
-        self._view_btn.setEnabled(checked)
-
-    def set_label_color(self, color: str) -> None:
-        self._label.setStyleSheet(
-            f"font-size:13px; color:{color}; font-weight:500; background:transparent;"
-        )
-
-    def _on_state_changed(self, state: int) -> None:
-        checked = state == Qt.CheckState.Checked.value
-        self._view_btn.setEnabled(checked)
-        self.toggled.emit(self._pid, checked)
-
-
 class ConfigScreen(QWidget):
     """Full-screen configuration (Screen 0)."""
 
@@ -176,15 +95,14 @@ class ConfigScreen(QWidget):
     def __init__(self, controller: DesktopController, parent=None) -> None:
         super().__init__(parent)
         self._controller = controller
-        self._gen_process: multiprocessing.Process | None = None
-        self._poll_timer: QTimer | None = None
-        self._result_queue: multiprocessing.Queue | None = None
-        self._pending_selected: list[str] = []
-        self._pending_color_map: dict[str, str] = {}
-        self._gen_start_time: float = 0.0
-        self._dead_ticks: int = 0
         self._settings_dialog: SettingsScreen | None = None
         self._allow_unassigned_generation = False
+
+        self._poller = GenerationPoller(controller, parent=self)
+        self._poller.generation_succeeded.connect(self._on_generation_succeeded)
+        self._poller.generation_failed.connect(self._fail)
+        self._poller.progress_reset.connect(self._reset_progress)
+
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -307,15 +225,20 @@ class ConfigScreen(QWidget):
 
         cl.addWidget(steps_row)
 
+        self._mode_card = LoadModeCard()
+        self._files_card = FilesCard(self._load_courses, self._load_dates)
+
         top = QHBoxLayout()
         top.setSpacing(16)
-        top.addWidget(self._build_mode_card(), 1)
-        top.addWidget(self._build_files_card(), 1)
+        top.addWidget(self._mode_card, 1)
+        top.addWidget(self._files_card, 1)
 
         cl.addLayout(top)
         cl.addWidget(self._build_prog_card())
         cl.addWidget(self._build_periods_card())
-        cl.addWidget(self._build_feature4_card())
+        self._feature4_card = Feature4Card(self._controller)
+        self._feature4_card.gen_btn_update_needed.connect(self._update_gen_btn)
+        cl.addWidget(self._feature4_card)
 
         self._gen_btn = QPushButton("▶  Generate Schedule")
         self._gen_btn.setObjectName("generateBtn")
@@ -334,164 +257,6 @@ class ConfigScreen(QWidget):
 
         scroll.setWidget(outer)
         return scroll
-
-    def _build_mode_card(self) -> QFrame:
-        c = _card()
-
-        vl = QVBoxLayout(c)
-        vl.setContentsMargins(20, 18, 20, 18)
-        vl.setSpacing(10)
-        vl.addWidget(_section_lbl("LOAD MODE"))
-
-        self._mode_group = QButtonGroup(self)
-        self._mode_btn_frame_pairs: list[tuple[QRadioButton, QFrame]] = []
-
-        radio_style = (
-            "QRadioButton { font-size:14px; font-weight:600; color:#171c20;"
-            " spacing:10px; background:transparent; }"
-            "QRadioButton::indicator { width:18px; height:18px; border-radius:9px;"
-            " border:2px solid rgba(194,198,214,0.9); background:white; }"
-            "QRadioButton::indicator:hover { border-color:#004394; }"
-            "QRadioButton::indicator:checked { border:5px solid #004394;"
-            " background:white; border-radius:9px; }"
-        )
-
-        for label, hint_text in (
-            ("Replace", "Clear all existing data"),
-            ("Update", "Merge with existing data"),
-        ):
-            option_frame = QFrame()
-            option_frame.setCursor(Qt.CursorShape.PointingHandCursor)
-
-            fl = QVBoxLayout(option_frame)
-            fl.setContentsMargins(0, 0, 0, 0)
-            fl.setSpacing(0)
-
-            rb_row = QWidget()
-            rb_row.setStyleSheet("background:transparent;")
-
-            rl = QHBoxLayout(rb_row)
-            rl.setContentsMargins(14, 12, 14, 4)
-            rl.setSpacing(10)
-
-            rb = QRadioButton(label)
-            rb.setCursor(Qt.CursorShape.PointingHandCursor)
-            rb.setStyleSheet(radio_style)
-
-            self._mode_group.addButton(rb)
-
-            rl.addWidget(rb)
-            rl.addStretch()
-
-            hint = QLabel(hint_text)
-            hint.setContentsMargins(42, 0, 14, 10)
-            hint.setStyleSheet(
-                "font-size:12px; color:#42474e; background:transparent;"
-            )
-
-            fl.addWidget(rb_row)
-            fl.addWidget(hint)
-
-            rb.toggled.connect(lambda _: self._update_mode_card_styles())
-            option_frame.mousePressEvent = lambda event, _rb=rb: _rb.setChecked(True)
-            self._mode_btn_frame_pairs.append((rb, option_frame))
-            vl.addWidget(option_frame)
-
-        self._mode_group.buttons()[0].setChecked(True)
-        self._update_mode_card_styles()
-
-        vl.addStretch()
-        return c
-
-    def _update_mode_card_styles(self) -> None:
-        checked = self._mode_group.checkedButton()
-
-        for btn, frame in self._mode_btn_frame_pairs:
-            if btn is checked:
-                frame.setStyleSheet(
-                    "QFrame { background:rgba(0,67,148,0.08);"
-                    " border:1px solid rgba(194,198,214,0.5); border-radius:10px; }"
-                )
-            else:
-                frame.setStyleSheet(
-                    "QFrame { background:rgba(255,255,255,0.6);"
-                    " border:1px solid rgba(194,198,214,0.5); border-radius:10px; }"
-                )
-
-    def _build_files_card(self) -> QFrame:
-        c = _card()
-
-        vl = QVBoxLayout(c)
-        vl.setContentsMargins(20, 18, 20, 18)
-        vl.setSpacing(10)
-        vl.addWidget(_section_lbl("FILES"))
-
-        specs = [
-            (
-                BookIcon(14, "#004394"),
-                "Courses",
-                "Load Courses",
-                "_load_courses_btn",
-                "_courses_label",
-                self._load_courses,
-            ),
-            (
-                CalendarIcon(14, "#004394"),
-                "Exam Periods",
-                "Load Periods",
-                "_load_periods_btn",
-                "_dates_label",
-                self._load_dates,
-            ),
-        ]
-
-        file_btn_style = (
-            "QPushButton { background:rgba(222,227,235,0.9);"
-            " border:1px solid rgba(194,198,214,0.5); border-radius:8px;"
-            " padding:5px 12px; font-size:12px; font-weight:600; color:#171c20; }"
-            "QPushButton:hover { background:rgba(0,67,148,0.08);"
-            " border-color:#004394; color:#004394; }"
-        )
-
-        for icon, title, btn_text, btn_attr, lbl_attr, slot in specs:
-            btn = QPushButton(btn_text)
-            btn.setFixedWidth(110)
-            btn.setStyleSheet(file_btn_style)
-            btn.clicked.connect(slot)
-
-            lbl = QLabel("No file loaded")
-            lbl.setStyleSheet(
-                "font-size:11px; color:#72778c; background:transparent;"
-            )
-
-            setattr(self, btn_attr, btn)
-            setattr(self, lbl_attr, lbl)
-
-            row = QFrame()
-            row.setStyleSheet(
-                "QFrame { background:transparent; border-radius:8px; border:none; }"
-                "QFrame:hover { background:rgba(0,67,148,0.04); }"
-            )
-
-            hl = QHBoxLayout(row)
-            hl.setContentsMargins(10, 8, 10, 8)
-            hl.setSpacing(10)
-
-            hl.addWidget(icon)
-
-            title_lbl = QLabel(title)
-            title_lbl.setStyleSheet(
-                "font-size:14px; font-weight:600; color:#171c20; background:transparent;"
-            )
-
-            hl.addWidget(title_lbl)
-            hl.addStretch()
-            hl.addWidget(btn)
-            hl.addWidget(lbl)
-
-            vl.addWidget(row)
-
-        return c
 
     def _build_prog_card(self) -> QFrame:
         c = _card()
@@ -521,7 +286,7 @@ class ConfigScreen(QWidget):
         )
         vl.addWidget(self._prog_placeholder)
 
-        self._prog_rows: dict[str, _ProgrammeRow] = {}
+        self._prog_rows: dict[str, ProgrammeRow] = {}
 
         self._prog_rows_container = QWidget()
         self._prog_rows_container.setStyleSheet("background: transparent;")
@@ -598,244 +363,6 @@ class ConfigScreen(QWidget):
         )
         self._edit_periods_btn.setEnabled(True)
 
-    def _build_feature4_card(self) -> QFrame:
-        """Build the optional Feature 4 (classroom assignment) input card.
-
-        The GUI exposes a dedicated activation toggle and Browse buttons for
-        the classrooms, time-slots, and proctor-ratio text files.
-        """
-        c = _card()
-        self._feature4_card = c
-
-        vl = QVBoxLayout(c)
-        vl.setContentsMargins(20, 18, 20, 18)
-        vl.setSpacing(10)
-
-        header = QHBoxLayout()
-        header.addWidget(_section_lbl("FEATURE 4 - CLASSROOM ASSIGNMENT"))
-        header.addStretch()
-
-        self._feature4_status = QLabel()
-        self._feature4_status.setFixedHeight(24)
-        header.addWidget(self._feature4_status)
-        vl.addLayout(header)
-
-        # Dedicated activation toggle (spec 4.1).
-        self._feature4_toggle = QCheckBox("Enable classroom & slot assignment")
-        self._feature4_toggle.setChecked(self._controller.feature4_enabled)
-        self._feature4_toggle.toggled.connect(self._on_feature4_toggled)
-        vl.addWidget(self._feature4_toggle)
-
-        description = QLabel(
-            "When enabled, load classrooms, time slots, and proctor ratio .txt "
-            "files. All three are required before generation."
-        )
-        description.setWordWrap(True)
-        description.setStyleSheet(
-            "font-size:11px; color:#64748B; background:transparent;"
-        )
-        vl.addWidget(description)
-
-        # Classrooms: file browse (spec 4.1).
-        self._classrooms_label = QLabel("Missing")
-        self._classrooms_label.setWordWrap(True)
-        self._classrooms_label.setStyleSheet(self._feature4_input_style("missing"))
-        self._load_classrooms_btn = QPushButton("Browse")
-        self._load_classrooms_btn.setFixedWidth(120)
-        self._load_classrooms_btn.clicked.connect(self._load_classrooms)
-        crow = QHBoxLayout()
-        crow.addWidget(self._feature4_row_title("Classrooms"))
-        crow.addWidget(self._load_classrooms_btn)
-        crow.addWidget(self._classrooms_label, 1)
-        vl.addLayout(crow)
-
-        # Time slots: .txt file with comma-separated HH:MM values.
-        self._load_slots_btn = QPushButton("Browse")
-        self._load_slots_btn.setFixedWidth(120)
-        self._load_slots_btn.clicked.connect(self._load_time_slots)
-        self._slots_label = QLabel("Missing")
-        self._slots_label.setWordWrap(True)
-        self._slots_label.setStyleSheet(self._feature4_input_style("missing"))
-        srow = QHBoxLayout()
-        srow.addWidget(self._feature4_row_title("Time Slots"))
-        srow.addWidget(self._load_slots_btn)
-        srow.addWidget(self._slots_label, 1)
-        vl.addLayout(srow)
-
-        # Proctor ratio: .txt file with a single '1:X' value.
-        self._load_proctors_btn = QPushButton("Browse")
-        self._load_proctors_btn.setFixedWidth(120)
-        self._load_proctors_btn.clicked.connect(self._load_proctor_config)
-        self._proctors_label = QLabel("Missing")
-        self._proctors_label.setWordWrap(True)
-        self._proctors_label.setStyleSheet(self._feature4_input_style("missing"))
-        prow = QHBoxLayout()
-        prow.addWidget(self._feature4_row_title("Proctor Ratio"))
-        prow.addWidget(self._load_proctors_btn)
-        prow.addWidget(self._proctors_label, 1)
-        vl.addLayout(prow)
-
-        self._feature4_inputs = [
-            self._load_classrooms_btn,
-            self._load_slots_btn,
-            self._load_proctors_btn,
-        ]
-        self._apply_feature4_enabled_state()
-        self._refresh_feature4_status()
-        return c
-
-    @staticmethod
-    def _feature4_row_title(text: str) -> QLabel:
-        lbl = QLabel(text)
-        lbl.setMinimumWidth(105)
-        lbl.setStyleSheet(
-            "font-size:12px; font-weight:600; color:#171c20; background:transparent;"
-        )
-        return lbl
-
-    @staticmethod
-    def _feature4_input_style(state: str) -> str:
-        colors = {
-            "missing": ("#92400E", "#FEF3C7"),
-            "valid": ("#047857", "#D1FAE5"),
-            "invalid": ("#B91C1C", "#FEE2E2"),
-        }
-        foreground, background = colors[state]
-        return (
-            f"font-size:11px; color:{foreground}; background:{background};"
-            " border-radius:4px; padding:3px 7px;"
-        )
-
-    def _on_feature4_toggled(self, checked: bool) -> None:
-        # Spec §4.3: if F4 is toggled ON but loaded courses already have Exam
-        # entries missing StudentCount, treat it like a failed file load: reset
-        # the toggle back to OFF so the user cannot proceed without valid data.
-        # Determine the final enabled state FIRST to avoid an intermediate invalid
-        # controller state (set_feature4_enabled is called exactly once).
-        if checked and self._controller.feature4_missing_student_counts():
-            self._controller.set_feature4_enabled(False)
-            self._feature4_toggle.setChecked(False)
-            self._apply_feature4_enabled_state()
-            QMessageBox.critical(
-                self,
-                "Missing Student Counts",
-                "Feature 4 requires a StudentCount (5th column) for every Exam "
-                "course, but the currently loaded courses file is missing at least "
-                "one.\n\n"
-                "Feature 4 has been disabled (spec §4.3). Reload a valid courses "
-                "file before enabling Feature 4.",
-            )
-        else:
-            self._controller.set_feature4_enabled(checked)
-            self._apply_feature4_enabled_state()
-        self._refresh_feature4_status()
-        self._update_gen_btn()
-
-    def _apply_feature4_enabled_state(self) -> None:
-        for widget in self._feature4_inputs:
-            widget.setEnabled(self._controller.feature4_enabled)
-
-    def _refresh_feature4_status(self) -> None:
-        ctrl = self._controller
-        active_style = (
-            "font-size:11px; font-weight:800; color:#047857; background:#D1FAE5;"
-            " border:1px solid #6EE7B7; border-radius:12px; padding:2px 10px;"
-        )
-        warn_style = (
-            "font-size:11px; font-weight:800; color:#B91C1C; background:#FEE2E2;"
-            " border:1px solid #FCA5A5; border-radius:12px; padding:2px 10px;"
-        )
-        idle_style = (
-            "font-size:11px; font-weight:700; color:#64748B; background:#F1F5F9;"
-            " border:1px solid #CBD5E1; border-radius:12px; padding:2px 10px;"
-        )
-
-        if not ctrl.feature4_enabled:
-            text, style = "DISABLED", idle_style
-        elif ctrl.feature4_ready():
-            text, style = "ACTIVE", active_style
-        elif ctrl.feature4_inputs_valid and ctrl.feature4_missing_student_counts():
-            text, style = "BLOCKED - missing student counts", warn_style
-        else:
-            text, style = "INCOMPLETE - enter all inputs", idle_style
-
-        self._feature4_status.setText(text)
-        self._feature4_status.setStyleSheet(style)
-        if ctrl.feature4_ready():
-            self._feature4_card.setStyleSheet(
-                "QFrame { background:rgba(236,253,245,0.85);"
-                " border:1px solid #6EE7B7; border-radius:12px; }"
-            )
-        else:
-            self._feature4_card.setStyleSheet(
-                "QFrame { background:rgba(255,255,255,0.75);"
-                " border:1px dashed #CBD5E1; border-radius:12px; }"
-            )
-
-    def _load_feature4_file(
-        self,
-        title: str,
-        label: QLabel,
-        loader,
-        clearer,
-        success_text,
-    ) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            f"Select {title} File",
-            "",
-            "Text files (*.txt);;All files (*)",
-        )
-        if not path:
-            return
-
-        try:
-            result = loader(Path(path))
-            label.setText(f"{Path(path).name} - {success_text(result)}")
-            label.setStyleSheet(self._feature4_input_style("valid"))
-        except Exception as exc:
-            clearer()
-            label.setText(f"{Path(path).name} - Invalid file")
-            label.setStyleSheet(self._feature4_input_style("invalid"))
-            logger.warning("Invalid Feature 4 %s file: %s", title, exc)
-            QMessageBox.critical(
-                self,
-                "Invalid Feature 4 File",
-                f"The selected {title.lower()} file is invalid.\n\n"
-                f"File: {Path(path).name}\n"
-                f"Reason: {exc}",
-            )
-
-        self._refresh_feature4_status()
-        self._update_gen_btn()
-
-    def _load_classrooms(self) -> None:
-        self._load_feature4_file(
-            "Classrooms",
-            self._classrooms_label,
-            self._controller.load_classrooms,
-            self._controller.clear_classrooms,
-            lambda count: f"{count} room(s)",
-        )
-
-    def _load_time_slots(self) -> None:
-        self._load_feature4_file(
-            "Time Slots",
-            self._slots_label,
-            self._controller.load_time_slots,
-            self._controller.clear_time_slots,
-            lambda count: f"{count} slot(s)",
-        )
-
-    def _load_proctor_config(self) -> None:
-        self._load_feature4_file(
-            "Proctor Ratio",
-            self._proctors_label,
-            self._controller.load_proctor_config,
-            self._controller.clear_proctor_config,
-            lambda config: f"1:{config.students_per_proctor}",
-        )
-
     def _on_edit_periods(self) -> None:
         dlg = ExamPeriodsEditorDialog(self._controller, parent=self)
         dlg.exec()
@@ -888,8 +415,7 @@ class ConfigScreen(QWidget):
         if not path:
             return
 
-        checked_btn = self._mode_group.checkedButton()
-        mode = checked_btn.text().lower()
+        mode = self._mode_card.selected_mode()
 
         try:
             # Spec 4.3: if Feature 4 is ON and any Exam course is missing a
@@ -902,8 +428,8 @@ class ConfigScreen(QWidget):
                 and self._controller.any_exam_missing_student_count()
             ):
                 self._controller.restore_courses(prior_courses)
-                self._courses_label.setText(f"{Path(path).name} - Missing StudentCount")
-                self._courses_label.setStyleSheet(
+                self._files_card.courses_label.setText(f"{Path(path).name} - Missing StudentCount")
+                self._files_card.courses_label.setStyleSheet(
                     "font-size:11px; color:#B91C1C; background:rgba(239,68,68,0.1);"
                     " border-radius:4px; padding:2px 7px;"
                 )
@@ -918,8 +444,8 @@ class ConfigScreen(QWidget):
                 self._set_status("✗  Courses load aborted — missing StudentCount.")
                 self._update_gen_btn()
                 return
-            self._courses_label.setText(f"{Path(path).name}  ({count})")
-            self._courses_label.setStyleSheet(
+            self._files_card.courses_label.setText(f"{Path(path).name}  ({count})")
+            self._files_card.courses_label.setStyleSheet(
                 "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
                 " border-radius:4px; padding:2px 7px;"
             )
@@ -947,12 +473,12 @@ class ConfigScreen(QWidget):
         if not path:
             return
 
-        mode = self._mode_group.checkedButton().text().lower()
+        mode = self._mode_card.selected_mode()
 
         try:
             count = self._controller.load_periods(Path(path), mode=mode)
-            self._dates_label.setText(f"{Path(path).name}  ({count})")
-            self._dates_label.setStyleSheet(
+            self._files_card.dates_label.setText(f"{Path(path).name}  ({count})")
+            self._files_card.dates_label.setStyleSheet(
                 "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
                 " border-radius:4px; padding:2px 7px;"
             )
@@ -980,7 +506,7 @@ class ConfigScreen(QWidget):
 
         for pid in self._controller.get_programme_ids():
             name = PROGRAM_NAMES_MAPPING.get(pid, "Unknown Program")
-            row = _ProgrammeRow(pid, name, parent=self._prog_rows_container)
+            row = ProgrammeRow(pid, name, parent=self._prog_rows_container)
             row.toggled.connect(self._on_programme_toggled)
             row.view_courses_clicked.connect(self._on_view_courses_for)
             self._prog_rows[pid] = row
@@ -1034,9 +560,7 @@ class ConfigScreen(QWidget):
 
     def _on_open_settings(self) -> None:
         """Open (or raise) the modeless SettingsScreen dialog."""
-        is_running = (
-            self._gen_process is not None and self._gen_process.is_alive()
-        )
+        is_running = self._poller.is_running()
         if self._settings_dialog is None:
             self._settings_dialog = SettingsScreen(
                 self._controller.settings,
@@ -1070,13 +594,12 @@ class ConfigScreen(QWidget):
         self._controller.set_allow_unassigned_classrooms(
             self._allow_unassigned_generation
         )
-        self._pending_selected = selected
-        self._pending_color_map = {
+        color_map = {
             pid: PROGRAMME_COLOURS[i % len(PROGRAMME_COLOURS)]
             for i, pid in enumerate(selected)
         }
 
-        self.generation_started.emit((selected, self._pending_color_map))
+        self.generation_started.emit((selected, color_map))
 
         self._gen_btn.setEnabled(False)
         self._notify_settings_state(True)
@@ -1087,44 +610,7 @@ class ConfigScreen(QWidget):
             "QProgressBar::chunk { background:#2563EB; }"
         )
 
-        if self._gen_process is not None and self._gen_process.is_alive():
-            self._gen_process.kill()
-
-        if self._poll_timer is not None:
-            self._poll_timer.stop()
-
-        if self._result_queue is not None:
-            self._result_queue.cancel_join_thread()
-            self._result_queue.close()
-
-        self._gen_start_time = time.monotonic()
-        self._dead_ticks = 0
-        self._result_queue = multiprocessing.Queue()
-
-        self._gen_process = multiprocessing.Process(
-            target=_run_generation_process,
-            args=(
-                self._result_queue,
-                self._controller.courses,
-                self._controller.get_exam_periods(),
-                selected,
-            ),
-            kwargs={
-                "settings": self._controller.settings,
-                "cap": LOAD_BATCH_SIZE,
-                "classrooms": self._controller.engine_classrooms(),
-                "time_slots": self._controller.engine_time_slots(),
-                "proctor_config": self._controller.engine_proctor_config(),
-                "allow_unassigned_classrooms": self._allow_unassigned_generation,
-            },
-            daemon=True,
-        )
-
-        self._gen_process.start()
-
-        self._poll_timer = QTimer(self)
-        self._poll_timer.timeout.connect(self._poll_result)
-        self._poll_timer.start(150)
+        self._poller.start(selected, color_map, self._allow_unassigned_generation)
 
     def _confirm_capacity_warning(self) -> bool:
         """Show the optional Feature 4 capacity warning before generation."""
@@ -1151,86 +637,17 @@ class ConfigScreen(QWidget):
         return self._allow_unassigned_generation
 
 
-    def _poll_result(self) -> None:
-        elapsed = int(time.monotonic() - self._gen_start_time)
-
-        if elapsed > _MAX_GEN_SECS:
-            if self._poll_timer:
-                self._poll_timer.stop()
-
-            if self._gen_process:
-                self._gen_process.kill()
-
-            self._fail(f"Generation timed out after {_MAX_GEN_SECS}s.")
-            return
-
-        try:
-            result = self._result_queue.get_nowait()
-        except (_QueueEmpty, OSError):
-            if self._gen_process is not None and not self._gen_process.is_alive():
-                self._dead_ticks += 1
-
-                if self._dead_ticks >= 5:
-                    self._dead_ticks = 0
-
-                    if self._poll_timer:
-                        self._poll_timer.stop()
-
-                    self._fail("Generation process exited unexpectedly.")
-            else:
-                self._dead_ticks = 0
-
-            return
-
-        self._dead_ticks = 0
-
-        if self._poll_timer:
-            self._poll_timer.stop()
-
-        self._reset_progress()
-
-        if (
-            isinstance(result, tuple)
-            and len(result) == 4
-            and result[0] is True
-            and isinstance(result[1], dict)
-            and isinstance(result[2], dict)
-            and isinstance(result[3], set)
-        ):
-            _, schedules_by_period, courses_by_id, truncated_periods = result
-
-            self._controller.on_generation_succeeded(truncated_periods)
-            schedules_by_period = self._controller.cache_generated_results(
-                schedules_by_period
-            )
-
-            self._notify_settings_state(False)
-            self._gen_btn.setEnabled(True)
-            self._set_status("✓  Schedule generated.", ok=True)
-
-            self.schedule_generated.emit(
-                (
-                    self._pending_selected,
-                    schedules_by_period,
-                    courses_by_id,
-                    self._pending_color_map,
-                    truncated_periods,
-                )
-            )
-        else:
-            logger.error("Generation failed or returned invalid result: %s", result)
-            self._fail("Generation failed. Please check the input files and try again.")
-
+    def _on_generation_succeeded(self, result_tuple: object) -> None:
+        self._notify_settings_state(False)
+        self._gen_btn.setEnabled(True)
+        self._set_status("✓  Schedule generated.", ok=True)
+        self.schedule_generated.emit(result_tuple)
 
     def _fail(self, msg: str) -> None:
         self._reset_progress()
         self._notify_settings_state(False)
-
-        if self._poll_timer:
-            self._poll_timer.stop()
-
+        self._poller.stop()
         logger.error("Generation failed: %s", msg)
-
         self._update_gen_btn()
         self.generation_failed.emit(msg)
 
@@ -1250,7 +667,7 @@ class ConfigScreen(QWidget):
         self._status_label.setText(text)
 
     def _update_gen_btn(self) -> None:
-        running = self._gen_process is not None and self._gen_process.is_alive()
+        running = self._poller.is_running()
 
         # When Feature 4 is enabled, generation is blocked until all its
         # inputs and student counts are valid (spec 4.2).

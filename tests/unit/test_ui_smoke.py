@@ -122,12 +122,12 @@ def test_config_screen_initial_empty_state():
     app.processEvents()
 
     # File-loading controls.
-    assert isinstance(screen._load_courses_btn, QPushButton)
-    assert screen._load_courses_btn.text() == "Load Courses"
-    assert isinstance(screen._load_periods_btn, QPushButton)
-    assert screen._load_periods_btn.text() == "Load Periods"
-    assert screen._courses_label.text() == "No file loaded"
-    assert screen._dates_label.text() == "No file loaded"
+    assert isinstance(screen._files_card.courses_btn, QPushButton)
+    assert screen._files_card.courses_btn.text() == "Load Courses"
+    assert isinstance(screen._files_card.periods_btn, QPushButton)
+    assert screen._files_card.periods_btn.text() == "Load Periods"
+    assert screen._files_card.courses_label.text() == "No file loaded"
+    assert screen._files_card.dates_label.text() == "No file loaded"
 
     # Programme-selection area (empty-state placeholder).
     assert isinstance(screen._prog_rows, dict)
@@ -138,21 +138,21 @@ def test_config_screen_initial_empty_state():
     assert screen._prog_count_lbl.text() == "0 / 5 selected"
 
     # Optional Feature 4 controls start off and locked.
-    assert screen._load_classrooms_btn.text() == "Browse"
-    assert screen._load_slots_btn.text() == "Browse"
-    assert screen._load_proctors_btn.text() == "Browse"
-    assert screen._classrooms_label.text() == "Missing"
-    assert screen._slots_label.text() == "Missing"
-    assert screen._proctors_label.text() == "Missing"
-    assert screen._feature4_toggle.isChecked() is False
-    assert screen._feature4_status.text() == "DISABLED"
-    assert screen._load_slots_btn.isEnabled() is False
-    assert screen._load_proctors_btn.isEnabled() is False
+    assert screen._feature4_card._load_classrooms_btn.text() == "Browse"
+    assert screen._feature4_card._load_slots_btn.text() == "Browse"
+    assert screen._feature4_card._load_proctors_btn.text() == "Browse"
+    assert screen._feature4_card._classrooms_label.text() == "Missing"
+    assert screen._feature4_card._slots_label.text() == "Missing"
+    assert screen._feature4_card._proctors_label.text() == "Missing"
+    assert screen._feature4_card._toggle.isChecked() is False
+    assert screen._feature4_card._status_lbl.text() == "DISABLED"
+    assert screen._feature4_card._load_slots_btn.isEnabled() is False
+    assert screen._feature4_card._load_proctors_btn.isEnabled() is False
 
     # Load-mode radio group defaults to Replace.
-    mode_labels = [button.text() for button in screen._mode_group.buttons()]
+    mode_labels = [button.text() for button in screen._mode_card.button_group.buttons()]
     assert mode_labels == ["Replace", "Update"]
-    assert screen._mode_group.checkedButton().text() == "Replace"
+    assert screen._mode_card.button_group.checkedButton().text() == "Replace"
 
     # Generate is visible but disabled before any data is loaded.
     assert isinstance(screen._gen_btn, QPushButton)
@@ -283,8 +283,8 @@ def test_results_navigation_buttons_repeat_while_held():
     panel.show()
     app.processEvents()
 
-    prev_btn = panel._prev_btns["FALL - Aleph"]
-    next_btn = panel._next_btns["FALL - Aleph"]
+    prev_btn = panel._cards["FALL - Aleph"].prev_btn
+    next_btn = panel._cards["FALL - Aleph"].next_btn
 
     assert prev_btn.autoRepeat() is True
     assert next_btn.autoRepeat() is True
@@ -299,9 +299,9 @@ def test_results_panel_starts_truncated_period_loading_automatically(monkeypatch
     panel = _ResultsPanel(DesktopController())
     panel._truncated_periods = {"FALL - Aleph", "FALL - Bet"}
     started = []
-    monkeypatch.setattr(panel, "_on_load_more", started.append)
+    monkeypatch.setattr(panel._lm, "on_load_more", started.append)
 
-    panel._start_automatic_loads()
+    panel._lm.start_automatic_loads()
 
     assert set(started) == {"FALL - Aleph", "FALL - Bet"}
     app.processEvents()
@@ -328,7 +328,7 @@ def test_background_loading_control_is_hidden():
     panel.show()
     app.processEvents()
 
-    assert panel._load_more_btns["FALL - Aleph"].isVisible() is False
+    assert panel._cards["FALL - Aleph"].load_more_btn.isVisible() is False
     panel.close()
 
 
@@ -445,7 +445,7 @@ def test_feature4_room_and_slot_are_visible_in_calendar_and_detail_dialog():
     panel.show()
     app.processEvents()
 
-    calendar_text = panel._cal_tables["FALL - Aleph"].item(0, 1).text()
+    calendar_text = panel._cards["FALL - Aleph"].cal_table.item(0, 1).text()
     assert "09:00" in calendar_text
     assert "Room 101 (30/40)" in calendar_text
     assert "Degree: 83101 -" in calendar_text
@@ -546,7 +546,7 @@ def test_unassigned_feature4_exam_is_visible_in_calendar_and_detail_dialog():
     panel.show()
     app.processEvents()
 
-    calendar_text = panel._cal_tables["FALL - Aleph"].item(0, 1).text()
+    calendar_text = panel._cards["FALL - Aleph"].cal_table.item(0, 1).text()
     assert "NO CLASSROOM" in calendar_text
     assert "50 students" in calendar_text
 

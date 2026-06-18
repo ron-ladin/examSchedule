@@ -149,7 +149,7 @@ def _write_periods_update(path: Path) -> None:
 
 def _set_load_mode(screen: ConfigScreen, mode_text: str) -> None:
     """Select Replace or Update in the ConfigScreen load-mode radio group."""
-    for button in screen._mode_group.buttons():
+    for button in screen._mode_card.button_group.buttons():
         if button.text() == mode_text:
             button.setChecked(True)
             return
@@ -208,23 +208,23 @@ def test_feature4_activates_only_after_toggle_and_all_three_valid_inputs(
     proctors = _write_proctors_file(tmp_path)
     _patch_file_dialog(monkeypatch, [classrooms, slots, proctors])
 
-    screen._on_feature4_toggled(True)
+    screen._feature4_card._on_toggled(True)
     assert controller.feature4_enabled is True
 
-    screen._load_classrooms()
+    screen._feature4_card._load_classrooms()
     assert controller.feature4_active is False
-    assert "2 room(s)" in screen._classrooms_label.text()
+    assert "2 room(s)" in screen._feature4_card._classrooms_label.text()
 
-    screen._load_time_slots()
+    screen._feature4_card._load_time_slots()
     assert controller.feature4_active is False
-    assert "3 slot(s)" in screen._slots_label.text()
+    assert "3 slot(s)" in screen._feature4_card._slots_label.text()
 
-    screen._load_proctor_config()
+    screen._feature4_card._load_proctor_config()
     app.processEvents()
 
     assert controller.feature4_active is True
     assert controller.proctor_config.students_per_proctor == 20
-    assert screen._feature4_status.text() == "ACTIVE"
+    assert screen._feature4_card._status_lbl.text() == "ACTIVE"
     screen.close()
 
 
@@ -249,20 +249,20 @@ def test_invalid_feature4_file_shows_error_and_deactivates(
         lambda _parent, title, text: shown_errors.append((title, text)),
     )
 
-    screen._on_feature4_toggled(True)
-    screen._load_classrooms()
-    screen._load_time_slots()
-    screen._load_proctor_config()
+    screen._feature4_card._on_toggled(True)
+    screen._feature4_card._load_classrooms()
+    screen._feature4_card._load_time_slots()
+    screen._feature4_card._load_proctor_config()
     assert controller.feature4_active is True
 
     # Slots only 2h apart violate the >=4h rule (spec 2.3.4) -> cleared.
-    screen._load_time_slots()
+    screen._feature4_card._load_time_slots()
     app.processEvents()
 
     assert controller.feature4_active is False
     assert controller.time_slots == []
-    assert "Invalid file" in screen._slots_label.text()
-    assert screen._feature4_status.text().startswith("INCOMPLETE")
+    assert "Invalid file" in screen._feature4_card._slots_label.text()
+    assert screen._feature4_card._status_lbl.text().startswith("INCOMPLETE")
     assert shown_errors
     assert shown_errors[0][0] == "Invalid Feature 4 File"
     assert "at least 4 hours apart" in shown_errors[0][1]
@@ -345,14 +345,14 @@ def test_config_screen_course_load_replace_then_update(tmp_path, monkeypatch):
     assert [course.id for course in controller.courses] == ["11111"]
     assert controller.get_programme_ids() == ["83101"]
     assert len(screen._prog_rows) == 1
-    assert "courses_first.txt" in screen._courses_label.text()
+    assert "courses_first.txt" in screen._files_card.courses_label.text()
 
     # Second Replace swaps the whole course set out.
     screen._load_courses()
     assert [course.id for course in controller.courses] == ["33333"]
     assert controller.get_programme_ids() == ["83108"]
     assert len(screen._prog_rows) == 1
-    assert "courses_second.txt" in screen._courses_label.text()
+    assert "courses_second.txt" in screen._files_card.courses_label.text()
 
     # Reset to a known base, then Update merges offerings into existing courses.
     _patch_file_dialog(monkeypatch, [first, update])
@@ -373,7 +373,7 @@ def test_config_screen_course_load_replace_then_update(tmp_path, monkeypatch):
     assert ("83108", 1, "FALL", "Elective") in offering_keys
     assert set(controller.get_programme_ids()) == {"83101", "83108"}
     assert len(screen._prog_rows) == 2
-    assert "courses_update.txt" in screen._courses_label.text()
+    assert "courses_update.txt" in screen._files_card.courses_label.text()
 
     screen.close()
 
@@ -405,12 +405,12 @@ def test_config_screen_period_load_replace_then_update(tmp_path, monkeypatch):
     _set_load_mode(screen, "Replace")
     screen._load_dates()
     assert [p.get_key() for p in controller.get_exam_periods()] == ["FALL - Aleph"]
-    assert "periods_first.txt" in screen._dates_label.text()
+    assert "periods_first.txt" in screen._files_card.dates_label.text()
 
     # Second Replace swaps to a different semester/moed.
     screen._load_dates()
     assert [p.get_key() for p in controller.get_exam_periods()] == ["SPRI - Bet"]
-    assert "periods_second.txt" in screen._dates_label.text()
+    assert "periods_second.txt" in screen._files_card.dates_label.text()
 
     # Reset to the base FALL period, then Update the matching key in place.
     _patch_file_dialog(monkeypatch, [first, update])
@@ -427,7 +427,7 @@ def test_config_screen_period_load_replace_then_update(tmp_path, monkeypatch):
     assert updated[0].get_key() == "FALL - Aleph"
     assert updated[0].date_ranges[0][0].day == 12
     assert updated[0].date_ranges[0][1].day == 16
-    assert "periods_update.txt" in screen._dates_label.text()
+    assert "periods_update.txt" in screen._files_card.dates_label.text()
 
     screen.close()
 

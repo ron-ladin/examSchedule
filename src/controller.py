@@ -19,7 +19,7 @@ Notes:
 
 import logging
 import multiprocessing
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from itertools import chain, islice
 from pathlib import Path
 
@@ -36,9 +36,9 @@ from src.adapters.text_file_exporter import TextFileExporter
 from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
+from src.domain.feature4_validator import Feature4Validator
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
-from src.domain.semester import normalize_semester
 from src.domain.settings import Settings
 from src.domain.sorting import SortingConfig
 from src.domain.sorting_engine import SortingEngine
@@ -47,13 +47,16 @@ from src.domain.threshold_filter import ThresholdFilter
 from src.domain.time_slot import TimeSlot
 from src.engine.app_controller import (
     AppController as _EngineController,
-    CLASSROOM_VARIANT_MODE_ALL,
     CLASSROOM_VARIANT_MODE_FIRST,
 )
-from src.engine.classroom_assigner import ClassroomAssigner
+from src.engine.combined_schedule_indexer import CombinedScheduleIndexer
+from src.engine.generation_workers import _MemoryExporter
+# Re-exported so existing callers (config_screen, tests) keep importing it here.
+from src.engine.generation_workers import _run_generation_process  # noqa: F401
+from src.engine.load_worker_pool import LoadWorkerPool
 from src.engine.proctor_report import build_proctor_report
 from src.engine.schedule_generator import ScheduleGenerator
-from src.interfaces.i_output_exporter import IOutputExporter
+from src.utils.merge_utils import merge_by_key, update_merge_courses
 
 logger = logging.getLogger(__name__)
 
@@ -67,302 +70,6 @@ logger = logging.getLogger(__name__)
 # Decrease it if the UI feels slow or freezes during loading.
 LOAD_BATCH_SIZE: int = 1000
 
-
-class _MemoryExporter(IOutputExporter):
-    """
-    Captures generated schedules in memory instead of writing to disk.
-
-    cap=None means full generation:
-        collect all schedules for each period.
-
-    cap=<number> means legacy batched generation:
-        collect only cap schedules per period and mark truncated periods.
-    """
-
-    def __init__(
-        self,
-        cap: int | None = None,
-        offset_by_period: dict[str, int] | None = None,
-        only_period_keys: set[str] | None = None,
-        settings: Settings | None = None,
-        selected_programs: list[str] | None = None,
-    ) -> None:
-        self._cap = cap
-        self._offset_by_period = offset_by_period or {}
-        self._only_period_keys = only_period_keys
-        self._settings = settings
-        self._selected_programs = selected_programs or []
-
-        self.schedules_by_period: dict[str, list[Schedule]] = {}
-        self.courses_by_id: dict[str, Course] = {}
-        self.truncated_periods: set[str] = set()
-        self.remaining_iterators: dict[str, Iterator[Schedule]] = {}
-        self.has_more_by_period: dict[str, bool] = {}
-
-    def export_schedules(
-        self,
-        schedules_by_period: dict[str, Iterator[Schedule]],
-        courses_by_id: dict[str, Course],
-    ) -> None:
-        self.courses_by_id = dict(courses_by_id)
-        self.schedules_by_period.clear()
-        self.truncated_periods.clear()
-        self.remaining_iterators.clear()
-        self.has_more_by_period.clear()
-
-        courses_list = list(courses_by_id.values())
-
-        for key, schedule_iter in schedules_by_period.items():
-            if self._only_period_keys is not None and key not in self._only_period_keys:
-                continue
-
-            offset = self._offset_by_period.get(key, 0)
-
-            if self._cap is None:
-                collected = list(islice(schedule_iter, offset, None))
-                self.schedules_by_period[key] = self._sort(collected, courses_list)
-                self.has_more_by_period[key] = False
-                continue
-
-            batch = list(islice(schedule_iter, offset, offset + self._cap + 1))
-
-            if len(batch) > self._cap:
-                self.schedules_by_period[key] = self._sort(batch[: self._cap], courses_list)
-                self.truncated_periods.add(key)
-                self.has_more_by_period[key] = True
-
-                self.remaining_iterators[key] = chain(
-                    [batch[self._cap]],
-                    schedule_iter,
-                )
-            else:
-                self.schedules_by_period[key] = self._sort(batch, courses_list)
-                self.has_more_by_period[key] = False
-
-    def _sort(self, schedules: list[Schedule], courses: list[Course]) -> list[Schedule]:
-        if self._settings and self._settings.sorting.rules:
-            return SortingEngine.sort(
-                schedules, courses, self._settings.sorting, self._selected_programs
-            )
-        return schedules
-
-
-
-def _run_generation_process(
-    result_queue,
-    courses: "list[Course]",
-    exam_periods: "list[ExamPeriod]",
-    selected_programs: "list[str]",
-    settings: "Settings | None" = None,
-    cap: "int | None" = None,
-    period_key: "str | None" = None,
-    offset: int = 0,
-    classrooms: "list[Classroom] | None" = None,
-    time_slots: "list[TimeSlot] | None" = None,
-    proctor_config: "ProctorConfig | None" = None,
-    allow_unassigned_classrooms: bool = False,
-    classroom_variant_mode: str = CLASSROOM_VARIANT_MODE_FIRST,
-) -> None:
-    """
-    Entry point for background-worker schedule generation.
-
-    Puts (True, schedules_by_period, courses_by_id, truncated_periods) on success
-    or (False, error_message) on failure.
-
-    Default behavior:
-        cap=None -> generate all schedules up front.
-
-    Optional legacy batching:
-        cap=<number>, period_key=<key>, offset=<already loaded>.
-    """
-    try:
-        active_settings = settings or Settings(
-            thresholds=ThresholdSettings(),
-            sorting=SortingConfig(),
-        )
-
-        data_provider = InMemoryDataProvider(
-            courses=courses,
-            exam_periods=exam_periods,
-            selected_programs=selected_programs,
-        )
-        conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
-        generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
-
-        memory_exporter = _MemoryExporter(
-            cap=cap,
-            offset_by_period={period_key: offset} if period_key else None,
-            only_period_keys={period_key} if period_key else None,
-            settings=active_settings,
-            selected_programs=selected_programs,
-        )
-
-        engine = _EngineController(
-            data_provider=data_provider,
-            exporter=memory_exporter,
-            generator=generator,
-            selected_programs=selected_programs,
-            threshold_filter=ThresholdFilter(),
-            threshold_settings=active_settings.thresholds,
-            classrooms=classrooms,
-            time_slots=time_slots,
-            proctor_config=proctor_config,
-            allow_unassigned_classrooms=allow_unassigned_classrooms,
-            classroom_variant_mode=classroom_variant_mode,
-        )
-        engine.run()
-
-        result_queue.put(
-            (
-                True,
-                dict(memory_exporter.schedules_by_period),
-                dict(memory_exporter.courses_by_id),
-                memory_exporter.truncated_periods,
-            )
-        )
-    except Exception as exc:
-        logger.exception("Generation process failed")
-        result_queue.put((False, str(exc)))
-
-
-
-def _run_classroom_variants_process(
-    result_queue,
-    period_key: "str",
-    schedule: "Schedule",
-    courses: "list[Course]",
-    selected_programs: "list[str]",
-    settings: "Settings | None" = None,
-    cap: "int | None" = None,
-    offset: int = 0,
-    classrooms: "list[Classroom] | None" = None,
-    time_slots: "list[TimeSlot] | None" = None,
-    proctor_config: "ProctorConfig | None" = None,
-    allow_unassigned_classrooms: bool = False,
-) -> None:
-    """Generate classroom/time-slot variants for one already-chosen date schedule.
-
-    This does not run the date generator again. It reuses schedule.assignments as
-    the fixed date block and expands only classroom/time-slot allocations for it.
-    """
-    try:
-        active_settings = settings or Settings(
-            thresholds=ThresholdSettings(),
-            sorting=SortingConfig(),
-        )
-
-        if not classrooms or not time_slots or proctor_config is None:
-            result_queue.put((True, {period_key: []}, {c.id: c for c in courses}, set()))
-            return
-
-        # Important for Auto Variants:
-        # do not ask the classroom assigner to materialise every possible
-        # variant before the UI receives a result.  For a paged request, only
-        # generate enough candidates to answer this page plus one look-ahead item
-        # used to decide whether another page exists.
-        #
-        # page_limit gates the total number of full-schedule variants
-        # (max_options_per_schedule). It must NOT be reused as the per-day limit:
-        # max_options_per_day caps room allocations for a single date, and
-        # setting it to page_limit lets one busy date exhaust the quota on its
-        # own, falsely reporting "no more variants" while other dates still have
-        # unexplored allocations. Leave per-day unbounded and let the per-schedule
-        # cap drive paging.
-        page_limit = None if cap is None else offset + cap + 1
-
-        variant_iter = ClassroomAssigner.assign_variants(
-            schedule,
-            courses,
-            selected_programs,
-            classrooms,
-            time_slots,
-            proctor_config,
-            allow_unassigned=allow_unassigned_classrooms,
-            max_options_per_day=None,
-            max_options_per_schedule=page_limit,
-        )
-
-        if cap is None:
-            batch = list(islice(variant_iter, offset, None))
-            still_more = False
-        else:
-            batch_plus_one = list(islice(variant_iter, offset, offset + cap + 1))
-            still_more = len(batch_plus_one) > cap
-            batch = batch_plus_one[:cap]
-
-        courses_by_id = {course.id: course for course in courses}
-        if active_settings.sorting.rules:
-            batch = SortingEngine.sort(
-                batch,
-                courses,
-                active_settings.sorting,
-                selected_programs,
-            )
-
-        result_queue.put(
-            (
-                True,
-                {period_key: batch},
-                courses_by_id,
-                {period_key} if still_more else set(),
-            )
-        )
-    except Exception as exc:
-        logger.exception("Classroom variant process failed")
-        result_queue.put((False, str(exc)))
-
-
-class _KindTaggedQueue:
-    """Wrap a result queue so every payload is tagged with its task kind.
-
-    A single persistent worker serves both "date_options" and "variants" tasks
-    over one shared result queue. If a task is stopped/switched while a result is
-    still pending, the next poll could read that stale result and merge it as the
-    wrong kind. Tagging each result lets the UI discard results whose kind does
-    not match the batch it is currently waiting for.
-    """
-
-    def __init__(self, inner, kind: str) -> None:
-        self._inner = inner
-        self._kind = kind
-
-    def put(self, item) -> None:
-        self._inner.put((self._kind, item))
-
-
-def _run_load_more_worker(task_queue, result_queue) -> None:
-    """Persistent worker process for ResultsPanel Load More / Auto Load tasks.
-
-    The old implementation opened a fresh multiprocessing.Process for every
-    Load More / Auto Dates / Auto Variants batch. On Windows, each new process
-    can briefly flash a small console window. This worker is started once per
-    period and then reused for subsequent batches, so Auto Load does not create
-    a new Python process for every page.
-    """
-    while True:
-        task = task_queue.get()
-
-        if task is None:
-            return
-
-        try:
-            task_type, args, kwargs = task
-        except ValueError:
-            result_queue.put(("error", (False, "Invalid background worker task.")))
-            continue
-
-        if task_type == "date_options":
-            _run_generation_process(
-                _KindTaggedQueue(result_queue, "date_options"), *args, **kwargs
-            )
-        elif task_type == "variants":
-            _run_classroom_variants_process(
-                _KindTaggedQueue(result_queue, "variants"), *args, **kwargs
-            )
-        else:
-            result_queue.put(
-                ("error", (False, f"Unknown background worker task: {task_type}"))
-            )
 
 
 class DesktopController:
@@ -394,14 +101,8 @@ class DesktopController:
         # can re-rank in place instead of regenerating from scratch.
         self._last_results: dict[str, list[Schedule]] | None = None
 
-        # Persistent Load More / Auto Load workers.
-        # One worker is kept per period and reused across batches, instead of
-        # opening a new multiprocessing.Process for every Auto batch. This
-        # keeps multiprocessing performance while greatly reducing the number
-        # of short Windows console popups during automatic loading.
-        self._load_worker_tasks: dict[str, multiprocessing.Queue] = {}
-        self._load_worker_results: dict[str, multiprocessing.Queue] = {}
-        self._load_worker_procs: dict[str, multiprocessing.Process] = {}
+        # Persistent Load More / Auto Load workers — lifecycle managed by pool.
+        self._worker_pool = LoadWorkerPool()
 
     @property
     def settings(self) -> Settings:
@@ -526,29 +227,7 @@ class DesktopController:
 
     def _update_merge_courses(self, new_courses: list[Course]) -> None:
         """Update mode: merge offerings into existing courses; add unknown courses."""
-        existing_by_id: dict[str, Course] = {c.id: c for c in self._courses}
-
-        for new_course in new_courses:
-            if new_course.id in existing_by_id:
-                existing = existing_by_id[new_course.id]
-                existing_keys = {
-                    (o.program_id, o.year, normalize_semester(o.semester))
-                    for o in existing.offerings
-                }
-
-                for offering in new_course.offerings:
-                    key = (
-                        offering.program_id,
-                        offering.year,
-                        normalize_semester(offering.semester),
-                    )
-
-                    if key not in existing_keys:
-                        existing.add_offering(offering)
-                        existing_keys.add(key)
-            else:
-                self._courses.append(new_course)
-                existing_by_id[new_course.id] = new_course
+        update_merge_courses(self._courses, new_courses)
 
     def load_programs(self, path: Path) -> int:
         """
@@ -593,48 +272,8 @@ class DesktopController:
         )
         return len(self._exam_periods)
 
-    def _merge_by_key(
-        self,
-        existing: list,
-        new_items: list,
-        mode: str,
-        key_fn: Callable,
-    ) -> None:
-        """Apply replace / append / update merge strategy to an in-memory list."""
-        if mode == "replace":
-            existing.clear()
-            existing.extend(new_items)
-
-        elif mode == "append":
-            existing.extend(new_items)
-
-        elif mode == "update":
-            key_to_idx: dict[str, int] = {
-                key_fn(item): i for i, item in enumerate(existing)
-            }
-            seen_new: set[str] = set()
-
-            for item in new_items:
-                key = key_fn(item)
-
-                if key in seen_new:
-                    logger.warning(
-                        "_merge_by_key: duplicate key '%s' in new items — "
-                        "last occurrence kept",
-                        key,
-                    )
-
-                seen_new.add(key)
-
-                if key in key_to_idx:
-                    existing[key_to_idx[key]] = item
-                else:
-                    existing.append(item)
-                    key_to_idx[key] = len(existing) - 1
-        else:
-            raise ValueError(
-                f"Unknown merge mode: '{mode}'. Use replace, append, or update."
-            )
+    def _merge_by_key(self, existing: list, new_items: list, mode: str, key_fn) -> None:
+        merge_by_key(existing, new_items, mode, key_fn)
 
     @property
     def courses(self) -> list[Course]:
@@ -693,28 +332,10 @@ class DesktopController:
         return self._feature4_enabled and self.feature4_inputs_valid
 
     def _relevant_offerings_for_course(self, course: Course) -> list:
-        """
-        Offerings of an exam course that are relevant to the current run:
-        selected programmes AND the semester of any loaded exam period
-        (spec 4.3/4.4). Mirrors ClassroomAssigner.get_relevant_offerings so the
-        pre-generation checks and the engine agree on which exams matter.
-        """
-        semesters = {period.semester for period in self._exam_periods}
-        seen: set[tuple] = set()
-        relevant: list = []
-        for semester in semesters:
-            for offering in course.get_relevant_offerings(
-                self._selected_programs, semester
-            ):
-                key = (
-                    offering.program_id,
-                    offering.year,
-                    normalize_semester(offering.semester),
-                )
-                if key not in seen:
-                    seen.add(key)
-                    relevant.append(offering)
-        return relevant
+        """Delegates to Feature4Validator (spec 4.3/4.4)."""
+        return Feature4Validator.relevant_offerings_for_course(
+            course, self._selected_programs, self._exam_periods
+        )
 
     def engine_classrooms(self) -> list[Classroom]:
         """Classrooms passed to the engine — empty unless Feature 4 is active.
@@ -742,33 +363,15 @@ class DesktopController:
         to reject a file that cannot satisfy Feature 4. Unlike
         feature4_missing_student_counts this is not filtered by relevance.
         """
-        return any(
-            offering.student_count is None
-            for course in self._courses
-            if course.has_exam()
-            for offering in course.offerings
-        )
+        return Feature4Validator.any_exam_missing_student_count(self._courses)
 
     def feature4_missing_student_counts(self) -> bool:
         """
         True if any *relevant* exam offering lacks a StudentCount (spec 4.3).
-
-        Only courses with evaluation_type == "Exam" are assigned rooms, and only
-        offerings for the selected programmes in a loaded period's semester are
-        scheduled — so only those offerings require a count. Courses or
-        programmes the user did not select never block generation.
-
-        When no programmes are selected yet, relevance cannot be determined, so
-        fall back to the unfiltered check — otherwise the warning would be
-        vacuously suppressed and the engine would raise at generate time.
+        Delegates to Feature4Validator.
         """
-        if not self._selected_programs:
-            return self.any_exam_missing_student_count()
-        return any(
-            offering.student_count is None
-            for course in self._courses
-            if course.has_exam()
-            for offering in self._relevant_offerings_for_course(course)
+        return Feature4Validator.missing_student_counts(
+            self._courses, self._selected_programs, self._exam_periods
         )
 
     def feature4_ready(self) -> bool:
@@ -783,48 +386,23 @@ class DesktopController:
         )
 
     def _exam_student_totals(self) -> dict[tuple[str, str], int]:
-        """
-        Total students per exam instance (spec 4.3/4.4): for each "Exam" course,
-        sum the StudentCount across only its *relevant* program lines, grouped by
-        semester. A single exam occupies rooms in one semester's slot, so
-        offerings from different semesters are distinct exams and must NOT be
-        summed together — doing so inflates the largest-exam figure and produces
-        false capacity warnings. Keyed by (course id, normalized semester).
-        Courses with no relevant offering are excluded; missing counts are zero.
-        """
-        totals: dict[tuple[str, str], int] = {}
-        for course in self._courses:
-            if not course.has_exam():
-                continue
-            for offering in self._relevant_offerings_for_course(course):
-                key = (course.id, normalize_semester(offering.semester))
-                totals[key] = totals.get(key, 0) + (offering.student_count or 0)
-        return totals
+        """Delegates to Feature4Validator (spec 4.3/4.4)."""
+        return Feature4Validator.exam_student_totals(
+            self._courses, self._selected_programs, self._exam_periods
+        )
 
     def feature4_capacity_shortfall(self) -> tuple[int, int] | None:
         """
-        Pre-generation capacity warning (spec 4.4).
-
-        Returns (total classroom capacity, largest single-exam student count)
-        when the total capacity of ALL rooms is less than the StudentCount of
-        ANY single exam — because each exam occupies rooms in a single slot, so
-        the binding constraint is the largest single exam, not the sum of all
-        exams. Returns None when Feature 4 is inactive or capacity suffices.
+        Pre-generation capacity warning (spec 4.4). Delegates to
+        Feature4Validator; returns None when inactive or capacity suffices.
         """
-        if not self.feature4_active:
-            return None
-
-        exam_totals = self._exam_student_totals()
-        if not exam_totals:
-            return None
-
-        total_capacity = sum(room.capacity for room in self._classrooms)
-        largest_exam = max(exam_totals.values())
-
-        if total_capacity < largest_exam:
-            return total_capacity, largest_exam
-
-        return None
+        return Feature4Validator.capacity_shortfall(
+            self._courses,
+            self._selected_programs,
+            self._exam_periods,
+            self._classrooms,
+            self.feature4_active,
+        )
 
     def has_more_schedules(self, period_key: str) -> bool:
         """Return True if more schedules can be loaded for the given period."""
@@ -1018,97 +596,14 @@ class DesktopController:
         self,
         period_key: str,
     ) -> "tuple[multiprocessing.Queue, multiprocessing.Queue, multiprocessing.Process]":
-        """Return a reusable background worker for one period.
-
-        Starting a multiprocessing process is expensive on Windows and may flash
-        a small console window. Auto Load can request many batches, so this
-        method starts the worker once and keeps it alive for the next batch.
-        """
-        proc = self._load_worker_procs.get(period_key)
-        task_queue = self._load_worker_tasks.get(period_key)
-        result_queue = self._load_worker_results.get(period_key)
-
-        if (
-            proc is not None
-            and task_queue is not None
-            and result_queue is not None
-            and proc.is_alive()
-        ):
-            return task_queue, result_queue, proc
-
-        self._cleanup_load_worker(period_key, terminate=True)
-
-        task_queue = multiprocessing.Queue()
-        result_queue = multiprocessing.Queue()
-        proc = multiprocessing.Process(
-            target=_run_load_more_worker,
-            args=(task_queue, result_queue),
-            daemon=True,
-        )
-        proc.start()
-
-        self._load_worker_tasks[period_key] = task_queue
-        self._load_worker_results[period_key] = result_queue
-        self._load_worker_procs[period_key] = proc
-
-        return task_queue, result_queue, proc
+        return self._worker_pool.get_or_start(period_key)
 
     def _cleanup_load_worker(self, period_key: str, terminate: bool = False) -> None:
-        """Stop and remove one persistent Load More worker."""
-        task_queue = self._load_worker_tasks.pop(period_key, None)
-        result_queue = self._load_worker_results.pop(period_key, None)
-        proc = self._load_worker_procs.pop(period_key, None)
-
-        if task_queue is not None:
-            try:
-                if not terminate:
-                    task_queue.put(None)
-            except Exception:
-                logger.debug("Could not send shutdown task to load worker", exc_info=True)
-
-        if proc is not None:
-            try:
-                # Use non-blocking joins so this never stalls the UI thread.
-                # shutdown_load_workers() runs at the top of every load(), once
-                # per period; a 0.5s join per period could exceed the 1s UI
-                # responsiveness budget (spec 6.2). Daemon workers are reaped by
-                # the OS once terminated/killed, so we do not need to wait here.
-                if terminate and proc.is_alive():
-                    proc.terminate()
-                    proc.join(timeout=0)
-
-                    if proc.is_alive():
-                        proc.kill()
-                        proc.join(timeout=0)
-                else:
-                    proc.join(timeout=0)
-            except Exception:
-                logger.debug("Failed cleaning up load worker", exc_info=True)
-
-        for q in (task_queue, result_queue):
-            if q is None:
-                continue
-            try:
-                q.cancel_join_thread()
-            except Exception:
-                # Never silently swallow: a failure here can leak the queue's
-                # feeder thread, so surface it for diagnosis.
-                logger.warning(
-                    "Could not cancel join thread on load-worker queue",
-                    exc_info=True,
-                )
-            try:
-                q.close()
-            except Exception:
-                logger.warning(
-                    "Could not close load-worker queue",
-                    exc_info=True,
-                )
+        self._worker_pool.cleanup(period_key, terminate)
 
     def shutdown_load_workers(self) -> None:
         """Stop all persistent Load More / Auto Load workers."""
-        for period_key in list(self._load_worker_procs):
-            self._cleanup_load_worker(period_key, terminate=True)
+        self._worker_pool.shutdown_all()
 
     def start_load_more_date_options_for_period(
         self,
@@ -1235,53 +730,16 @@ class DesktopController:
         self,
         schedules_by_period: dict[str, list[Schedule]],
     ) -> int:
-        """
-        Return the number of currently loaded combined schedules.
-
-        This is the Cartesian product size of the loaded schedules per period.
-        """
-        if not schedules_by_period:
-            return 0
-
-        total = 1
-        for schedules in schedules_by_period.values():
-            if not schedules:
-                return 0
-            total *= len(schedules)
-
-        return total
+        """Return the Cartesian product size of the loaded schedules per period."""
+        return CombinedScheduleIndexer.count(schedules_by_period)
 
     def get_combined_schedule_at(
         self,
         schedules_by_period: dict[str, list[Schedule]],
         index: int,
     ) -> dict[str, Schedule]:
-        """
-        Return one combined schedule by Cartesian-product index.
-
-        The returned dict maps period_key -> Schedule.
-        This avoids materialising list(product(...)) in memory.
-        """
-        total = self.get_combined_schedule_count(schedules_by_period)
-
-        if index < 0 or index >= total:
-            raise IndexError(
-                f"Combined schedule index {index} out of range for total {total}."
-            )
-
-        period_keys = list(schedules_by_period.keys())
-        selected_indexes: dict[str, int] = {}
-        remainder = index
-
-        for period_key in reversed(period_keys):
-            schedules = schedules_by_period[period_key]
-            selected_indexes[period_key] = remainder % len(schedules)
-            remainder //= len(schedules)
-
-        return {
-            period_key: schedules_by_period[period_key][selected_indexes[period_key]]
-            for period_key in period_keys
-        }
+        """Return one combined schedule by Cartesian-product index."""
+        return CombinedScheduleIndexer.at(schedules_by_period, index)
 
     def export(
         self,
