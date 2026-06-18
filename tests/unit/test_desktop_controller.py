@@ -165,61 +165,69 @@ def test_engine_inputs_empty_when_toggle_disabled_but_files_loaded():
 
 # ── §3: missing StudentCount is filtered by selected programmes/semester ──────
 
-def test_missing_count_in_unselected_programme_does_not_block():
+@pytest.mark.parametrize(
+    "mutate, expected",
+    [
+        # An unrelated programme (83999) with a missing count must be ignored.
+        pytest.param(
+            lambda c: c._courses.append(
+                Course(
+                    id="99999",
+                    name="Unrelated",
+                    instructor="Dr. X",
+                    evaluation_type="Exam",
+                    offerings=[CourseOffering("83999", 1, "FALL", "Obligatory", None)],
+                )
+            ),
+            False,
+            id="unselected_programme_ignored",
+        ),
+        # Selected programme + loaded FALL period → relevant, so it blocks.
+        pytest.param(
+            lambda c: c._courses[0].offerings.__setitem__(
+                0, CourseOffering("83101", 1, "FALL", "Obligatory", None)
+            ),
+            True,
+            id="selected_programme_blocks",
+        ),
+        # Selected programme but a SPRING offering — not relevant to the FALL
+        # period, so its missing count must not block generation.
+        pytest.param(
+            lambda c: c._courses.append(
+                Course(
+                    id="77777",
+                    name="Spring Course",
+                    instructor="Dr. Y",
+                    evaluation_type="Exam",
+                    offerings=[CourseOffering("83101", 1, "SPRI", "Obligatory", None)],
+                )
+            ),
+            False,
+            id="other_semester_ignored",
+        ),
+        # A non-exam (Project) course is never assigned rooms, so it never blocks.
+        pytest.param(
+            lambda c: c._courses.append(
+                Course(
+                    id="88888",
+                    name="Project Course",
+                    instructor="Dr. Z",
+                    evaluation_type="Project",
+                    offerings=[CourseOffering("83101", 1, "FALL", "Obligatory", None)],
+                )
+            ),
+            False,
+            id="non_exam_ignored",
+        ),
+    ],
+)
+def test_feature4_missing_student_counts_relevance(mutate, expected):
+    """§3: missing StudentCount only blocks for selected, in-semester exams."""
     ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
-    ctrl._selected_programs = ["83101"]
-    # An unrelated programme (83999) with a missing count must be ignored.
-    ctrl._courses.append(
-        Course(
-            id="99999",
-            name="Unrelated",
-            instructor="Dr. X",
-            evaluation_type="Exam",
-            offerings=[CourseOffering("83999", 1, "FALL", "Obligatory", None)],
-        )
-    )
-    assert ctrl.feature4_missing_student_counts() is False
-
-
-def test_missing_count_in_selected_programme_blocks():
-    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
-    ctrl._selected_programs = ["83101"]
-    ctrl._courses[0].offerings[0] = CourseOffering(
-        "83101", 1, "FALL", "Obligatory", None
-    )
-    assert ctrl.feature4_missing_student_counts() is True
-    assert ctrl.feature4_ready() is False
-
-
-def test_missing_count_in_other_semester_does_not_block():
-    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
-    ctrl._selected_programs = ["83101"]
-    # Same selected programme but a SPRING offering — not relevant to the FALL
-    # period, so its missing count must not block generation.
-    ctrl._courses.append(
-        Course(
-            id="77777",
-            name="Spring Course",
-            instructor="Dr. Y",
-            evaluation_type="Exam",
-            offerings=[CourseOffering("83101", 1, "SPRI", "Obligatory", None)],
-        )
-    )
-    assert ctrl.feature4_missing_student_counts() is False
-
-
-def test_non_exam_course_missing_count_never_blocks():
-    ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
-    ctrl._courses.append(
-        Course(
-            id="88888",
-            name="Project Course",
-            instructor="Dr. Z",
-            evaluation_type="Project",
-            offerings=[CourseOffering("83101", 1, "FALL", "Obligatory", None)],
-        )
-    )
-    assert ctrl.feature4_missing_student_counts() is False
+    mutate(ctrl)
+    assert ctrl.feature4_missing_student_counts() is expected
+    if expected:
+        assert ctrl.feature4_ready() is False
 
 
 # ── §4: capacity warning uses only selected relevant offerings ────────────────
@@ -1158,8 +1166,9 @@ def test_pipeline_rejects_unassignable_schedules(tmp_path):
         allow_unassigned_classrooms=False,
     )
 
-    ok, schedules_by_period, _courses_by_id, truncated_periods = q.get_nowait()
-    assert ok is True
+    result = q.get_nowait()
+    schedules_by_period = result.schedules_by_period
+    assert result.success is True
     # The period key must be present — the generator produced a candidate but the
     # assigner rejected it (rooms too small), so the list is empty, not missing.
     period_key = "FALL - Aleph"

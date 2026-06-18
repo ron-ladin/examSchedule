@@ -267,13 +267,13 @@ def test_invalid_slots_file_disables_generate_and_shows_error_badge(
     errors = []
     monkeypatch.setattr(QMessageBox, "critical", lambda _p, t, x: errors.append((t, x)))
 
-    screen._on_feature4_toggled(True)
-    screen._load_classrooms()
-    screen._load_time_slots()  # invalid -> rejected
+    screen._feature4_card._on_toggled(True)
+    screen._feature4_card._load_classrooms()
+    screen._feature4_card._load_time_slots()  # invalid -> rejected
 
     assert controller.time_slots == []
     assert controller.feature4_active is False
-    assert "Invalid file" in screen._slots_label.text()
+    assert "Invalid file" in screen._feature4_card._slots_label.text()
     assert errors and errors[0][0] == "Invalid Feature 4 File"
     assert controller.feature4_ready() is False
     screen.close()
@@ -309,7 +309,7 @@ def test_capacity_shortfall_warns_before_generation(tmp_path, monkeypatch):
 
     screen._on_generate()
     assert started == [], "Generation must not start when capacity warning is cancelled"
-    assert screen._gen_process is None
+    assert screen._poller._process is None
     screen.close()
 
 
@@ -344,11 +344,11 @@ def test_c1_missing_student_count_instantly_blocks_toggle(monkeypatch):
     assert controller.feature4_missing_student_counts() is True
 
     # Simulate the user clicking the checkbox ON.
-    screen._feature4_toggle.setChecked(True)
+    screen._feature4_card._toggle.setChecked(True)
 
     # The toggled handler must have reverted everything synchronously.
     assert controller.feature4_enabled is False, "C1 must keep the controller flag OFF"
-    assert screen._feature4_toggle.isChecked() is False, "Toggle must snap back to OFF"
+    assert screen._feature4_card._toggle.isChecked() is False, "Toggle must snap back to OFF"
     assert critical_dialogs, "A critical QMessageBox must be shown"
     assert critical_dialogs[0][0] == "Missing Student Counts"
     screen.close()

@@ -179,13 +179,13 @@ def test_generation_process_applies_thresholds_and_sorting_settings(tmp_path):
         cap=None,
     )
 
-    ok, schedules_by_period, _courses_by_id, truncated_periods = (
-        result_queue.get_nowait()
-    )
+    result = result_queue.get_nowait()
+    schedules_by_period = result.schedules_by_period
+    truncated_periods = result.truncated_periods
     schedules = _all_schedules(schedules_by_period)
     gaps = [_mandatory_gap(schedule) for schedule in schedules]
 
-    assert ok is True
+    assert result.success is True
     assert truncated_periods == set()
     assert len(schedules) == 2
     assert all(gap >= 2 for gap in gaps)

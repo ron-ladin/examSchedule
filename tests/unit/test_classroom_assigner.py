@@ -197,10 +197,11 @@ def test_generation_process_returns_enriched_schedules_to_ui_boundary():
         proctor_config=ProctorConfig(20),
     )
 
-    ok, schedules_by_period, _courses, _truncated = result_queue.get_nowait()
+    result = result_queue.get_nowait()
+    schedules_by_period = result.schedules_by_period
     schedule = schedules_by_period["FALL - Aleph"][0]
 
-    assert ok is True
+    assert result.success is True
     assignment = schedule.classroom_assignments["11111"][0]
     assert assignment.room.room_id == "Room 1"
     assert assignment.slot.time == time(9, 0)
@@ -220,10 +221,11 @@ def test_generation_process_preserves_unassigned_exam_after_soft_warning():
         allow_unassigned_classrooms=True,
     )
 
-    ok, schedules_by_period, _courses, _truncated = result_queue.get_nowait()
+    result = result_queue.get_nowait()
+    schedules_by_period = result.schedules_by_period
     schedule = schedules_by_period["FALL - Aleph"][0]
 
-    assert ok is True
+    assert result.success is True
     assert schedule.unassigned_classroom_exams == {"11111": 50}
 
 
