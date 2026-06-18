@@ -64,6 +64,10 @@ def _apply_filter(
     )
 
 
+CLASSROOM_VARIANT_MODE_ALL = "all"
+CLASSROOM_VARIANT_MODE_FIRST = "first"
+
+
 def _apply_classroom_assignment(
     raw_iter: Iterator[Schedule],
     courses: list,
@@ -72,19 +76,39 @@ def _apply_classroom_assignment(
     slots: list[TimeSlot],
     proctor_config: ProctorConfig,
     allow_unassigned: bool,
+    classroom_variant_mode: str = CLASSROOM_VARIANT_MODE_ALL,
 ) -> Iterator[Schedule]:
     for schedule in raw_iter:
-        assigned = ClassroomAssigner.assign(
-            schedule,
-            courses,
-            selected_programs,
-            classrooms,
-            slots,
-            proctor_config,
-            allow_unassigned=allow_unassigned,
-        )
-        if assigned is not None:
-            yield assigned
+        # A date-only schedule is only a candidate. When Feature 4 is active,
+        # the caller decides whether to expose all classroom/time-slot variants
+        # or only the first one.
+        #
+        # "first" is used by normal Generate / Load Dates so those actions stay
+        # focused on different date schedules and do not spend time expanding
+        # every classroom variant. Load Variants uses ClassroomAssigner directly
+        # for the currently displayed date schedule.
+        if classroom_variant_mode == CLASSROOM_VARIANT_MODE_FIRST:
+            yield from ClassroomAssigner.assign_variants(
+                schedule,
+                courses,
+                selected_programs,
+                classrooms,
+                slots,
+                proctor_config,
+                allow_unassigned=allow_unassigned,
+                max_options_per_day=1,
+                max_options_per_schedule=1,
+            )
+        else:
+            yield from ClassroomAssigner.assign_variants(
+                schedule,
+                courses,
+                selected_programs,
+                classrooms,
+                slots,
+                proctor_config,
+                allow_unassigned=allow_unassigned,
+            )
 
 
 class AppController:
@@ -101,6 +125,7 @@ class AppController:
         time_slots: list[TimeSlot] | None = None,
         proctor_config: ProctorConfig | None = None,
         allow_unassigned_classrooms: bool = False,
+        classroom_variant_mode: str = CLASSROOM_VARIANT_MODE_ALL,
     ) -> None:
         self._data_provider = data_provider
         self._exporter = exporter
@@ -112,6 +137,7 @@ class AppController:
         self._time_slots = time_slots or []
         self._proctor_config = proctor_config
         self._allow_unassigned_classrooms = allow_unassigned_classrooms
+        self._classroom_variant_mode = classroom_variant_mode
 
     def run(self) -> None:
         logger.info("Starting exam schedule generation")
@@ -174,6 +200,7 @@ class AppController:
                     self._time_slots,
                     self._proctor_config,
                     self._allow_unassigned_classrooms,
+                    self._classroom_variant_mode,
                 )
 
             schedules_by_period[period_key] = schedule_iter

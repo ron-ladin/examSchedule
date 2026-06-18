@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.controller import DesktopController, RESULT_BATCH_SIZE, _run_generation_process
+from src.controller import DesktopController, LOAD_BATCH_SIZE, _run_generation_process
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
 from src.ui.assets.icons import BookIcon, CalendarIcon
@@ -1111,7 +1111,7 @@ class ConfigScreen(QWidget):
             ),
             kwargs={
                 "settings": self._controller.settings,
-                "cap": RESULT_BATCH_SIZE,
+                "cap": LOAD_BATCH_SIZE,
                 "classrooms": self._controller.engine_classrooms(),
                 "time_slots": self._controller.engine_time_slots(),
                 "proctor_config": self._controller.engine_proctor_config(),
