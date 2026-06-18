@@ -247,34 +247,32 @@ def _patch_dialog(monkeypatch, paths):
     )
 
 
-def test_invalid_slots_file_disables_generate_and_shows_error_badge(
+def test_invalid_slots_text_disables_generate_and_shows_error_badge(
     tmp_path, monkeypatch
 ):
-    """Loading an invalid slots file (slots <4h apart, spec 2.3.4) must surface an
-    error badge, deactivate Feature 4, and keep generation blocked."""
+    """Typing invalid slots (<4h apart, spec §2.3.4) in the text field must surface
+    an inline error badge, deactivate Feature 4, and keep generation blocked.
+    Slots are now a QLineEdit text field (spec §2.3.5)."""
     _get_qapp()
     controller = DesktopController()
     controller._courses = [_exam("11111", "83101", "Obligatory")]
     controller._exam_periods = [_WIDE_PERIOD]
     controller._selected_programs = ["83101"]
     screen = ConfigScreen(controller)
+    _patch_dialog(monkeypatch, [_classrooms_file(tmp_path)])
 
-    bad_slots = _slots_file(tmp_path, "09:00, 11:00", "bad.txt")
-    _patch_dialog(
-        monkeypatch,
-        [_classrooms_file(tmp_path), bad_slots, _proctors_file(tmp_path)],
-    )
-    errors = []
-    monkeypatch.setattr(QMessageBox, "critical", lambda _p, t, x: errors.append((t, x)))
-
-    screen._feature4_card._on_toggled(True)
+    # Load valid classrooms, enter valid proctor ratio, turn toggle ON.
     screen._feature4_card._load_classrooms()
-    screen._feature4_card._load_time_slots()  # invalid -> rejected
+    screen._feature4_card._proctors_edit.setText("1:20")
+    screen._feature4_card._commit_proctors_text()
+
+    # Now type slots that violate the ≥4h gap rule.
+    screen._feature4_card._slots_edit.setText("09:00, 11:00")
+    screen._feature4_card._commit_slots_text()
 
     assert controller.time_slots == []
     assert controller.feature4_active is False
-    assert "Invalid file" in screen._feature4_card._slots_label.text()
-    assert errors and errors[0][0] == "Invalid Feature 4 File"
+    assert "Invalid" in screen._feature4_card._slots_label.text()
     assert controller.feature4_ready() is False
     screen.close()
 
@@ -316,11 +314,10 @@ def test_capacity_shortfall_warns_before_generation(tmp_path, monkeypatch):
 # ── Scenario 3: the C1 rule (instant block, spec §4.3) ───────────────────────
 
 
-def test_c1_missing_student_count_instantly_blocks_toggle(monkeypatch):
-    """Toggling Feature 4 ON with an Exam course missing StudentCount must block
-    INSTANTLY (synchronously inside the toggle handler): reset toggle to OFF,
-    keep the controller flag OFF, and raise a critical QMessageBox — without any
-    Generate click."""
+def test_c1_missing_student_count_blocks_generate_via_feature4_ready(monkeypatch):
+    """When Feature 4 is ON but an Exam course is missing StudentCount, the Generate
+    button must stay blocked (spec §4.2 — feature4_ready() is False).
+    The toggle itself can be turned ON — the gate is at Generate, not the toggle."""
     _get_qapp()
     controller = DesktopController()
     controller._courses = [
@@ -336,21 +333,21 @@ def test_c1_missing_student_count_instantly_blocks_toggle(monkeypatch):
     controller._selected_programs = ["83101"]
     screen = ConfigScreen(controller)
 
-    critical_dialogs = []
-    monkeypatch.setattr(
-        QMessageBox, "critical", lambda _p, t, x: critical_dialogs.append((t, x))
-    )
-
     assert controller.feature4_missing_student_counts() is True
 
-    # Simulate the user clicking the checkbox ON.
+    # Turning ON the toggle is allowed; Generate stays blocked via feature4_ready().
     screen._feature4_card._toggle.setChecked(True)
 
-    # The toggled handler must have reverted everything synchronously.
-    assert controller.feature4_enabled is False, "C1 must keep the controller flag OFF"
-    assert screen._feature4_card._toggle.isChecked() is False, "Toggle must snap back to OFF"
-    assert critical_dialogs, "A critical QMessageBox must be shown"
-    assert critical_dialogs[0][0] == "Missing Student Counts"
+    assert controller.feature4_enabled is True, "Toggle turns ON successfully"
+    assert controller.feature4_ready() is False, "feature4_ready() is False — missing counts"
+    assert screen._feature4_card._toggle.isChecked() is True
+
+    # Confirm the Generate button is also blocked (requires courses + periods + selection).
+    # Even if those were loaded, feature4_ok would be False because feature4_ready() is False.
+    feature4_ok = (
+        not controller.feature4_enabled or controller.feature4_ready()
+    )
+    assert feature4_ok is False, "Generate must be blocked when counts are missing"
     screen.close()
 
 

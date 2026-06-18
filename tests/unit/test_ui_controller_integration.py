@@ -200,72 +200,71 @@ def _write_proctors_file(tmp_path: Path) -> Path:
 def test_feature4_activates_only_after_toggle_and_all_three_valid_inputs(
     tmp_path, monkeypatch
 ):
+    """Slots/proctor are now QLineEdit text fields (spec §2.3.5, §2.4.4).
+    Classrooms still uses Browse; toggle can be enabled once all three are valid."""
     app = _get_qapp()
     controller = DesktopController()
     screen = ConfigScreen(controller)
     classrooms = _write_classrooms_file(tmp_path)
-    slots = _write_slots_file(tmp_path)
-    proctors = _write_proctors_file(tmp_path)
-    _patch_file_dialog(monkeypatch, [classrooms, slots, proctors])
+    _patch_file_dialog(monkeypatch, [classrooms])
 
-    screen._feature4_card._on_toggled(True)
-    assert controller.feature4_enabled is True
-
+    # Load classrooms via Browse — still file-based per spec §4.1.
     screen._feature4_card._load_classrooms()
     assert controller.feature4_active is False
     assert "2 room(s)" in screen._feature4_card._classrooms_label.text()
 
-    screen._feature4_card._load_time_slots()
+    # Enter time slots via the new text field (spec §2.3.5).
+    screen._feature4_card._slots_edit.setText("09:00, 13:00, 19:00")
+    screen._feature4_card._commit_slots_text()
     assert controller.feature4_active is False
     assert "3 slot(s)" in screen._feature4_card._slots_label.text()
 
-    screen._feature4_card._load_proctor_config()
+    # Enter proctor ratio via the new text field (spec §2.4.4).
+    screen._feature4_card._proctors_edit.setText("1:20")
+    screen._feature4_card._commit_proctors_text()
+    assert controller.proctor_config is not None
+    assert controller.proctor_config.students_per_proctor == 20
+
+    # All inputs are valid; turning ON the toggle activates Feature 4.
+    screen._feature4_card._on_toggled(True)
+    assert controller.feature4_enabled is True
     app.processEvents()
 
     assert controller.feature4_active is True
-    assert controller.proctor_config.students_per_proctor == 20
     assert screen._feature4_card._status_lbl.text() == "ACTIVE"
     screen.close()
 
 
-def test_invalid_feature4_file_shows_error_and_deactivates(
+def test_invalid_feature4_slots_text_shows_error_and_deactivates(
     tmp_path,
     monkeypatch,
 ):
+    """Entering slots < 4h apart in the text field must show an inline error
+    and keep Feature 4 inactive (spec §2.3.4 / §2.3.7)."""
     app = _get_qapp()
     controller = DesktopController()
     screen = ConfigScreen(controller)
     classrooms = _write_classrooms_file(tmp_path)
-    slots = _write_slots_file(tmp_path)
-    proctors = _write_proctors_file(tmp_path)
-    invalid_slots = _write_slots_file(
-        tmp_path, "09:00, 11:00", "invalid_slots.txt"
-    )
-    _patch_file_dialog(monkeypatch, [classrooms, slots, proctors, invalid_slots])
-    shown_errors = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "critical",
-        lambda _parent, title, text: shown_errors.append((title, text)),
-    )
+    _patch_file_dialog(monkeypatch, [classrooms])
 
-    screen._feature4_card._on_toggled(True)
+    # Bring Feature 4 to ACTIVE state with valid inputs.
     screen._feature4_card._load_classrooms()
-    screen._feature4_card._load_time_slots()
-    screen._feature4_card._load_proctor_config()
+    screen._feature4_card._slots_edit.setText("09:00, 13:00, 19:00")
+    screen._feature4_card._commit_slots_text()
+    screen._feature4_card._proctors_edit.setText("1:20")
+    screen._feature4_card._commit_proctors_text()
+    screen._feature4_card._on_toggled(True)
     assert controller.feature4_active is True
 
-    # Slots only 2h apart violate the >=4h rule (spec 2.3.4) -> cleared.
-    screen._feature4_card._load_time_slots()
+    # Enter slots only 2h apart — violates the >=4h rule (spec §2.3.4).
+    screen._feature4_card._slots_edit.setText("09:00, 11:00")
+    screen._feature4_card._commit_slots_text()
     app.processEvents()
 
     assert controller.feature4_active is False
     assert controller.time_slots == []
-    assert "Invalid file" in screen._feature4_card._slots_label.text()
+    assert "Invalid" in screen._feature4_card._slots_label.text()
     assert screen._feature4_card._status_lbl.text().startswith("INCOMPLETE")
-    assert shown_errors
-    assert shown_errors[0][0] == "Invalid Feature 4 File"
-    assert "at least 4 hours apart" in shown_errors[0][1]
     screen.close()
 
 

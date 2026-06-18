@@ -137,17 +137,20 @@ def test_config_screen_initial_empty_state():
     assert "Load a courses file" in screen._prog_placeholder.text()
     assert screen._prog_count_lbl.text() == "0 / 5 selected"
 
-    # Optional Feature 4 controls start off and locked.
+    # Optional Feature 4 controls — classrooms Browse always accessible;
+    # slots and proctor are now QLineEdit text fields (spec §2.3.5, §2.4.4).
+    from PyQt6.QtWidgets import QLineEdit
     assert screen._feature4_card._load_classrooms_btn.text() == "Browse"
-    assert screen._feature4_card._load_slots_btn.text() == "Browse"
-    assert screen._feature4_card._load_proctors_btn.text() == "Browse"
+    assert screen._feature4_card._load_classrooms_btn.isEnabled() is True
+    assert isinstance(screen._feature4_card._slots_edit, QLineEdit)
+    assert screen._feature4_card._slots_edit.isEnabled() is True
+    assert isinstance(screen._feature4_card._proctors_edit, QLineEdit)
+    assert screen._feature4_card._proctors_edit.isEnabled() is True
     assert screen._feature4_card._classrooms_label.text() == "Missing"
     assert screen._feature4_card._slots_label.text() == "Missing"
     assert screen._feature4_card._proctors_label.text() == "Missing"
     assert screen._feature4_card._toggle.isChecked() is False
     assert screen._feature4_card._status_lbl.text() == "DISABLED"
-    assert screen._feature4_card._load_slots_btn.isEnabled() is False
-    assert screen._feature4_card._load_proctors_btn.isEnabled() is False
 
     # Load-mode radio group defaults to Replace.
     mode_labels = [button.text() for button in screen._mode_card.button_group.buttons()]
