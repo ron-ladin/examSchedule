@@ -284,6 +284,72 @@ class _ResultsPanel(QWidget):
                 self._schedules_by_period[period_key]
             )
 
+    # ------------------------------------------------------------------
+    # Public accessors for collaborators (e.g. LoadMoreController).
+    #
+    # These let the load-more controller query the panel's live schedule and
+    # navigation state without reaching into its private dicts (no Feature Envy /
+    # tight coupling). Each one is a thin, read-only delegate.
+    # ------------------------------------------------------------------
+    @property
+    def controller(self) -> DesktopController:
+        """The DesktopController backing this panel."""
+        return self._controller
+
+    def has_period(self, period_key: str) -> bool:
+        """Return True if *period_key* is a known period (even if empty)."""
+        return period_key in self._schedules_by_period
+
+    def get_schedules(self, period_key: str) -> list[Schedule]:
+        """Return the loaded schedules for *period_key* (empty list if none)."""
+        return self._schedules_by_period.get(period_key, [])
+
+    def get_current_index(self, period_key: str) -> int:
+        """Return the currently displayed schedule index for *period_key*."""
+        return self._period_indices.get(period_key, 0)
+
+    def get_card(self, period_key: str) -> PeriodCardWidgets | None:
+        """Return the period card widgets for *period_key*, if built."""
+        return self._cards.get(period_key)
+
+    def get_truncated_periods(self) -> set[str]:
+        """Return a copy of the periods that still have more schedules to load."""
+        return set(self._truncated_periods)
+
+    def has_classroom_results(self, period_key: str) -> bool:
+        """Return True if the loaded period contains Feature 4 classroom data."""
+        return self._has_classroom_feature_results(period_key)
+
+    def signature_of(self, schedule: Schedule) -> _DateSignature:
+        """Return the date-only signature of *schedule*."""
+        return self._date_signature(schedule)
+
+    def get_current_signature(self, period_key: str) -> _DateSignature | None:
+        """Return the date signature of the currently displayed schedule.
+
+        Returns ``None`` when the period has no schedules or the current index
+        is out of range.
+        """
+        schedules = self._schedules_by_period.get(period_key, [])
+        if not schedules:
+            return None
+        idx = self._period_indices.get(period_key, 0)
+        if 0 <= idx < len(schedules):
+            return self._date_signature(schedules[idx])
+        return None
+
+    def get_date_option_count(self, period_key: str) -> int:
+        """Return how many distinct date options are currently loaded."""
+        return len(self._date_options_for_period(period_key))
+
+    def get_variant_index_count(
+        self,
+        period_key: str,
+        signature: _DateSignature,
+    ) -> int:
+        """Return how many loaded variants share *signature* in *period_key*."""
+        return len(self._indices_for_signature(period_key, signature))
+
     def _setup_ui(self) -> None:
         self.setStyleSheet("background: transparent;")
 

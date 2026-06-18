@@ -10,6 +10,7 @@ import atexit
 import gc
 import weakref
 
+import src.engine.load_worker_pool as lwp
 from src.engine.load_worker_pool import LoadWorkerPool
 
 
@@ -81,13 +82,101 @@ def test_shutdown_all_terminates_every_worker():
     assert all(p.terminated for p in procs), "shutdown_all must terminate workers"
 
 
-def test_atexit_hook_registered_and_removed_on_shutdown():
+class _RecordingProc(_FakeProc):
+    """A spawnable _FakeProc that records construction args and start()."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__()
+        self.started = False
+        self.construct_args = (args, kwargs)
+
+    def start(self) -> None:
+        self.started = True
+
+
+def _patch_spawning(monkeypatch) -> dict:
+    """Replace multiprocessing.Queue/Process so get_or_start spawns fakes.
+
+    Keeps the reuse tests fully process-free while still letting get_or_start
+    run its real start-a-new-worker branch.
+    """
+    created: dict[str, list] = {"queues": [], "procs": []}
+
+    def fake_queue() -> _FakeQueue:
+        q = _FakeQueue()
+        created["queues"].append(q)
+        return q
+
+    def fake_process(*args, **kwargs) -> _RecordingProc:
+        p = _RecordingProc(*args, **kwargs)
+        created["procs"].append(p)
+        return p
+
+    monkeypatch.setattr(lwp.multiprocessing, "Queue", fake_queue)
+    monkeypatch.setattr(lwp.multiprocessing, "Process", fake_process)
+    return created
+
+
+def test_get_or_start_reuses_alive_worker(monkeypatch):
+    pool = LoadWorkerPool()
+    task_q, result_q, proc = _seed_worker(pool, "FALL - Aleph")
+
+    def _no_spawn(*_args, **_kwargs):
+        raise AssertionError("get_or_start must not spawn for a live worker")
+
+    monkeypatch.setattr(lwp.multiprocessing, "Process", _no_spawn)
+    monkeypatch.setattr(lwp.multiprocessing, "Queue", _no_spawn)
+
+    assert pool.get_or_start("FALL - Aleph") == (task_q, result_q, proc)
+
+
+def test_get_or_start_starts_new_worker_for_different_period(monkeypatch):
+    pool = LoadWorkerPool()
+    _task_q, _result_q, existing = _seed_worker(pool, "FALL - Aleph")
+    created = _patch_spawning(monkeypatch)
+
+    _new_task, _new_result, new_proc = pool.get_or_start("SPRING - Bet")
+
+    assert new_proc is not existing, "a different period must get its own worker"
+    assert new_proc.started is True
+    assert created["procs"] == [new_proc]
+    # The unrelated period's worker stays untouched.
+    assert pool._procs["FALL - Aleph"] is existing
+    assert pool._procs["SPRING - Bet"] is new_proc
+
+
+def test_get_or_start_replaces_dead_worker(monkeypatch):
+    pool = LoadWorkerPool()
+    _task_q, _result_q, dead = _seed_worker(pool, "FALL - Aleph")
+    dead._alive = False  # simulate a crashed/finished worker
+    created = _patch_spawning(monkeypatch)
+
+    _new_task, _new_result, new_proc = pool.get_or_start("FALL - Aleph")
+
+    assert new_proc is not dead, "a dead worker must be replaced, not reused"
+    assert new_proc.started is True
+    assert created["procs"] == [new_proc]
+    assert pool._procs["FALL - Aleph"] is new_proc
+
+
+def test_atexit_hook_stays_registered_after_shutdown(monkeypatch):
     pool = LoadWorkerPool()
     hook = pool._atexit_hook
 
     pool.shutdown_all()
-    # Unregistering again is a no-op, proving shutdown_all already removed it.
-    atexit.unregister(hook)  # must not raise
+
+    # shutdown_all must NOT drop the hook: a reused pool still needs exit-time
+    # protection for any workers started afterwards.
+    assert pool._atexit_hook is hook
+
+    # Prove the still-registered hook protects workers created after shutdown.
+    _patch_spawning(monkeypatch)
+    _task_q, _result_q, proc = pool.get_or_start("FALL - Aleph")
+
+    hook()  # simulate interpreter exit firing the still-live atexit hook
+
+    assert proc.terminated is True
+    assert pool._procs == {}
 
 
 def test_atexit_hook_does_not_keep_pool_alive():

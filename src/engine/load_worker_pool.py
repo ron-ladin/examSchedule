@@ -144,11 +144,13 @@ class LoadWorkerPool:
                 )
 
     def shutdown_all(self) -> None:
-        """Terminate all active workers and drop the atexit hook."""
+        """Terminate all active workers, keeping the atexit hook in place.
+
+        The hook is intentionally *not* unregistered here. A pool may be reused
+        after ``shutdown_all`` (e.g. the user clicks Load More again), starting
+        fresh workers that still need exit-time protection. Because the hook
+        only holds a ``weakref`` to the pool, leaving it registered for the
+        lifetime of the object is safe and never pins the pool in memory.
+        """
         for period_key in list(self._procs):
             self.cleanup(period_key, terminate=True)
-
-        # Once explicitly shut down there is nothing left to clean up at exit.
-        hook = getattr(self, "_atexit_hook", None)
-        if hook is not None:
-            atexit.unregister(hook)

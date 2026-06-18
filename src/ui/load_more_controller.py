@@ -51,7 +51,7 @@ class LoadMoreController(QObject):
     def __init__(self, panel) -> None:
         super().__init__(panel)
         self._panel = panel
-        self._controller = panel._controller
+        self._controller = panel.controller
 
         self.auto_load_periods: set[str] = set()
         self.auto_load_modes: dict[str, str] = {}
@@ -84,7 +84,7 @@ class LoadMoreController(QObject):
         The current UI uses per-period Auto Load buttons, but tests can call this
         directly to start loading every truncated period.
         """
-        for period_key in list(self._panel._truncated_periods):
+        for period_key in self._panel.get_truncated_periods():
             if period_key in self.procs:
                 continue
 
@@ -120,10 +120,10 @@ class LoadMoreController(QObject):
             return
 
         panel = self._panel
-        if not panel._schedules_by_period.get(period_key):
+        if not panel.get_schedules(period_key):
             return
 
-        if not panel._has_classroom_feature_results(period_key):
+        if not panel.has_classroom_results(period_key):
             self.messageRequested.emit(
                 "No Classroom Variants",
                 "Generate schedules with Feature 4 enabled before loading classroom variants.",
@@ -131,8 +131,9 @@ class LoadMoreController(QObject):
             )
             return
 
-        idx = panel._period_indices.get(period_key, 0)
-        signature = panel._date_signature(panel._schedules_by_period[period_key][idx])
+        signature = panel.get_current_signature(period_key)
+        if signature is None:
+            return
         maybe_more = self.variant_more_by_signature.get((period_key, signature), True)
         if not maybe_more:
             self.messageRequested.emit(
@@ -188,7 +189,7 @@ class LoadMoreController(QObject):
         self.auto_load_modes.pop(period_key, None)
         self.pending_auto_modes.pop(period_key, None)
         self.update_auto_load_button(period_key)
-        if refresh and period_key in self._panel._schedules_by_period:
+        if refresh and self._panel.has_period(period_key):
             self.cardRefreshRequested.emit(period_key)
 
     def _auto_load_next_batch(self, period_key: str) -> None:
@@ -231,7 +232,7 @@ class LoadMoreController(QObject):
     def update_auto_load_button(self, period_key: str) -> None:
         """Refresh Auto Dates / Auto Variants button text and state."""
         panel = self._panel
-        card = panel._cards.get(period_key)
+        card = panel.get_card(period_key)
         date_btn = card.auto_date_btn if card else None
         variant_btn = card.auto_variant_btn if card else None
 
@@ -239,17 +240,14 @@ class LoadMoreController(QObject):
         pending_mode = self.pending_auto_modes.get(period_key)
         is_loading = period_key in self.procs
         has_more_dates = self._controller.has_more_schedules(period_key)
-        has_classroom = panel._has_classroom_feature_results(period_key)
+        has_classroom = panel.has_classroom_results(period_key)
         variant_maybe_more = True
-        schedules = panel._schedules_by_period.get(period_key, [])
-        if schedules:
-            current_idx = panel._period_indices.get(period_key, 0)
-            if 0 <= current_idx < len(schedules):
-                signature = panel._date_signature(schedules[current_idx])
-                variant_maybe_more = self.variant_more_by_signature.get(
-                    (period_key, signature),
-                    True,
-                )
+        signature = panel.get_current_signature(period_key)
+        if signature is not None:
+            variant_maybe_more = self.variant_more_by_signature.get(
+                (period_key, signature),
+                True,
+            )
 
         if date_btn is not None:
             if pending_mode == _AUTO_MODE_DATES:
@@ -310,7 +308,7 @@ class LoadMoreController(QObject):
         self.ticks[period_key] = 0
         self.chunk_sizes[period_key] = LOAD_BATCH_SIZE
 
-        card = self._panel._cards.get(period_key)
+        card = self._panel.get_card(period_key)
         btn = card.load_more_btn if card else None
         if btn is not None:
             btn.setEnabled(False)
@@ -339,7 +337,7 @@ class LoadMoreController(QObject):
         if period_key in self.procs:
             return
 
-        already_date_options = len(self._panel._date_options_for_period(period_key))
+        already_date_options = self._panel.get_date_option_count(period_key)
         queue, proc = self._controller.start_load_more_date_options_for_period(
             period_key,
             already_date_options,
@@ -356,15 +354,15 @@ class LoadMoreController(QObject):
             return
 
         panel = self._panel
-        schedules = panel._schedules_by_period.get(period_key, [])
+        schedules = panel.get_schedules(period_key)
         if not schedules:
             self.stop_auto_load(period_key)
             return
 
-        current_idx = panel._period_indices.get(period_key, 0)
+        current_idx = panel.get_current_index(period_key)
         current_schedule = schedules[current_idx]
-        signature = panel._date_signature(current_schedule)
-        existing_variants = len(panel._indices_for_signature(period_key, signature))
+        signature = panel.signature_of(current_schedule)
+        existing_variants = panel.get_variant_index_count(period_key, signature)
 
         queue, proc = self._controller.start_load_variants_for_schedule(
             period_key,
@@ -387,7 +385,7 @@ class LoadMoreController(QObject):
         spinner = _SPINNER_CHARS[tick % len(_SPINNER_CHARS)]
         self.ticks[period_key] = tick + 1
 
-        card = panel._cards.get(period_key)
+        card = panel.get_card(period_key)
         btn = card.load_more_btn if card else None
         if btn and period_key not in self.auto_load_periods:
             label = "date options" if mode == _AUTO_MODE_DATES else "variants"
@@ -474,18 +472,15 @@ class LoadMoreController(QObject):
         all_by_period = result.schedules_by_period
         truncated_periods = result.truncated_periods
 
-        old_len = len(panel._schedules_by_period[period_key])
+        old_len = len(panel.get_schedules(period_key))
         extra = all_by_period.get(period_key, [])
         still_more = period_key in truncated_periods
         active_auto_mode = self.auto_load_modes.get(period_key)
         should_continue_auto = False
 
         current_signature: _DateSignature | None = None
-        if mode == _AUTO_MODE_VARIANTS and panel._schedules_by_period.get(period_key):
-            current_idx = panel._period_indices.get(period_key, 0)
-            current_signature = panel._date_signature(
-                panel._schedules_by_period[period_key][current_idx]
-            )
+        if mode == _AUTO_MODE_VARIANTS:
+            current_signature = panel.get_current_signature(period_key)
 
         should_advance_to_next_date = period_key in self.advance_after_load
 
@@ -514,7 +509,7 @@ class LoadMoreController(QObject):
         elif mode == _AUTO_MODE_VARIANTS:
             signature = current_signature
             if signature is None and extra:
-                signature = panel._date_signature(extra[0])
+                signature = panel.signature_of(extra[0])
 
             if signature is not None:
                 self.variant_more_by_signature[(period_key, signature)] = still_more
