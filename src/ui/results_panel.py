@@ -3,7 +3,7 @@ Widget: _ResultsPanel — Schedule Results Tab (SRS §3.1–§3.5)
 --------------------------------------------------------------
 Shows one exam-period card per period with independent Prev/Next navigation.
 Each card has a "Load More" button when more schedules exist beyond the initial
-RESULT_BATCH_SIZE batch — clicking it spawns a background subprocess to fetch
+LOAD_BATCH_SIZE batch — clicking it spawns a background subprocess to fetch
 only the next batch.
 
 Public API:
@@ -46,7 +46,7 @@ from src.ui.tokens import (
     programme_display_name,
 )
 
-from src.controller import DesktopController, RESULT_BATCH_SIZE
+from src.controller import DesktopController, LOAD_BATCH_SIZE
 from src.domain.course import Course
 from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
@@ -477,7 +477,7 @@ class _ResultsPanel(QWidget):
         prev_btn = QPushButton("◀  Prev Variant")
         prev_btn.setFixedWidth(120)
         _enable_press_and_hold(prev_btn)
-        prev_btn.clicked.connect(lambda _=False, k=period_key: self._go_prev_period(k))
+        prev_btn.clicked.connect(lambda _=False, k=period_key: self._go_prev_variant(k))
 
         counter = QLabel("Variant: Loading…")
         counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -515,7 +515,7 @@ class _ResultsPanel(QWidget):
         next_btn = QPushButton("Next Variant  ▶")
         next_btn.setFixedWidth(120)
         _enable_press_and_hold(next_btn)
-        next_btn.clicked.connect(lambda _=False, k=period_key: self._go_next_period(k))
+        next_btn.clicked.connect(lambda _=False, k=period_key: self._go_next_variant(k))
 
         nav.addWidget(prev_btn)
         nav.addStretch()
@@ -533,7 +533,7 @@ class _ResultsPanel(QWidget):
         lm_row = QHBoxLayout()
         lm_row.setSpacing(8)
 
-        chunk_btn = QPushButton(f"⟳  +{RESULT_BATCH_SIZE:,} more options")
+        chunk_btn = QPushButton(f"⟳  +{LOAD_BATCH_SIZE:,} more options")
         chunk_btn.setStyleSheet(
             "color: #005ac2; border: 2px solid #005ac2; border-radius: 8px;"
             "padding: 6px 12px; font-size: 11px; font-weight: 600;"
@@ -965,7 +965,7 @@ class _ResultsPanel(QWidget):
             jump_input.clear()
         self._refresh_period_card(period_key)
 
-    def _go_prev_period(self, period_key: str) -> None:
+    def _go_prev_variant(self, period_key: str) -> None:
         """Move to the previous classroom/time-slot variant for the same dates."""
         schedules = self._schedules_by_period.get(period_key, [])
         if not schedules:
@@ -983,7 +983,7 @@ class _ResultsPanel(QWidget):
             self._period_indices[period_key] = same_date_indices[variant_pos - 1]
             self._refresh_period_card(period_key)
 
-    def _go_next_period(self, period_key: str) -> None:
+    def _go_next_variant(self, period_key: str) -> None:
         """Move to the next classroom/time-slot variant for the same dates."""
         schedules = self._schedules_by_period.get(period_key, [])
         if not schedules:
@@ -1268,7 +1268,7 @@ class _ResultsPanel(QWidget):
         self._lm_procs[period_key] = proc
         self._lm_modes[period_key] = mode
         self._lm_ticks[period_key] = 0
-        self._lm_chunk_sizes[period_key] = RESULT_BATCH_SIZE
+        self._lm_chunk_sizes[period_key] = LOAD_BATCH_SIZE
 
         btn = self._load_more_btns.get(period_key)
         if btn is not None:
@@ -1521,7 +1521,7 @@ class _ResultsPanel(QWidget):
 
         if mode == _AUTO_MODE_DATES and still_more and btn:
             btn.setEnabled(period_key not in self._auto_load_periods)
-            btn.setText(f"⟳  +{RESULT_BATCH_SIZE:,} more date options")
+            btn.setText(f"⟳  +{LOAD_BATCH_SIZE:,} more date options")
 
         pending_mode = self._pending_auto_modes.pop(period_key, None)
         if pending_mode is not None:
@@ -1919,12 +1919,20 @@ class _ResultsPanel(QWidget):
         msg.exec()
 
     def _selected_schedules(self) -> dict[str, "Schedule"]:
-        """Currently displayed schedule per period (one each)."""
-        return {
-            key: self._schedules_by_period[key][self._period_indices[key]]
-            for key in self._schedules_by_period
-            if self._schedules_by_period[key]
-        }
+        """Currently displayed schedule per period (one each).
+
+        Guards the per-period index against missing keys and out-of-range
+        values so a stale or unset index can never raise IndexError/KeyError;
+        such a period is simply skipped.
+        """
+        selected: dict[str, "Schedule"] = {}
+        for key, schedules in self._schedules_by_period.items():
+            if not schedules:
+                continue
+            idx = self._period_indices.get(key, 0)
+            if 0 <= idx < len(schedules):
+                selected[key] = schedules[idx]
+        return selected
 
     def _on_proctor_report(self) -> None:
         """Build and show the spec 4.6 proctor report for displayed schedules."""

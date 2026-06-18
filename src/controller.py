@@ -67,10 +67,6 @@ logger = logging.getLogger(__name__)
 # Decrease it if the UI feels slow or freezes during loading.
 LOAD_BATCH_SIZE: int = 1000
 
-# Backward-compatible names used by the UI/controller code.
-RESULT_BATCH_SIZE: int = LOAD_BATCH_SIZE
-VARIANT_BATCH_SIZE: int = LOAD_BATCH_SIZE
-
 
 class _MemoryExporter(IOutputExporter):
     """
@@ -786,21 +782,23 @@ class DesktopController:
             and not self.feature4_missing_student_counts()
         )
 
-    def _exam_student_totals(self) -> dict[str, int]:
+    def _exam_student_totals(self) -> dict[tuple[str, str], int]:
         """
-        Total students per exam (spec 4.3): for each "Exam" course, sum the
-        StudentCount across only its *relevant* program lines — selected
-        programmes in a loaded period's semester. Courses with no relevant
-        offering are excluded. Missing counts contribute zero.
+        Total students per exam instance (spec 4.3/4.4): for each "Exam" course,
+        sum the StudentCount across only its *relevant* program lines, grouped by
+        semester. A single exam occupies rooms in one semester's slot, so
+        offerings from different semesters are distinct exams and must NOT be
+        summed together — doing so inflates the largest-exam figure and produces
+        false capacity warnings. Keyed by (course id, normalized semester).
+        Courses with no relevant offering are excluded; missing counts are zero.
         """
-        totals: dict[str, int] = {}
+        totals: dict[tuple[str, str], int] = {}
         for course in self._courses:
             if not course.has_exam():
                 continue
-            offerings = self._relevant_offerings_for_course(course)
-            if not offerings:
-                continue
-            totals[course.id] = sum(o.student_count or 0 for o in offerings)
+            for offering in self._relevant_offerings_for_course(course):
+                key = (course.id, normalize_semester(offering.semester))
+                totals[key] = totals.get(key, 0) + (offering.student_count or 0)
         return totals
 
     def feature4_capacity_shortfall(self) -> tuple[int, int] | None:
@@ -1134,7 +1132,7 @@ class DesktopController:
                 ),
                 {
                     "settings": self._settings,
-                    "cap": RESULT_BATCH_SIZE,
+                    "cap": LOAD_BATCH_SIZE,
                     "period_key": period_key,
                     "offset": already_loaded_date_options,
                     "classrooms": self.engine_classrooms(),
@@ -1172,7 +1170,7 @@ class DesktopController:
                 ),
                 {
                     "settings": self._settings,
-                    "cap": VARIANT_BATCH_SIZE,
+                    "cap": LOAD_BATCH_SIZE,
                     "offset": already_loaded_variants,
                     "classrooms": self.engine_classrooms(),
                     "time_slots": self.engine_time_slots(),
@@ -1203,7 +1201,7 @@ class DesktopController:
         Full generation normally returns everything in generate(), so this should
         usually return [] in the UI.
         """
-        batch_size = limit if limit is not None else RESULT_BATCH_SIZE
+        batch_size = limit if limit is not None else LOAD_BATCH_SIZE
 
         if batch_size < 0:
             raise ValueError("limit must be non-negative.")
