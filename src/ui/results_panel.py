@@ -1381,6 +1381,33 @@ class _ResultsPanel(QWidget):
             self._cleanup_load_more_state(period_key, terminate=True)
             return
 
+        # The persistent worker tags every result with its kind ("date_options"
+        # or "variants") because one worker/result queue serves both. If a result
+        # for a different kind than the batch we are currently waiting for shows
+        # up (e.g. a stopped Auto Dates batch finishing after the user switched to
+        # Auto Variants), it is stale: drain it and keep polling for the right
+        # one instead of merging it into the wrong cache.
+        if (
+            isinstance(result, tuple)
+            and len(result) == 2
+            and isinstance(result[0], str)
+        ):
+            result_kind, payload = result
+            expected_kind = (
+                "variants" if mode == _AUTO_MODE_VARIANTS else "date_options"
+            )
+            # "error" results (malformed/unknown task) are always surfaced; only
+            # a mismatched data kind is treated as a stale leftover.
+            if result_kind not in (expected_kind, "error"):
+                logger.debug(
+                    "Discarding stale %s result while awaiting %s for %s",
+                    result_kind,
+                    expected_kind,
+                    period_key,
+                )
+                return
+            result = payload
+
         timer = self._lm_timers.pop(period_key, None)
         if timer:
             timer.stop()

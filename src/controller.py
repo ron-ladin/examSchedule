@@ -264,6 +264,14 @@ def _run_classroom_variants_process(
         # variant before the UI receives a result.  For a paged request, only
         # generate enough candidates to answer this page plus one look-ahead item
         # used to decide whether another page exists.
+        #
+        # page_limit gates the total number of full-schedule variants
+        # (max_options_per_schedule). It must NOT be reused as the per-day limit:
+        # max_options_per_day caps room allocations for a single date, and
+        # setting it to page_limit lets one busy date exhaust the quota on its
+        # own, falsely reporting "no more variants" while other dates still have
+        # unexplored allocations. Leave per-day unbounded and let the per-schedule
+        # cap drive paging.
         page_limit = None if cap is None else offset + cap + 1
 
         variant_iter = ClassroomAssigner.assign_variants(
@@ -274,7 +282,7 @@ def _run_classroom_variants_process(
             time_slots,
             proctor_config,
             allow_unassigned=allow_unassigned_classrooms,
-            max_options_per_day=page_limit,
+            max_options_per_day=None,
             max_options_per_schedule=page_limit,
         )
 
@@ -308,6 +316,24 @@ def _run_classroom_variants_process(
         result_queue.put((False, str(exc)))
 
 
+class _KindTaggedQueue:
+    """Wrap a result queue so every payload is tagged with its task kind.
+
+    A single persistent worker serves both "date_options" and "variants" tasks
+    over one shared result queue. If a task is stopped/switched while a result is
+    still pending, the next poll could read that stale result and merge it as the
+    wrong kind. Tagging each result lets the UI discard results whose kind does
+    not match the batch it is currently waiting for.
+    """
+
+    def __init__(self, inner, kind: str) -> None:
+        self._inner = inner
+        self._kind = kind
+
+    def put(self, item) -> None:
+        self._inner.put((self._kind, item))
+
+
 def _run_load_more_worker(task_queue, result_queue) -> None:
     """Persistent worker process for ResultsPanel Load More / Auto Load tasks.
 
@@ -326,15 +352,21 @@ def _run_load_more_worker(task_queue, result_queue) -> None:
         try:
             task_type, args, kwargs = task
         except ValueError:
-            result_queue.put((False, "Invalid background worker task."))
+            result_queue.put(("error", (False, "Invalid background worker task.")))
             continue
 
         if task_type == "date_options":
-            _run_generation_process(result_queue, *args, **kwargs)
+            _run_generation_process(
+                _KindTaggedQueue(result_queue, "date_options"), *args, **kwargs
+            )
         elif task_type == "variants":
-            _run_classroom_variants_process(result_queue, *args, **kwargs)
+            _run_classroom_variants_process(
+                _KindTaggedQueue(result_queue, "variants"), *args, **kwargs
+            )
         else:
-            result_queue.put((False, f"Unknown background worker task: {task_type}"))
+            result_queue.put(
+                ("error", (False, f"Unknown background worker task: {task_type}"))
+            )
 
 
 class DesktopController:
@@ -1038,15 +1070,20 @@ class DesktopController:
 
         if proc is not None:
             try:
+                # Use non-blocking joins so this never stalls the UI thread.
+                # shutdown_load_workers() runs at the top of every load(), once
+                # per period; a 0.5s join per period could exceed the 1s UI
+                # responsiveness budget (spec 6.2). Daemon workers are reaped by
+                # the OS once terminated/killed, so we do not need to wait here.
                 if terminate and proc.is_alive():
                     proc.terminate()
-                    proc.join(timeout=0.5)
+                    proc.join(timeout=0)
 
                     if proc.is_alive():
                         proc.kill()
-                        proc.join(timeout=0.5)
+                        proc.join(timeout=0)
                 else:
-                    proc.join(timeout=0.5)
+                    proc.join(timeout=0)
             except Exception:
                 logger.debug("Failed cleaning up load worker", exc_info=True)
 
@@ -1056,11 +1093,19 @@ class DesktopController:
             try:
                 q.cancel_join_thread()
             except Exception:
-                pass
+                # Never silently swallow: a failure here can leak the queue's
+                # feeder thread, so surface it for diagnosis.
+                logger.warning(
+                    "Could not cancel join thread on load-worker queue",
+                    exc_info=True,
+                )
             try:
                 q.close()
             except Exception:
-                pass
+                logger.warning(
+                    "Could not close load-worker queue",
+                    exc_info=True,
+                )
 
     def shutdown_load_workers(self) -> None:
         """Stop all persistent Load More / Auto Load workers."""

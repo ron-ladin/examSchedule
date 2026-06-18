@@ -4,7 +4,7 @@ import heapq
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import date
-from itertools import combinations
+from itertools import combinations, product
 
 from src.domain.classroom import Classroom
 from src.domain.classroom_assignment import ClassroomAssignment
@@ -316,10 +316,9 @@ class ClassroomAssigner:
             )
             return
 
-        combined: list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]] = [
-            ({}, dict(initial_unassigned))
-        ]
-
+        per_date_options: list[
+            list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]
+        ] = []
         for exam_date in sorted(by_date):
             day_options = ClassroomAssigner._day_assignment_options(
                 by_date[exam_date],
@@ -330,50 +329,40 @@ class ClassroomAssigner:
                 max_options_per_day,
             )
 
+            # Spec 4.4: a date with no valid room allocation rejects the whole
+            # schedule, so there is nothing to combine.
             if not day_options:
                 return
 
-            next_combined: list[
-                tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]
-            ] = []
+            per_date_options.append(day_options)
 
-            for current_assignments, current_unassigned in combined:
-                for day_assignments, day_unassigned in day_options:
-                    merged_assignments = dict(current_assignments)
-                    merged_assignments.update(day_assignments)
+        # Combine per-date options lazily with itertools.product. The previous
+        # implementation materialised the full cross-product (up to
+        # max_options_per_schedule) before yielding anything, so paged Auto
+        # Variants requests re-built every earlier combination on each page
+        # (O(n^2) work and unbounded memory). product() yields combinations one
+        # at a time in the same order, so the caller can islice through pages
+        # without forcing the whole result space into memory.
+        emitted = 0
+        for combo in product(*per_date_options):
+            merged_assignments: dict[str, list[ClassroomAssignment]] = {}
+            merged_unassigned: dict[str, int] = dict(initial_unassigned)
+            for day_assignments, day_unassigned in combo:
+                merged_assignments.update(day_assignments)
+                merged_unassigned.update(day_unassigned)
 
-                    merged_unassigned = dict(current_unassigned)
-                    merged_unassigned.update(day_unassigned)
-
-                    next_combined.append((merged_assignments, merged_unassigned))
-                    if (
-                        max_options_per_schedule is not None
-                        and len(next_combined) >= max_options_per_schedule
-                    ):
-                        break
-
-                if (
-                    max_options_per_schedule is not None
-                    and len(next_combined) >= max_options_per_schedule
-                ):
-                    break
-
-            combined = next_combined
-            if not combined:
-                return
-
-        final_options = (
-            combined
-            if max_options_per_schedule is None
-            else combined[:max_options_per_schedule]
-        )
-
-        for assignments, unassigned in final_options:
             yield replace(
                 schedule,
-                classroom_assignments=assignments,
-                unassigned_classroom_exams=unassigned,
+                classroom_assignments=merged_assignments,
+                unassigned_classroom_exams=merged_unassigned,
             )
+
+            emitted += 1
+            if (
+                max_options_per_schedule is not None
+                and emitted >= max_options_per_schedule
+            ):
+                return
 
     @staticmethod
     def _day_assignment_options(
