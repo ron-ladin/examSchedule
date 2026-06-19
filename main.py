@@ -26,12 +26,18 @@ Usage:
 import logging
 import sys
 
+_CLI_MAX_COMBINATIONS = 10_000
+
+
+def _configure_logging() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
 
 def _run_gui() -> None:
     from PyQt6.QtWidgets import QApplication
     from src.ui.app import ExamSchedulerApp
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    _configure_logging()
     app = QApplication(sys.argv)
     app.setApplicationName("Syncademic")
     window = ExamSchedulerApp()
@@ -58,7 +64,7 @@ def _run_cli(argv: list[str] | None = None) -> None:
     )
     from src.engine.schedule_generator import ScheduleGenerator
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    _configure_logging()
 
     parser = argparse.ArgumentParser(description="Exam Scheduling System (CLI)")
     parser.add_argument("--programs", type=Path, required=True)
@@ -71,6 +77,8 @@ def _run_cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--proctor", type=Path, default=None)
 
     args = parser.parse_args(argv)
+
+    logging.info("Starting CLI generation...")
 
     data_provider = FileDataProvider(
         courses_path=args.courses,
@@ -94,7 +102,14 @@ def _run_cli(argv: list[str] | None = None) -> None:
             "--classrooms, --slots, and --proctor."
         )
 
-    exporter = TextFileExporter(output_path=args.output, max_combinations=None)
+    # SAFEGUARD:
+    # Never allow the CLI exporter to write an unbounded number of combinations.
+    # This prevents runaway combinatorics from producing massive output files.
+    exporter = TextFileExporter(
+        output_path=args.output,
+        max_combinations=_CLI_MAX_COMBINATIONS,
+    )
+
     conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
     generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
 
@@ -148,13 +163,31 @@ def _run_cli(argv: list[str] | None = None) -> None:
         classroom_variant_mode=CLASSROOM_VARIANT_MODE_FIRST,
     ).run()
 
+    logging.info(
+        "CLI generation completed successfully. Export capped at %s combinations.",
+        f"{_CLI_MAX_COMBINATIONS:,}",
+    )
+
+
+def _run_cli_safely(argv: list[str] | None = None) -> None:
+    try:
+        _run_cli(argv)
+    except FileNotFoundError as exc:
+        _configure_logging()
+        logging.error("Configuration file missing: %s", exc)
+        sys.exit(1)
+    except Exception as exc:
+        _configure_logging()
+        logging.exception("Fatal CLI crash: %s", exc)
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     argv = sys.argv[1:]
 
     if argv and argv[0] == "--cli":
-        _run_cli(argv[1:])
+        _run_cli_safely(argv[1:])
     elif argv:
-        _run_cli(argv)
+        _run_cli_safely(argv)
     else:
         _run_gui()
