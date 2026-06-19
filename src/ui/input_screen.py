@@ -106,12 +106,14 @@ class ResultsScreen(QWidget):
         courses_by_id: dict[str, Course],
         prog_color_map: dict[str, str],
         truncated_periods: set[str],
+        read_only_import: bool = False,
     ) -> None:
         self._results_panel.load(
             schedules_by_period,
             courses_by_id,
             prog_color_map,
             truncated_periods,
+            read_only_import=read_only_import,
         )
         self._workspace.setCurrentIndex(2)
         self._results_loaded = True
@@ -396,13 +398,15 @@ class InputScreen(QWidget):
         self._stacked.setCurrentIndex(1)
 
     def _on_generated(self, data: tuple) -> None:
-        _, schedules_by_period, courses_by_id, prog_color_map, truncated = data
+        _, schedules_by_period, courses_by_id, prog_color_map, truncated = data[:5]
+        read_only_import = bool(data[5]) if len(data) > 5 else False
 
         self._results.load(
             schedules_by_period,
             courses_by_id,
             prog_color_map,
             truncated,
+            read_only_import=read_only_import,
         )
         self._results.hide_loading()
 

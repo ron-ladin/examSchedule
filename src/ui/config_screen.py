@@ -680,7 +680,7 @@ class ConfigScreen(QWidget):
 
             self._controller.clear_results_stale()
 
-            result_tuple = ([], schedules_by_period, courses_by_id, {}, set())
+            result_tuple = ([], schedules_by_period, courses_by_id, {}, set(), True)
 
             self.generation_started.emit(([], {}))
             self.schedule_generated.emit(result_tuple)
