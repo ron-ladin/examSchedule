@@ -453,6 +453,80 @@ def test_capacity_warning_proceed_returns_true(monkeypatch):
     screen.close()
 
 
+# ── Spec §4.3: update-mode load with bad StudentCount leaves state unchanged ──
+
+def test_update_mode_bad_student_count_leaves_controller_state_unchanged(
+    tmp_path, monkeypatch
+):
+    """Regression: loading a bad courses file via Update mode when Feature 4 is ON
+    must leave self._courses byte-for-byte unchanged (spec §4.3 pre-merge guard).
+
+    Prior state: 1 course (id=11111) with a valid StudentCount of 30.
+    Action:      Update-mode load of a file that introduces a new offering for
+                 11111 without a StudentCount — triggering MissingStudentCountError.
+    Expected:    controller._courses still has exactly the original 1 offering;
+                 an error dialog is shown; the courses label reflects the abort.
+    """
+    app = _get_qapp()
+
+    prior_file = tmp_path / "prior.txt"
+    prior_file.write_text(
+        "Calculus\n11111\nDr. Cohen\n83101, 1, FALL, Obligatory, 30\nExam\n",
+        encoding="utf-8",
+    )
+    bad_update_file = tmp_path / "bad_update.txt"
+    bad_update_file.write_text(
+        "Calculus\n11111\nDr. Cohen\n83102, 1, FALL, Elective\nExam\n",
+        encoding="utf-8",
+    )
+
+    controller = DesktopController()
+    controller.load_courses(prior_file)
+    snapshot_ids = [c.id for c in controller._courses]
+    snapshot_offerings = {
+        (o.program_id, o.year, o.semester, o.requirement, o.student_count)
+        for c in controller._courses
+        for o in c.offerings
+    }
+    assert len(controller._courses) == 1
+
+    controller._feature4_enabled = True
+    screen = ConfigScreen(controller)
+
+    errors_shown = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors_shown.append(args),
+    )
+
+    _patch_file_dialog(monkeypatch, [bad_update_file])
+    _set_load_mode(screen, "Update")
+    screen._load_courses()
+    app.processEvents()
+
+    # State must be completely unchanged.
+    after_ids = [c.id for c in controller._courses]
+    after_offerings = {
+        (o.program_id, o.year, o.semester, o.requirement, o.student_count)
+        for c in controller._courses
+        for o in c.offerings
+    }
+    assert after_ids == snapshot_ids, "Course IDs changed after rejected update-mode load"
+    assert after_offerings == snapshot_offerings, "Offerings changed after rejected load"
+
+    # Error dialog must have been shown.
+    assert errors_shown, "No error dialog shown for MissingStudentCountError"
+
+    # Label must reflect the abort, not a success count.
+    label_text = screen._files_card.courses_label.text()
+    assert any(
+        kw in label_text for kw in ("StudentCount", "aborted", "Missing")
+    ), f"Courses label did not reflect abort: {label_text!r}"
+
+    screen.close()
+
+
 # ── File loading modes update controller state ─────────────────────
 
 def test_config_screen_course_load_replace_then_update(tmp_path, monkeypatch):
