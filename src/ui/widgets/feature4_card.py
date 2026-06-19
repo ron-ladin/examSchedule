@@ -166,6 +166,28 @@ class Feature4Card(QFrame):
         )
 
     def _on_toggled(self, checked: bool) -> None:
+        # Spec 4.3: Feature 4 cannot be enabled while the currently loaded
+        # courses have Exam offerings without a StudentCount. Snap the toggle
+        # back off and explain, instead of failing silently with a blocked
+        # Generate button.
+        if checked and self._controller.feature4_missing_student_counts():
+            self._toggle.blockSignals(True)
+            self._toggle.setChecked(False)
+            self._toggle.blockSignals(False)
+            self._controller.set_feature4_enabled(False)
+            self._load_classrooms_btn.setEnabled(False)
+            self.refresh_status()
+            self.gen_btn_update_needed.emit()
+            QMessageBox.critical(
+                self,
+                "Cannot Enable Feature 4",
+                "Feature 4 cannot be enabled because the currently loaded courses "
+                "have Exam offerings without a StudentCount (spec 4.3).\n\n"
+                "Load a courses file where every exam course has a StudentCount, "
+                "then enable Feature 4.",
+            )
+            return
+
         self._controller.set_feature4_enabled(checked)
         self._load_classrooms_btn.setEnabled(checked)
         self.refresh_status()

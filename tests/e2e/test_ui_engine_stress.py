@@ -314,10 +314,10 @@ def test_capacity_shortfall_warns_before_generation(tmp_path, monkeypatch):
 # ── Scenario 3: the C1 rule (instant block, spec §4.3) ───────────────────────
 
 
-def test_c1_missing_student_count_blocks_generate_via_feature4_ready(monkeypatch):
-    """When Feature 4 is ON but an Exam course is missing StudentCount, the Generate
-    button must stay blocked (spec §4.2 — feature4_ready() is False).
-    The toggle itself can be turned ON — the gate is at Generate, not the toggle."""
+def test_c1_missing_student_count_snaps_toggle_back_with_dialog(monkeypatch):
+    """When Feature 4 is OFF and the loaded courses miss StudentCounts, turning the
+    toggle ON must SNAP BACK to OFF and show a critical dialog (spec §4.3 UX
+    fallback) — instead of failing silently with a blocked Generate button."""
     _get_qapp()
     controller = DesktopController()
     controller._courses = [
@@ -335,19 +335,22 @@ def test_c1_missing_student_count_blocks_generate_via_feature4_ready(monkeypatch
 
     assert controller.feature4_missing_student_counts() is True
 
-    # Turning ON the toggle is allowed; Generate stays blocked via feature4_ready().
+    errors_shown = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors_shown.append(args),
+    )
+
+    # Attempt to turn the toggle ON — it must snap back off.
     screen._feature4_card._toggle.setChecked(True)
 
-    assert controller.feature4_enabled is True, "Toggle turns ON successfully"
-    assert controller.feature4_ready() is False, "feature4_ready() is False — missing counts"
-    assert screen._feature4_card._toggle.isChecked() is True
+    assert errors_shown, "A critical dialog must explain why Feature 4 can't enable"
+    assert controller.feature4_enabled is False, "Toggle snapped back — Feature 4 stays OFF"
+    assert screen._feature4_card._toggle.isChecked() is False, "Checkbox snapped back to OFF"
+    assert screen._feature4_card._load_classrooms_btn.isEnabled() is False
 
-    # Confirm the Generate button is also blocked (requires courses + periods + selection).
-    # Even if those were loaded, feature4_ok would be False because feature4_ready() is False.
-    feature4_ok = (
-        not controller.feature4_enabled or controller.feature4_ready()
-    )
-    assert feature4_ok is False, "Generate must be blocked when counts are missing"
+    # Generate stays blocked while Feature 4 cannot be activated.
     assert screen._gen_btn.isEnabled() is False, "Generate button must be disabled"
     screen.close()
 

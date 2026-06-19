@@ -289,19 +289,72 @@ def test_feature4_browse_button_disabled_when_toggle_off():
 # ── Feature 4: debounce timer path (M2 fix) ───────────────────────────────────
 
 def test_feature4_slots_debounce_timer_fires_and_updates_state():
-    """Forcing the debounce timer to fire must parse the text and update the label."""
+    """True signal-chain test: typing into the QLineEdit starts the debounce
+    timer (not fired yet), and only the timeout commits the value to state."""
     app = _get_qapp()
     controller = DesktopController()
     screen = ConfigScreen(controller)
 
     card = screen._feature4_card
-    card._slots_edit.setText("09:00, 13:00, 19:00")
-    card._slots_timer.timeout.emit()
 
+    # Typing starts the debounce timer but must NOT commit immediately.
+    card._slots_edit.setText("09:00, 13:00, 19:00")
+    assert card._slots_timer.isActive() is True
+    assert controller.time_slots == []
+
+    # Firing the timeout signal runs the real slot through the signal chain.
+    card._slots_timer.timeout.emit()
     assert "slot" in card._slots_label.text().lower()
     assert len(controller.time_slots) == 3
 
     app.processEvents()
+    screen.close()
+
+
+def test_feature4_proctors_debounce_timer_fires_and_updates_state():
+    """True signal-chain test for the Proctor Ratio QLineEdit: typing starts the
+    debounce timer, and only the timeout commits the parsed ratio to state."""
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+
+    card = screen._feature4_card
+
+    # Typing starts the debounce timer but must NOT commit immediately.
+    card._proctors_edit.setText("1:20")
+    assert card._proctors_timer.isActive() is True
+    assert controller.proctor_config is None
+
+    # Firing the timeout signal runs the real ratio through the signal chain.
+    card._proctors_timer.timeout.emit()
+    assert "1:20" in card._proctors_label.text()
+    assert controller.proctor_config is not None
+    assert controller.proctor_config.students_per_proctor == 20
+
+    app.processEvents()
+    screen.close()
+
+
+def test_feature4_empty_classrooms_file_shows_no_valid_rooms_badge(
+    tmp_path, monkeypatch
+):
+    """Spec §2.2.6: an empty classrooms file yields 0 rooms and the card shows
+    the dedicated 'No valid rooms in file' badge with the invalid style."""
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+
+    empty = tmp_path / "empty_classrooms.txt"
+    empty.write_text("", encoding="utf-8")
+    _patch_file_dialog(monkeypatch, [empty])
+
+    screen._feature4_card._load_classrooms()
+    app.processEvents()
+
+    assert screen._feature4_card._classrooms_label.text() == "No valid rooms in file"
+    assert "FEE2E2" in screen._feature4_card._classrooms_label.styleSheet()  # invalid style
+    assert controller.classrooms == []
+
     screen.close()
 
 

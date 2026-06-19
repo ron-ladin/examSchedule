@@ -39,7 +39,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.controller import DesktopController
+from src.controller import DesktopController, MissingStudentCountError
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
 from src.ui.generation_poller import GenerationPoller
@@ -430,32 +430,11 @@ class ConfigScreen(QWidget):
         mode = self._mode_card.selected_mode()
 
         try:
-            # Spec 4.3: if Feature 4 is ON and any Exam course is missing a
-            # StudentCount, the load must be rejected immediately. Snapshot the
-            # prior courses so we can restore them when the new file is invalid.
-            prior_courses = self._controller.snapshot_courses()
+            # Spec 4.3: pre-merge validation lives in the controller. It rejects
+            # the load with MissingStudentCountError BEFORE mutating any state
+            # when Feature 4 is on and an Exam offering lacks a StudentCount.
             count = self._controller.load_courses(Path(path), mode=mode)
-            if (
-                self._controller.feature4_enabled
-                and self._controller.any_exam_missing_student_count()
-            ):
-                self._controller.restore_courses(prior_courses)
-                self._files_card.courses_label.setText(f"{Path(path).name} - Missing StudentCount")
-                self._files_card.courses_label.setStyleSheet(
-                    "font-size:11px; color:#B91C1C; background:rgba(239,68,68,0.1);"
-                    " border-radius:4px; padding:2px 7px;"
-                )
-                QMessageBox.critical(
-                    self,
-                    "Missing Student Counts",
-                    "Feature 4 is enabled, but this courses file has Exam courses "
-                    "without a StudentCount (5th column).\n\n"
-                    "The file load was aborted (spec 4.3). Add StudentCount to "
-                    "every exam course, or disable Feature 4, then try again.",
-                )
-                self._set_status("✗  Courses load aborted — missing StudentCount.")
-                self._update_gen_btn()
-                return
+
             self._files_card.courses_label.setText(f"{Path(path).name}  ({count})")
             self._files_card.courses_label.setStyleSheet(
                 "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
@@ -464,6 +443,24 @@ class ConfigScreen(QWidget):
 
             self._refresh_programme_list()
             self._set_status(f"✓  {count} courses loaded.")
+            self._update_gen_btn()
+
+        except MissingStudentCountError:
+            # Controller left self._courses untouched — just surface the error.
+            self._files_card.courses_label.setText(f"{Path(path).name} - Missing StudentCount")
+            self._files_card.courses_label.setStyleSheet(
+                "font-size:11px; color:#B91C1C; background:rgba(239,68,68,0.1);"
+                " border-radius:4px; padding:2px 7px;"
+            )
+            QMessageBox.critical(
+                self,
+                "Missing Student Counts",
+                "Feature 4 is enabled, but this courses file has Exam courses "
+                "without a StudentCount (5th column).\n\n"
+                "The file load was aborted (spec 4.3). Add StudentCount to "
+                "every exam course, or disable Feature 4, then try again.",
+            )
+            self._set_status("✗  Courses load aborted — missing StudentCount.")
             self._update_gen_btn()
 
         except Exception:
