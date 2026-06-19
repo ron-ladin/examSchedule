@@ -88,58 +88,77 @@ class Feature4Card(QFrame):
         vl.addWidget(self._toggle)
 
         desc = QLabel(
-            "Load a classrooms file, enter time slots and proctor ratio. "
-            "All three are required before enabling the toggle."
+            "Load a classrooms file, then enter or browse time slots and proctor ratio. "
+            "All three inputs are required for generation."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("font-size:11px; color:#64748B; background:transparent;")
         vl.addWidget(desc)
 
-        # ── Classrooms row — Browse button (spec §4.1: file for classrooms) ──
+        # ── Classrooms row — Browse file only (spec §4.1) ───────────────────
         self._classrooms_label = QLabel("Missing")
         self._classrooms_label.setWordWrap(True)
         self._classrooms_label.setStyleSheet(self._input_style("missing"))
+
         self._load_classrooms_btn = QPushButton("Browse")
         self._load_classrooms_btn.setFixedWidth(120)
         self._load_classrooms_btn.setEnabled(self._controller.feature4_enabled)
         self._load_classrooms_btn.clicked.connect(self._load_classrooms)
+
         crow = QHBoxLayout()
         crow.addWidget(self._row_title("Classrooms"))
         crow.addWidget(self._load_classrooms_btn)
         crow.addWidget(self._classrooms_label, 1)
         vl.addLayout(crow)
 
-        # ── Time Slots row — QLineEdit text field (spec §2.3.5) ──────────────
+        # ── Time Slots row — manual text OR file browse ─────────────────────
         self._slots_edit = QLineEdit()
         self._slots_edit.setPlaceholderText(_SLOTS_PLACEHOLDER)
         self._slots_edit.setMaximumWidth(200)
         self._slots_edit.setToolTip(
-            "Up to 3 time slots per day, HH:MM format (24h), ascending, at least 4h apart"
+            "Manual input: up to 3 time slots per day, HH:MM format (24h), "
+            "ascending, at least 4h apart"
         )
         self._slots_edit.textChanged.connect(lambda _: self._slots_timer.start())
+
+        self._load_slots_btn = QPushButton("Browse")
+        self._load_slots_btn.setFixedWidth(120)
+        self._load_slots_btn.setEnabled(self._controller.feature4_enabled)
+        self._load_slots_btn.clicked.connect(self._load_time_slots)
+
         self._slots_label = QLabel("Missing")
         self._slots_label.setWordWrap(True)
         self._slots_label.setStyleSheet(self._input_style("missing"))
+
         srow = QHBoxLayout()
         srow.addWidget(self._row_title("Time Slots"))
         srow.addWidget(self._slots_edit)
+        srow.addWidget(self._load_slots_btn)
         srow.addWidget(self._slots_label, 1)
         vl.addLayout(srow)
 
-        # ── Proctor Ratio row — QLineEdit text field (spec §2.4.4) ───────────
+        # ── Proctor Ratio row — manual text OR file browse ──────────────────
         self._proctors_edit = QLineEdit()
         self._proctors_edit.setPlaceholderText(_PROCTORS_PLACEHOLDER)
         self._proctors_edit.setMaximumWidth(120)
         self._proctors_edit.setToolTip(
-            "Proctor-to-student ratio in the form 1:X (e.g. 1:30)"
+            "Manual input: proctor-to-student ratio in the form 1:X (e.g. 1:30)"
         )
         self._proctors_edit.textChanged.connect(lambda _: self._proctors_timer.start())
+
+        self._load_proctors_btn = QPushButton("Browse")
+        self._load_proctors_btn.setFixedWidth(120)
+        self._load_proctors_btn.setEnabled(self._controller.feature4_enabled)
+        self._load_proctors_btn.clicked.connect(self._load_proctor_config)
+
         self._proctors_label = QLabel("Missing")
         self._proctors_label.setWordWrap(True)
         self._proctors_label.setStyleSheet(self._input_style("missing"))
+
         prow = QHBoxLayout()
         prow.addWidget(self._row_title("Proctor Ratio"))
         prow.addWidget(self._proctors_edit)
+        prow.addWidget(self._load_proctors_btn)
         prow.addWidget(self._proctors_label, 1)
         vl.addLayout(prow)
 
@@ -165,6 +184,11 @@ class Feature4Card(QFrame):
             " border-radius:4px; padding:3px 7px;"
         )
 
+    def _set_feature4_input_controls_enabled(self, enabled: bool) -> None:
+        self._load_classrooms_btn.setEnabled(enabled)
+        self._load_slots_btn.setEnabled(enabled)
+        self._load_proctors_btn.setEnabled(enabled)
+
     def _on_toggled(self, checked: bool) -> None:
         # Spec 4.3: Feature 4 cannot be enabled while the currently loaded
         # courses have Exam offerings without a StudentCount. Snap the toggle
@@ -175,9 +199,10 @@ class Feature4Card(QFrame):
             self._toggle.setChecked(False)
             self._toggle.blockSignals(False)
             self._controller.set_feature4_enabled(False)
-            self._load_classrooms_btn.setEnabled(False)
+            self._set_feature4_input_controls_enabled(False)
             self.refresh_status()
             self.gen_btn_update_needed.emit()
+
             QMessageBox.critical(
                 self,
                 "Cannot Enable Feature 4",
@@ -189,7 +214,7 @@ class Feature4Card(QFrame):
             return
 
         self._controller.set_feature4_enabled(checked)
-        self._load_classrooms_btn.setEnabled(checked)
+        self._set_feature4_input_controls_enabled(checked)
         self.refresh_status()
         self.gen_btn_update_needed.emit()
 
@@ -219,6 +244,7 @@ class Feature4Card(QFrame):
 
         self._status_lbl.setText(text)
         self._status_lbl.setStyleSheet(style)
+
         if ctrl.feature4_ready():
             self.setStyleSheet(
                 "QFrame { background:rgba(236,253,245,0.85);"
@@ -230,11 +256,13 @@ class Feature4Card(QFrame):
                 " border:1px dashed #CBD5E1; border-radius:12px; }"
             )
 
-    # ── Classrooms: Browse file (spec §4.1) ──────────────────────────────────
+    # ── Classrooms: Browse file only (spec §4.1) ────────────────────────────
 
     def _load_classrooms(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Classrooms File", "",
+            self,
+            "Select Classrooms File",
+            "",
             "Text files (*.txt);;All files (*)",
         )
         if not path:
@@ -251,20 +279,60 @@ class Feature4Card(QFrame):
             else:
                 self._classrooms_label.setText(f"{Path(path).name} — {count} room(s)")
                 self._classrooms_label.setStyleSheet(self._input_style("valid"))
+
         except Exception as exc:
             self._controller.clear_classrooms()
             self._classrooms_label.setText(f"{Path(path).name} — Invalid file")
             self._classrooms_label.setStyleSheet(self._input_style("invalid"))
             logger.warning("Invalid classrooms file: %s", exc)
+
             QMessageBox.critical(
-                self, "Invalid Classrooms File",
-                f"The selected classrooms file is invalid.\n\nFile: {Path(path).name}\nReason: {exc}",
+                self,
+                "Invalid Classrooms File",
+                f"The selected classrooms file is invalid.\n\n"
+                f"File: {Path(path).name}\nReason: {exc}",
             )
 
         self.refresh_status()
         self.gen_btn_update_needed.emit()
 
-    # ── Time Slots: QLineEdit text input (spec §2.3.5) ───────────────────────
+    # ── Time Slots: Browse file OR manual text input ────────────────────────
+
+    def _load_time_slots(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Time Slots File",
+            "",
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            count = self._controller.load_time_slots(Path(path))
+            if count == 0:
+                self._controller.clear_time_slots()
+                self._slots_label.setText("No valid slots in file")
+                self._slots_label.setStyleSheet(self._input_style("invalid"))
+            else:
+                self._slots_label.setText(f"{Path(path).name} — {count} slot(s)")
+                self._slots_label.setStyleSheet(self._input_style("valid"))
+
+        except Exception as exc:
+            self._controller.clear_time_slots()
+            self._slots_label.setText(f"{Path(path).name} — Invalid file")
+            self._slots_label.setStyleSheet(self._input_style("invalid"))
+            logger.warning("Invalid slots file: %s", exc)
+
+            QMessageBox.critical(
+                self,
+                "Invalid Time Slots File",
+                f"The selected time slots file is invalid.\n\n"
+                f"File: {Path(path).name}\nReason: {exc}",
+            )
+
+        self.refresh_status()
+        self.gen_btn_update_needed.emit()
 
     def _commit_slots_text(self) -> None:
         """Parse and validate the slots text field after the debounce delay."""
@@ -277,18 +345,53 @@ class Feature4Card(QFrame):
             else:
                 try:
                     count = self._controller.set_time_slots_from_text(text)
-                    self._slots_label.setText(f"{count} slot(s)")
+                    self._slots_label.setText(f"Manual input — {count} slot(s)")
                     self._slots_label.setStyleSheet(self._input_style("valid"))
                 except ValueError:
                     self._controller.clear_time_slots()
                     self._slots_label.setText("Invalid — check format & gaps")
                     self._slots_label.setStyleSheet(self._input_style("invalid"))
+
             self.refresh_status()
             self.gen_btn_update_needed.emit()
+
         except Exception:
             logger.exception("Unexpected error in _commit_slots_text")
 
-    # ── Proctor Ratio: QLineEdit text input (spec §2.4.4) ────────────────────
+    # ── Proctor Ratio: Browse file OR manual text input ─────────────────────
+
+    def _load_proctor_config(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Proctor Ratio File",
+            "",
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            config = self._controller.load_proctor_config(Path(path))
+            self._proctors_label.setText(
+                f"{Path(path).name} — 1:{config.students_per_proctor}"
+            )
+            self._proctors_label.setStyleSheet(self._input_style("valid"))
+
+        except Exception as exc:
+            self._controller.clear_proctor_config()
+            self._proctors_label.setText(f"{Path(path).name} — Invalid file")
+            self._proctors_label.setStyleSheet(self._input_style("invalid"))
+            logger.warning("Invalid proctor ratio file: %s", exc)
+
+            QMessageBox.critical(
+                self,
+                "Invalid Proctor Ratio File",
+                f"The selected proctor ratio file is invalid.\n\n"
+                f"File: {Path(path).name}\nReason: {exc}",
+            )
+
+        self.refresh_status()
+        self.gen_btn_update_needed.emit()
 
     def _commit_proctors_text(self) -> None:
         """Parse and validate the proctor ratio text field after debounce."""
@@ -301,13 +404,17 @@ class Feature4Card(QFrame):
             else:
                 try:
                     config = self._controller.set_proctor_config_from_text(text)
-                    self._proctors_label.setText(f"1:{config.students_per_proctor}")
+                    self._proctors_label.setText(
+                        f"Manual input — 1:{config.students_per_proctor}"
+                    )
                     self._proctors_label.setStyleSheet(self._input_style("valid"))
                 except ValueError:
                     self._controller.clear_proctor_config()
                     self._proctors_label.setText("Invalid — use 1:X format")
                     self._proctors_label.setStyleSheet(self._input_style("invalid"))
+
             self.refresh_status()
             self.gen_btn_update_needed.emit()
+
         except Exception:
             logger.exception("Unexpected error in _commit_proctors_text")
