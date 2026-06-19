@@ -200,72 +200,212 @@ def _write_proctors_file(tmp_path: Path) -> Path:
 def test_feature4_activates_only_after_toggle_and_all_three_valid_inputs(
     tmp_path, monkeypatch
 ):
+    """Slots/proctor are now QLineEdit text fields (spec §2.3.5, §2.4.4).
+    Classrooms still uses Browse; toggle can be enabled once all three are valid."""
     app = _get_qapp()
     controller = DesktopController()
     screen = ConfigScreen(controller)
     classrooms = _write_classrooms_file(tmp_path)
-    slots = _write_slots_file(tmp_path)
-    proctors = _write_proctors_file(tmp_path)
-    _patch_file_dialog(monkeypatch, [classrooms, slots, proctors])
+    _patch_file_dialog(monkeypatch, [classrooms])
 
-    screen._feature4_card._on_toggled(True)
-    assert controller.feature4_enabled is True
-
+    # Load classrooms via Browse — still file-based per spec §4.1.
     screen._feature4_card._load_classrooms()
     assert controller.feature4_active is False
     assert "2 room(s)" in screen._feature4_card._classrooms_label.text()
 
-    screen._feature4_card._load_time_slots()
+    # Enter time slots via the new text field (spec §2.3.5).
+    screen._feature4_card._slots_edit.setText("09:00, 13:00, 19:00")
+    screen._feature4_card._commit_slots_text()
     assert controller.feature4_active is False
     assert "3 slot(s)" in screen._feature4_card._slots_label.text()
 
-    screen._feature4_card._load_proctor_config()
+    # Enter proctor ratio via the new text field (spec §2.4.4).
+    screen._feature4_card._proctors_edit.setText("1:20")
+    screen._feature4_card._commit_proctors_text()
+    assert controller.proctor_config is not None
+    assert controller.proctor_config.students_per_proctor == 20
+
+    # All inputs are valid; turning ON the toggle activates Feature 4.
+    screen._feature4_card._on_toggled(True)
+    assert controller.feature4_enabled is True
     app.processEvents()
 
     assert controller.feature4_active is True
-    assert controller.proctor_config.students_per_proctor == 20
     assert screen._feature4_card._status_lbl.text() == "ACTIVE"
     screen.close()
 
 
-def test_invalid_feature4_file_shows_error_and_deactivates(
+def test_invalid_feature4_slots_text_shows_error_and_deactivates(
     tmp_path,
     monkeypatch,
 ):
+    """Entering slots < 4h apart in the text field must show an inline error
+    and keep Feature 4 inactive (spec §2.3.4 / §2.3.7)."""
     app = _get_qapp()
     controller = DesktopController()
     screen = ConfigScreen(controller)
     classrooms = _write_classrooms_file(tmp_path)
-    slots = _write_slots_file(tmp_path)
-    proctors = _write_proctors_file(tmp_path)
-    invalid_slots = _write_slots_file(
-        tmp_path, "09:00, 11:00", "invalid_slots.txt"
-    )
-    _patch_file_dialog(monkeypatch, [classrooms, slots, proctors, invalid_slots])
-    shown_errors = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "critical",
-        lambda _parent, title, text: shown_errors.append((title, text)),
-    )
+    _patch_file_dialog(monkeypatch, [classrooms])
 
-    screen._feature4_card._on_toggled(True)
+    # Bring Feature 4 to ACTIVE state with valid inputs.
     screen._feature4_card._load_classrooms()
-    screen._feature4_card._load_time_slots()
-    screen._feature4_card._load_proctor_config()
+    screen._feature4_card._slots_edit.setText("09:00, 13:00, 19:00")
+    screen._feature4_card._commit_slots_text()
+    screen._feature4_card._proctors_edit.setText("1:20")
+    screen._feature4_card._commit_proctors_text()
+    screen._feature4_card._on_toggled(True)
     assert controller.feature4_active is True
 
-    # Slots only 2h apart violate the >=4h rule (spec 2.3.4) -> cleared.
-    screen._feature4_card._load_time_slots()
+    # Enter slots only 2h apart — violates the >=4h rule (spec §2.3.4).
+    screen._feature4_card._slots_edit.setText("09:00, 11:00")
+    screen._feature4_card._commit_slots_text()
     app.processEvents()
 
     assert controller.feature4_active is False
     assert controller.time_slots == []
-    assert "Invalid file" in screen._feature4_card._slots_label.text()
+    assert "Invalid" in screen._feature4_card._slots_label.text()
     assert screen._feature4_card._status_lbl.text().startswith("INCOMPLETE")
-    assert shown_errors
-    assert shown_errors[0][0] == "Invalid Feature 4 File"
-    assert "at least 4 hours apart" in shown_errors[0][1]
+    screen.close()
+
+
+# ── Feature 4: Browse button gating (spec §4.1, M1 fix) ──────────────────────
+
+def test_feature4_browse_button_disabled_when_toggle_off():
+    """Classrooms Browse button must be disabled when Feature 4 toggle is OFF."""
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+
+    screen._feature4_card._toggle.setChecked(False)
+    assert screen._feature4_card._load_classrooms_btn.isEnabled() is False
+
+    screen._feature4_card._toggle.setChecked(True)
+    assert screen._feature4_card._load_classrooms_btn.isEnabled() is True
+
+    app.processEvents()
+    screen.close()
+
+
+# ── Feature 4: debounce timer path (M2 fix) ───────────────────────────────────
+
+def test_feature4_slots_debounce_timer_fires_and_updates_state():
+    """True signal-chain test: typing into the QLineEdit starts the debounce
+    timer (not fired yet), and only the timeout commits the value to state."""
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+
+    card = screen._feature4_card
+
+    # Typing starts the debounce timer but must NOT commit immediately.
+    card._slots_edit.setText("09:00, 13:00, 19:00")
+    assert card._slots_timer.isActive() is True
+    assert controller.time_slots == []
+
+    # Firing the timeout signal runs the real slot through the signal chain.
+    card._slots_timer.timeout.emit()
+    assert "slot" in card._slots_label.text().lower()
+    assert len(controller.time_slots) == 3
+
+    app.processEvents()
+    screen.close()
+
+
+def test_feature4_proctors_debounce_timer_fires_and_updates_state():
+    """True signal-chain test for the Proctor Ratio QLineEdit: typing starts the
+    debounce timer, and only the timeout commits the parsed ratio to state."""
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+
+    card = screen._feature4_card
+
+    # Typing starts the debounce timer but must NOT commit immediately.
+    card._proctors_edit.setText("1:20")
+    assert card._proctors_timer.isActive() is True
+    assert controller.proctor_config is None
+
+    # Firing the timeout signal runs the real ratio through the signal chain.
+    card._proctors_timer.timeout.emit()
+    assert "1:20" in card._proctors_label.text()
+    assert controller.proctor_config is not None
+    assert controller.proctor_config.students_per_proctor == 20
+
+    app.processEvents()
+    screen.close()
+
+
+def test_feature4_empty_classrooms_file_shows_no_valid_rooms_badge(
+    tmp_path, monkeypatch
+):
+    """Spec §2.2.6: an empty classrooms file yields 0 rooms and the card shows
+    the dedicated 'No valid rooms in file' badge with the invalid style."""
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+
+    empty = tmp_path / "empty_classrooms.txt"
+    empty.write_text("", encoding="utf-8")
+    _patch_file_dialog(monkeypatch, [empty])
+
+    screen._feature4_card._load_classrooms()
+    app.processEvents()
+
+    assert screen._feature4_card._classrooms_label.text() == "No valid rooms in file"
+    assert "FEE2E2" in screen._feature4_card._classrooms_label.styleSheet()  # invalid style
+    assert controller.classrooms == []
+
+    screen.close()
+
+
+# ── Spec §4.3: file-load abort when StudentCount missing (H1 fix) ─────────────
+
+def test_spec_4_3_file_load_aborted_when_student_count_missing(
+    tmp_path, monkeypatch
+):
+    """When Feature 4 is ON and the loaded courses file has Exam courses without
+    StudentCount, the load must be rejected: prior courses restored, error dialog
+    shown, and the label reflects the abort (spec §4.3)."""
+    app = _get_qapp()
+
+    prior_courses_file = tmp_path / "prior.txt"
+    prior_courses_file.write_text(
+        "Calculus\n11111\nDr. Cohen\n83101, 1, FALL, Obligatory, 30\nExam\n",
+        encoding="utf-8",
+    )
+    controller = DesktopController()
+    controller.load_courses(prior_courses_file)
+    prior_count = len(controller._courses)
+    assert prior_count == 1
+
+    controller._feature4_enabled = True
+
+    bad_courses_file = tmp_path / "bad.txt"
+    bad_courses_file.write_text(
+        "Physics\n22222\nDr. Levi\n83102, 1, FALL, Obligatory\nExam\n",
+        encoding="utf-8",
+    )
+
+    screen = ConfigScreen(controller)
+    _patch_file_dialog(monkeypatch, [bad_courses_file])
+
+    errors_shown = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors_shown.append(args),
+    )
+
+    screen._load_courses()
+    app.processEvents()
+
+    assert len(controller._courses) == prior_count, "Prior courses not restored"
+    assert errors_shown, "No error dialog was shown"
+    label_text = screen._files_card.courses_label.text()
+    assert any(
+        kw in label_text for kw in ("Missing", "aborted", "StudentCount")
+    ), f"Label did not reflect abort: {label_text!r}"
+
     screen.close()
 
 

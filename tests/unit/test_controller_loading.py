@@ -7,7 +7,7 @@ course filtering, simple properties, selection limits, and empty-file edges.
 
 import pytest
 
-from src.controller import DesktopController
+from src.controller import DesktopController, MissingStudentCountError
 
 from tests.unit._controller_helpers import (
     _exam_course,
@@ -367,13 +367,51 @@ def test_any_exam_missing_student_count_false_when_all_present():
     assert ctrl.any_exam_missing_student_count() is False
 
 
-def test_snapshot_and_restore_courses_round_trip():
+def test_update_load_with_missing_student_count_is_rejected_and_state_unchanged(
+    tmp_path,
+):
+    """Regression (H1): pre-merge validation must reject an update-mode load that
+    adds a StudentCount-less Exam offering to an existing course while Feature 4
+    is ON — without mutating committed controller state (no partial merge)."""
+    # Arrange: a valid single-offering course loaded while Feature 4 is OFF.
+    valid_file = tmp_path / "valid.txt"
+    valid_file.write_text(
+        "Calculus\n11111\nDr. Cohen\n83101, 1, FALL, Obligatory, 30\nExam\n",
+        encoding="utf-8",
+    )
     ctrl = DesktopController()
-    ctrl._courses = [_exam_course(40)]
-    snapshot = ctrl.snapshot_courses()
+    ctrl.load_courses(valid_file, mode="replace")
 
-    ctrl._courses = [_exam_course(None, course_id="22222")]
-    ctrl.restore_courses(snapshot)
+    # Enable Feature 4, then capture the exact committed state for comparison.
+    ctrl.set_feature4_enabled(True)
+    before_ids = [c.id for c in ctrl._courses]
+    before_offering_keys = {
+        (o.program_id, o.year, o.semester, o.requirement, o.student_count)
+        for c in ctrl._courses
+        for o in c.offerings
+    }
 
-    assert [c.id for c in ctrl._courses] == ["11111"]
+    # An update file that adds a NEW offering WITHOUT a StudentCount to 11111.
+    bad_update = tmp_path / "bad_update.txt"
+    bad_update.write_text(
+        "Calculus\n11111\nDr. Cohen\n83102, 1, FALL, Elective\nExam\n",
+        encoding="utf-8",
+    )
+
+    # Act / Assert: the load is rejected.
+    with pytest.raises(MissingStudentCountError):
+        ctrl.load_courses(bad_update, mode="update")
+
+    # The committed state must be byte-for-byte unchanged — the bad offering
+    # was never retained on the existing course.
+    after_ids = [c.id for c in ctrl._courses]
+    after_offering_keys = {
+        (o.program_id, o.year, o.semester, o.requirement, o.student_count)
+        for c in ctrl._courses
+        for o in c.offerings
+    }
+    assert after_ids == before_ids
+    assert after_offering_keys == before_offering_keys
     assert ctrl.any_exam_missing_student_count() is False
+
+

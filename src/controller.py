@@ -17,6 +17,7 @@ Notes:
     - Does NOT modify src/engine/app_controller.py.
 """
 
+import copy
 import logging
 import multiprocessing
 from collections.abc import Iterator
@@ -70,6 +71,15 @@ logger = logging.getLogger(__name__)
 # Decrease it if the UI feels slow or freezes during loading.
 LOAD_BATCH_SIZE: int = 1000
 
+
+
+class MissingStudentCountError(ValueError):
+    """Raised when a courses load would leave Exam offerings without a
+    StudentCount while Feature 4 is enabled (spec 4.3 file-load abort).
+
+    Subclasses ValueError so callers may catch either type; the UI catches
+    this specific type to show the dedicated 'Missing Student Counts' dialog.
+    """
 
 
 class DesktopController:
@@ -140,11 +150,27 @@ class DesktopController:
         reader = CourseFileReader(Path(path))
         new_courses = reader.read()
 
+        # Pre-merge validation (spec 4.3): build the would-be-merged result on a
+        # deep copy so a failed validation never mutates committed state. Merge
+        # helpers mutate existing Course objects in place, so a shallow copy is
+        # NOT enough — only a deep copy isolates self._courses fully.
+        candidate = copy.deepcopy(self._courses)
         if mode == "update":
-            self._update_merge_courses(new_courses)
+            update_merge_courses(candidate, new_courses)
         else:
-            self._merge_by_key(self._courses, new_courses, mode, key_fn=lambda c: c.id)
+            merge_by_key(candidate, new_courses, mode, key_fn=lambda c: c.id)
 
+        # When Feature 4 is enabled, every Exam offering must carry a
+        # StudentCount. Reject BEFORE committing — self._courses is untouched.
+        if self._feature4_enabled and Feature4Validator.any_exam_missing_student_count(
+            candidate
+        ):
+            raise MissingStudentCountError(
+                "Feature 4 is enabled, but this courses file would leave Exam "
+                "offerings without a StudentCount (spec 4.3). The load was aborted."
+            )
+
+        self._courses = candidate
         self.mark_results_stale()
 
         logger.info(
@@ -154,15 +180,6 @@ class DesktopController:
             len(self._courses),
         )
         return len(self._courses)
-
-    def snapshot_courses(self) -> list[Course]:
-        """Return a shallow copy of the current courses list for rollback."""
-        return list(self._courses)
-
-    def restore_courses(self, courses: list[Course]) -> None:
-        """Restore a previously snapshotted courses list (spec 4.3 abort)."""
-        self._courses = list(courses)
-        self.mark_results_stale()
 
     def load_classrooms(self, path: Path) -> int:
         """Load and validate the optional Feature 4 classrooms file."""
@@ -224,10 +241,6 @@ class DesktopController:
     def set_allow_unassigned_classrooms(self, allow: bool) -> None:
         """Preserve the user's soft-warning choice for subsequent result batches."""
         self._allow_unassigned_classrooms = bool(allow)
-
-    def _update_merge_courses(self, new_courses: list[Course]) -> None:
-        """Update mode: merge offerings into existing courses; add unknown courses."""
-        update_merge_courses(self._courses, new_courses)
 
     def load_programs(self, path: Path) -> int:
         """

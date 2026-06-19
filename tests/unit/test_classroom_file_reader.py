@@ -88,10 +88,15 @@ def test_rejects_duplicate_room_ids(tmp_path):
         ClassroomFileReader(_write(tmp_path, content)).read()
 
 
-# An empty file is rejected (at least one room required, §3.1.b).
-def test_rejects_empty_file(tmp_path):
-    with pytest.raises(ValueError):
-        ClassroomFileReader(_write(tmp_path, "")).read()
+# An empty file yields 0 rooms instead of raising (§2.2.6): the caller shows a
+# "No valid rooms in file" badge and keeps Generate blocked.
+def test_empty_file_returns_no_rooms(tmp_path):
+    assert ClassroomFileReader(_write(tmp_path, "")).read() == []
+
+
+# A file with only delimiters/whitespace also yields 0 rooms (§2.2.6).
+def test_whitespace_only_file_returns_no_rooms(tmp_path):
+    assert ClassroomFileReader(_write(tmp_path, "$$$$\n   \n$$$$")).read() == []
 
 
 # A missing file surfaces a file error.

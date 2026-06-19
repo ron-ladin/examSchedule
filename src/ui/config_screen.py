@@ -39,13 +39,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.controller import DesktopController
+from src.controller import DesktopController, MissingStudentCountError
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
 from src.ui.generation_poller import GenerationPoller
 from src.ui.periods_editor_dialog import ExamPeriodsEditorDialog
 from src.ui.results_panel import _display_period_key
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
+from src.adapters.readers.schedule_file_reader import ScheduleFileReader
 from src.ui.widgets.config_input_cards import FilesCard, LoadModeCard
 from src.ui.widgets.feature4_card import Feature4Card
 from src.ui.widgets.programme_row import ProgrammeRow
@@ -248,7 +249,18 @@ class ConfigScreen(QWidget):
         self._gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._gen_btn.clicked.connect(self._on_generate)
 
-        cl.addWidget(self._gen_btn, 0, Qt.AlignmentFlag.AlignRight)
+        self._import_btn = QPushButton("📂  Load Schedule")
+        self._import_btn.setFixedHeight(44)
+        self._import_btn.setFixedWidth(160)
+        self._import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._import_btn.setToolTip("Load a previously generated schedules.txt file")
+        self._import_btn.clicked.connect(self._import_schedule)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(self._import_btn)
+        btn_row.addWidget(self._gen_btn)
+        cl.addLayout(btn_row)
         cl.addStretch(1)
 
         ol.addStretch(1)
@@ -418,32 +430,11 @@ class ConfigScreen(QWidget):
         mode = self._mode_card.selected_mode()
 
         try:
-            # Spec 4.3: if Feature 4 is ON and any Exam course is missing a
-            # StudentCount, the load must be rejected immediately. Snapshot the
-            # prior courses so we can restore them when the new file is invalid.
-            prior_courses = self._controller.snapshot_courses()
+            # Spec 4.3: pre-merge validation lives in the controller. It rejects
+            # the load with MissingStudentCountError BEFORE mutating any state
+            # when Feature 4 is on and an Exam offering lacks a StudentCount.
             count = self._controller.load_courses(Path(path), mode=mode)
-            if (
-                self._controller.feature4_enabled
-                and self._controller.any_exam_missing_student_count()
-            ):
-                self._controller.restore_courses(prior_courses)
-                self._files_card.courses_label.setText(f"{Path(path).name} - Missing StudentCount")
-                self._files_card.courses_label.setStyleSheet(
-                    "font-size:11px; color:#B91C1C; background:rgba(239,68,68,0.1);"
-                    " border-radius:4px; padding:2px 7px;"
-                )
-                QMessageBox.critical(
-                    self,
-                    "Missing Student Counts",
-                    "Feature 4 is enabled, but this courses file has Exam courses "
-                    "without a StudentCount (5th column).\n\n"
-                    "The file load was aborted (spec 4.3). Add StudentCount to "
-                    "every exam course, or disable Feature 4, then try again.",
-                )
-                self._set_status("✗  Courses load aborted — missing StudentCount.")
-                self._update_gen_btn()
-                return
+
             self._files_card.courses_label.setText(f"{Path(path).name}  ({count})")
             self._files_card.courses_label.setStyleSheet(
                 "font-size:11px; color:#059669; background:rgba(16,185,129,0.1);"
@@ -452,6 +443,24 @@ class ConfigScreen(QWidget):
 
             self._refresh_programme_list()
             self._set_status(f"✓  {count} courses loaded.")
+            self._update_gen_btn()
+
+        except MissingStudentCountError:
+            # Controller left self._courses untouched — just surface the error.
+            self._files_card.courses_label.setText(f"{Path(path).name} - Missing StudentCount")
+            self._files_card.courses_label.setStyleSheet(
+                "font-size:11px; color:#B91C1C; background:rgba(239,68,68,0.1);"
+                " border-radius:4px; padding:2px 7px;"
+            )
+            QMessageBox.critical(
+                self,
+                "Missing Student Counts",
+                "Feature 4 is enabled, but this courses file has Exam courses "
+                "without a StudentCount (5th column).\n\n"
+                "The file load was aborted (spec 4.3). Add StudentCount to "
+                "every exam course, or disable Feature 4, then try again.",
+            )
+            self._set_status("✗  Courses load aborted — missing StudentCount.")
             self._update_gen_btn()
 
         except Exception:
@@ -636,6 +645,37 @@ class ConfigScreen(QWidget):
         self._allow_unassigned_generation = response == QMessageBox.StandardButton.Yes
         return self._allow_unassigned_generation
 
+
+    def _import_schedule(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Schedule File",
+            "",
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            schedules_by_period = ScheduleFileReader().read(Path(path))
+            if not schedules_by_period:
+                QMessageBox.warning(
+                    self,
+                    "Empty File",
+                    "No schedules found in the selected file.",
+                )
+                return
+            result_tuple = ([], schedules_by_period, {}, {}, set())
+            self.generation_started.emit(([], {}))
+            self.schedule_generated.emit(result_tuple)
+            self._set_status(f"✓  Schedule loaded from {Path(path).name}.", ok=True)
+        except Exception:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                "Could not parse the schedule file. Please check the file format.",
+            )
+            logger.exception("Error loading schedule file")
 
     def _on_generation_succeeded(self, result_tuple: object) -> None:
         self._notify_settings_state(False)

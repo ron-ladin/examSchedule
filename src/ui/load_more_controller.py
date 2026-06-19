@@ -372,6 +372,19 @@ class LoadMoreController(QObject):
         self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_VARIANTS)
 
     def poll_load_more(self, period_key: str) -> None:
+        try:
+            self._poll_load_more_inner(period_key)
+        except Exception:
+            logger.exception("Unexpected error in poll_load_more for %s", period_key)
+            card = self._panel.get_card(period_key)
+            btn = card.load_more_btn if card else None
+            if btn:
+                btn.setEnabled(True)
+                btn.setText("⚠  Load failed — retry")
+            self.stop_auto_load(period_key, refresh=False)
+            self.cleanup_load_more_state(period_key, terminate=True)
+
+    def _poll_load_more_inner(self, period_key: str) -> None:
         panel = self._panel
         queue = self.queues.get(period_key)
         if queue is None:

@@ -52,10 +52,9 @@ class ClassroomFileReader:
             if lines:
                 records.append(lines)
 
-        # At least one room must be defined (specv4 §3.1.b).
-        if not records:
-            raise ValueError(f"No classroom records found in file: {self.classrooms_path}")
-
+        # An empty file / file with no records is NOT a hard error here
+        # (spec §2.2.6): the caller surfaces a "No valid rooms in file" badge
+        # and keeps Generate blocked. Returning [] lets read() yield 0 rooms.
         return records
 
     def _parse_classroom_record(self, record: List[str]) -> Classroom:
