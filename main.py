@@ -5,11 +5,21 @@ Desktop GUI entry point for Syncademic (standalone PyQt6 app).
 
 Usage:
     python main.py              ← launches the desktop GUI  (default)
-    python main.py --cli ...    ← runs the original CLI (backward compat)
-        --cli --programs selected_programs.txt --courses courses.txt
-             --periods exam_periods.txt --output schedules.txt
-             [--classrooms classrooms.txt] [--slots slots.txt]
-             [--proctor proctors.txt]
+    python main.py --cli ...    ← runs the batch CLI
+
+    Required:
+        --programs  data/programs.txt   comma-separated 5-digit program IDs
+        --courses   data/courses.txt
+        --periods   data/dates.txt
+        --output    output/schedules.txt
+
+    Optional — Phase 3 (threshold filtering + sorting):
+        --settings  data/settings.txt
+
+    Optional — Feature 4 (classroom assignment):
+        --classrooms  data/classrooms.txt
+        --slots       data/slots.txt
+        --proctor     data/proctors.txt
 """
 
 import logging
@@ -35,8 +45,10 @@ def _run_cli() -> None:
     from src.adapters.file_data_provider import FileDataProvider
     from src.adapters.readers.classroom_file_reader import ClassroomFileReader
     from src.adapters.readers.proctor_config_reader import ProctorConfigReader
+    from src.adapters.readers.settings_file_reader import SettingsFileReader
     from src.adapters.readers.slots_file_reader import SlotsFileReader
     from src.adapters.text_file_exporter import TextFileExporter
+    from src.domain.threshold_filter import ThresholdFilter
     from src.engine.app_controller import AppController
     from src.engine.schedule_generator import ScheduleGenerator
 
@@ -46,6 +58,7 @@ def _run_cli() -> None:
     parser.add_argument("--courses",     type=Path, required=True)
     parser.add_argument("--periods",     type=Path, required=True)
     parser.add_argument("--output",      type=Path, required=True)
+    parser.add_argument("--settings",    type=Path, default=None)
     parser.add_argument("--classrooms",  type=Path, default=None)
     parser.add_argument("--slots",       type=Path, default=None)
     parser.add_argument("--proctor",     type=Path, default=None)
@@ -61,15 +74,27 @@ def _run_cli() -> None:
     conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
     generator         = ScheduleGenerator(conflict_strategy=conflict_strategy)
 
-    classrooms    = ClassroomFileReader(args.classrooms).read() if args.classrooms else []
-    time_slots    = SlotsFileReader(args.slots).read() if args.slots else []
+    classrooms     = ClassroomFileReader(args.classrooms).read() if args.classrooms else []
+    time_slots     = SlotsFileReader(args.slots).read() if args.slots else []
     proctor_config = ProctorConfigReader(args.proctor).read() if args.proctor else None
+
+    threshold_filter   = None
+    threshold_settings = None
+    sorting_config     = None
+    if args.settings:
+        settings           = SettingsFileReader(args.settings).read()
+        threshold_filter   = ThresholdFilter()
+        threshold_settings = settings.thresholds
+        sorting_config     = settings.sorting
 
     AppController(
         data_provider=data_provider,
         exporter=exporter,
         generator=generator,
         selected_programs=selected_programs,
+        threshold_filter=threshold_filter,
+        threshold_settings=threshold_settings,
+        sorting_config=sorting_config,
         classrooms=classrooms,
         time_slots=time_slots,
         proctor_config=proctor_config,
