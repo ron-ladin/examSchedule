@@ -657,7 +657,9 @@ class ConfigScreen(QWidget):
             return
 
         try:
-            schedules_by_period = ScheduleFileReader().read(Path(path))
+            imported = ScheduleFileReader().read_with_metadata(Path(path))
+            schedules_by_period = imported.schedules_by_period
+
             if not schedules_by_period:
                 QMessageBox.warning(
                     self,
@@ -665,10 +667,25 @@ class ConfigScreen(QWidget):
                     "No schedules found in the selected file.",
                 )
                 return
-            result_tuple = ([], schedules_by_period, {}, {}, set())
+
+            loaded_courses_by_id = {
+                course.id: course
+                for course in self._controller.courses
+            }
+
+            courses_by_id = {
+                course_id: loaded_courses_by_id.get(course_id, imported_course)
+                for course_id, imported_course in imported.courses_by_id.items()
+            }
+
+            self._controller.clear_results_stale()
+
+            result_tuple = ([], schedules_by_period, courses_by_id, {}, set())
+
             self.generation_started.emit(([], {}))
             self.schedule_generated.emit(result_tuple)
             self._set_status(f"✓  Schedule loaded from {Path(path).name}.", ok=True)
+
         except Exception:
             QMessageBox.critical(
                 self,

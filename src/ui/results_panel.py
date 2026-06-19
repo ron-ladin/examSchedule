@@ -865,7 +865,11 @@ class _ResultsPanel(QWidget):
             return
 
         try:
-            self._controller.export(selected, Path(path))
+            self._controller.export(
+                selected,
+                Path(path),
+                courses_by_id=self._courses_by_id,
+            )
             self._show_message(
                 "Saved",
                 f"Schedule saved to:\n{path}",
