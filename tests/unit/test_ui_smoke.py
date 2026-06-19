@@ -137,11 +137,11 @@ def test_config_screen_initial_empty_state():
     assert "Load a courses file" in screen._prog_placeholder.text()
     assert screen._prog_count_lbl.text() == "0 / 5 selected"
 
-    # Optional Feature 4 controls — classrooms Browse always accessible;
+    # Optional Feature 4 controls — Browse is gated on the toggle (spec §4.1);
     # slots and proctor are now QLineEdit text fields (spec §2.3.5, §2.4.4).
     from PyQt6.QtWidgets import QLineEdit
     assert screen._feature4_card._load_classrooms_btn.text() == "Browse"
-    assert screen._feature4_card._load_classrooms_btn.isEnabled() is True
+    assert screen._feature4_card._load_classrooms_btn.isEnabled() is False
     assert isinstance(screen._feature4_card._slots_edit, QLineEdit)
     assert screen._feature4_card._slots_edit.isEnabled() is True
     assert isinstance(screen._feature4_card._proctors_edit, QLineEdit)

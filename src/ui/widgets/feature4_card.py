@@ -44,12 +44,12 @@ class Feature4Card(QFrame):
 
         # 300 ms debounce timers so text-field validation fires after the user
         # pauses typing rather than on every keystroke.
-        self._slots_timer = QTimer()
+        self._slots_timer = QTimer(self)
         self._slots_timer.setSingleShot(True)
         self._slots_timer.setInterval(300)
         self._slots_timer.timeout.connect(self._commit_slots_text)
 
-        self._proctors_timer = QTimer()
+        self._proctors_timer = QTimer(self)
         self._proctors_timer.setSingleShot(True)
         self._proctors_timer.setInterval(300)
         self._proctors_timer.timeout.connect(self._commit_proctors_text)
@@ -101,6 +101,7 @@ class Feature4Card(QFrame):
         self._classrooms_label.setStyleSheet(self._input_style("missing"))
         self._load_classrooms_btn = QPushButton("Browse")
         self._load_classrooms_btn.setFixedWidth(120)
+        self._load_classrooms_btn.setEnabled(self._controller.feature4_enabled)
         self._load_classrooms_btn.clicked.connect(self._load_classrooms)
         crow = QHBoxLayout()
         crow.addWidget(self._row_title("Classrooms"))
@@ -166,6 +167,7 @@ class Feature4Card(QFrame):
 
     def _on_toggled(self, checked: bool) -> None:
         self._controller.set_feature4_enabled(checked)
+        self._load_classrooms_btn.setEnabled(checked)
         self.refresh_status()
         self.gen_btn_update_needed.emit()
 
@@ -244,40 +246,46 @@ class Feature4Card(QFrame):
 
     def _commit_slots_text(self) -> None:
         """Parse and validate the slots text field after the debounce delay."""
-        text = self._slots_edit.text().strip()
-        if not text:
-            self._controller.clear_time_slots()
-            self._slots_label.setText("Missing")
-            self._slots_label.setStyleSheet(self._input_style("missing"))
-        else:
-            try:
-                count = self._controller.set_time_slots_from_text(text)
-                self._slots_label.setText(f"{count} slot(s)")
-                self._slots_label.setStyleSheet(self._input_style("valid"))
-            except ValueError:
+        try:
+            text = self._slots_edit.text().strip()
+            if not text:
                 self._controller.clear_time_slots()
-                self._slots_label.setText("Invalid — check format & gaps")
-                self._slots_label.setStyleSheet(self._input_style("invalid"))
-        self.refresh_status()
-        self.gen_btn_update_needed.emit()
+                self._slots_label.setText("Missing")
+                self._slots_label.setStyleSheet(self._input_style("missing"))
+            else:
+                try:
+                    count = self._controller.set_time_slots_from_text(text)
+                    self._slots_label.setText(f"{count} slot(s)")
+                    self._slots_label.setStyleSheet(self._input_style("valid"))
+                except ValueError:
+                    self._controller.clear_time_slots()
+                    self._slots_label.setText("Invalid — check format & gaps")
+                    self._slots_label.setStyleSheet(self._input_style("invalid"))
+            self.refresh_status()
+            self.gen_btn_update_needed.emit()
+        except Exception:
+            logger.exception("Unexpected error in _commit_slots_text")
 
     # ── Proctor Ratio: QLineEdit text input (spec §2.4.4) ────────────────────
 
     def _commit_proctors_text(self) -> None:
         """Parse and validate the proctor ratio text field after debounce."""
-        text = self._proctors_edit.text().strip()
-        if not text:
-            self._controller.clear_proctor_config()
-            self._proctors_label.setText("Missing")
-            self._proctors_label.setStyleSheet(self._input_style("missing"))
-        else:
-            try:
-                config = self._controller.set_proctor_config_from_text(text)
-                self._proctors_label.setText(f"1:{config.students_per_proctor}")
-                self._proctors_label.setStyleSheet(self._input_style("valid"))
-            except ValueError:
+        try:
+            text = self._proctors_edit.text().strip()
+            if not text:
                 self._controller.clear_proctor_config()
-                self._proctors_label.setText("Invalid — use 1:X format")
-                self._proctors_label.setStyleSheet(self._input_style("invalid"))
-        self.refresh_status()
-        self.gen_btn_update_needed.emit()
+                self._proctors_label.setText("Missing")
+                self._proctors_label.setStyleSheet(self._input_style("missing"))
+            else:
+                try:
+                    config = self._controller.set_proctor_config_from_text(text)
+                    self._proctors_label.setText(f"1:{config.students_per_proctor}")
+                    self._proctors_label.setStyleSheet(self._input_style("valid"))
+                except ValueError:
+                    self._controller.clear_proctor_config()
+                    self._proctors_label.setText("Invalid — use 1:X format")
+                    self._proctors_label.setStyleSheet(self._input_style("invalid"))
+            self.refresh_status()
+            self.gen_btn_update_needed.emit()
+        except Exception:
+            logger.exception("Unexpected error in _commit_proctors_text")

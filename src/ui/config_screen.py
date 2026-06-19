@@ -46,6 +46,7 @@ from src.ui.generation_poller import GenerationPoller
 from src.ui.periods_editor_dialog import ExamPeriodsEditorDialog
 from src.ui.results_panel import _display_period_key
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
+from src.adapters.readers.schedule_file_reader import ScheduleFileReader
 from src.ui.widgets.config_input_cards import FilesCard, LoadModeCard
 from src.ui.widgets.feature4_card import Feature4Card
 from src.ui.widgets.programme_row import ProgrammeRow
@@ -248,7 +249,18 @@ class ConfigScreen(QWidget):
         self._gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._gen_btn.clicked.connect(self._on_generate)
 
-        cl.addWidget(self._gen_btn, 0, Qt.AlignmentFlag.AlignRight)
+        self._import_btn = QPushButton("📂  Load Schedule")
+        self._import_btn.setFixedHeight(44)
+        self._import_btn.setFixedWidth(160)
+        self._import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._import_btn.setToolTip("Load a previously generated schedules.txt file")
+        self._import_btn.clicked.connect(self._import_schedule)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(self._import_btn)
+        btn_row.addWidget(self._gen_btn)
+        cl.addLayout(btn_row)
         cl.addStretch(1)
 
         ol.addStretch(1)
@@ -636,6 +648,37 @@ class ConfigScreen(QWidget):
         self._allow_unassigned_generation = response == QMessageBox.StandardButton.Yes
         return self._allow_unassigned_generation
 
+
+    def _import_schedule(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Schedule File",
+            "",
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            schedules_by_period = ScheduleFileReader().read(Path(path))
+            if not schedules_by_period:
+                QMessageBox.warning(
+                    self,
+                    "Empty File",
+                    "No schedules found in the selected file.",
+                )
+                return
+            result_tuple = ([], schedules_by_period, {}, {}, set())
+            self.generation_started.emit(([], {}))
+            self.schedule_generated.emit(result_tuple)
+            self._set_status(f"✓  Schedule loaded from {Path(path).name}.", ok=True)
+        except Exception:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                "Could not parse the schedule file. Please check the file format.",
+            )
+            logger.exception("Error loading schedule file")
 
     def _on_generation_succeeded(self, result_tuple: object) -> None:
         self._notify_settings_state(False)

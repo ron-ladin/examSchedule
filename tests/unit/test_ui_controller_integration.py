@@ -268,6 +268,94 @@ def test_invalid_feature4_slots_text_shows_error_and_deactivates(
     screen.close()
 
 
+# ── Feature 4: Browse button gating (spec §4.1, M1 fix) ──────────────────────
+
+def test_feature4_browse_button_disabled_when_toggle_off():
+    """Classrooms Browse button must be disabled when Feature 4 toggle is OFF."""
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+
+    screen._feature4_card._toggle.setChecked(False)
+    assert screen._feature4_card._load_classrooms_btn.isEnabled() is False
+
+    screen._feature4_card._toggle.setChecked(True)
+    assert screen._feature4_card._load_classrooms_btn.isEnabled() is True
+
+    app.processEvents()
+    screen.close()
+
+
+# ── Feature 4: debounce timer path (M2 fix) ───────────────────────────────────
+
+def test_feature4_slots_debounce_timer_fires_and_updates_state():
+    """Forcing the debounce timer to fire must parse the text and update the label."""
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = ConfigScreen(controller)
+
+    card = screen._feature4_card
+    card._slots_edit.setText("09:00, 13:00, 19:00")
+    card._slots_timer.timeout.emit()
+
+    assert "slot" in card._slots_label.text().lower()
+    assert len(controller.time_slots) == 3
+
+    app.processEvents()
+    screen.close()
+
+
+# ── Spec §4.3: file-load abort when StudentCount missing (H1 fix) ─────────────
+
+def test_spec_4_3_file_load_aborted_when_student_count_missing(
+    tmp_path, monkeypatch
+):
+    """When Feature 4 is ON and the loaded courses file has Exam courses without
+    StudentCount, the load must be rejected: prior courses restored, error dialog
+    shown, and the label reflects the abort (spec §4.3)."""
+    app = _get_qapp()
+
+    prior_courses_file = tmp_path / "prior.txt"
+    prior_courses_file.write_text(
+        "Calculus\n11111\nDr. Cohen\n83101, 1, FALL, Obligatory, 30\nExam\n",
+        encoding="utf-8",
+    )
+    controller = DesktopController()
+    controller.load_courses(prior_courses_file)
+    prior_count = len(controller._courses)
+    assert prior_count == 1
+
+    controller._feature4_enabled = True
+
+    bad_courses_file = tmp_path / "bad.txt"
+    bad_courses_file.write_text(
+        "Physics\n22222\nDr. Levi\n83102, 1, FALL, Obligatory\nExam\n",
+        encoding="utf-8",
+    )
+
+    screen = ConfigScreen(controller)
+    _patch_file_dialog(monkeypatch, [bad_courses_file])
+
+    errors_shown = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors_shown.append(args),
+    )
+
+    screen._load_courses()
+    app.processEvents()
+
+    assert len(controller._courses) == prior_count, "Prior courses not restored"
+    assert errors_shown, "No error dialog was shown"
+    label_text = screen._files_card.courses_label.text()
+    assert any(
+        kw in label_text for kw in ("Missing", "aborted", "StudentCount")
+    ), f"Label did not reflect abort: {label_text!r}"
+
+    screen.close()
+
+
 # NOTE: the capacity-warning *cancel* path (warning -> No -> generation blocked)
 # is covered end-to-end by tests/e2e/test_ui_engine_stress.py
 # ::test_capacity_shortfall_warns_before_generation, which also asserts the

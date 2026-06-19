@@ -348,6 +348,7 @@ def test_c1_missing_student_count_blocks_generate_via_feature4_ready(monkeypatch
         not controller.feature4_enabled or controller.feature4_ready()
     )
     assert feature4_ok is False, "Generate must be blocked when counts are missing"
+    assert screen._gen_btn.isEnabled() is False, "Generate button must be disabled"
     screen.close()
 
 

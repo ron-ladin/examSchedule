@@ -124,28 +124,32 @@ class GenerationPoller(QObject):
             self._timer.stop()
         self.progress_reset.emit()
 
-        if isinstance(result, GenerationResult) and result.success:
-            schedules_by_period = result.schedules_by_period
-            courses_by_id = result.courses_by_id
-            truncated_periods = result.truncated_periods
+        try:
+            if isinstance(result, GenerationResult) and result.success:
+                schedules_by_period = result.schedules_by_period
+                courses_by_id = result.courses_by_id
+                truncated_periods = result.truncated_periods
 
-            self._controller.on_generation_succeeded(truncated_periods)
-            schedules_by_period = self._controller.cache_generated_results(
-                schedules_by_period
-            )
-
-            self.generation_succeeded.emit(
-                (
-                    self._pending_selected,
-                    schedules_by_period,
-                    courses_by_id,
-                    self._pending_color_map,
-                    truncated_periods,
+                self._controller.on_generation_succeeded(truncated_periods)
+                schedules_by_period = self._controller.cache_generated_results(
+                    schedules_by_period
                 )
-            )
-        else:
-            logger.error("Generation failed or returned invalid result: %s", result)
-            self._fail("Generation failed. Please check the input files and try again.")
+
+                self.generation_succeeded.emit(
+                    (
+                        self._pending_selected,
+                        schedules_by_period,
+                        courses_by_id,
+                        self._pending_color_map,
+                        truncated_periods,
+                    )
+                )
+            else:
+                logger.error("Generation failed or returned invalid result: %s", result)
+                self._fail("Generation failed. Please check the input files and try again.")
+        except Exception:
+            logger.exception("Unexpected error processing generation result")
+            self._fail("An unexpected error occurred processing the generation result.")
 
     def _fail(self, msg: str) -> None:
         self.progress_reset.emit()
