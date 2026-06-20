@@ -24,6 +24,7 @@ import logging
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from src.domain.sorting import SortingConfig
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -39,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.adapters.readers.schedule_file_reader import EmptyScheduleImportError
 from src.controller import DesktopController, MissingStudentCountError
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
@@ -46,7 +48,6 @@ from src.ui.generation_poller import GenerationPoller
 from src.ui.periods_editor_dialog import ExamPeriodsEditorDialog
 from src.ui.results_panel import _display_period_key
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
-from src.adapters.readers.schedule_file_reader import ScheduleFileReader
 from src.ui.widgets.config_input_cards import FilesCard, LoadModeCard
 from src.ui.widgets.feature4_card import Feature4Card
 from src.ui.widgets.programme_row import ProgrammeRow
@@ -98,6 +99,8 @@ class ConfigScreen(QWidget):
         self._controller = controller
         self._settings_dialog: SettingsScreen | None = None
         self._allow_unassigned_generation = False
+
+        self._last_courses_by_id: dict = {}
 
         self._poller = GenerationPoller(controller, parent=self)
         self._poller.generation_succeeded.connect(self._on_generation_succeeded)
@@ -576,12 +579,24 @@ class ConfigScreen(QWidget):
                 parent=self,
             )
             self._settings_dialog.settings_changed.connect(self._on_settings_changed)
-            self._settings_dialog.sort_order_changed.connect(self._controller.apply_sort)
+            self._settings_dialog.sort_order_changed.connect(self._on_sort_order_changed)
 
         self._settings_dialog.set_generation_state(is_running)
         self._settings_dialog.show()
         self._settings_dialog.raise_()
         self._settings_dialog.activateWindow()
+
+    def _on_sort_order_changed(self, config: SortingConfig) -> None:
+        """Apply a live sort change and immediately re-render cached results."""
+        try:
+            resorted = self._controller.resort(config)
+        except ValueError:
+            self._controller.apply_sort(config)
+            return
+        read_only_import = self._controller.read_only_import
+        self.schedule_generated.emit(
+            ([], resorted, self._last_courses_by_id, {}, set(), read_only_import)
+        )
 
     def _on_settings_changed(self, new_settings: Settings) -> None:
         """Persist the full settings (thresholds + sort) from the dialog OK path."""
@@ -656,48 +671,91 @@ class ConfigScreen(QWidget):
         if not path:
             return
 
+        if not self._import_size_ok(path):
+            return
+
         try:
-            imported = ScheduleFileReader().read_with_metadata(Path(path))
-            schedules_by_period = imported.schedules_by_period
-
-            if not schedules_by_period:
-                QMessageBox.warning(
-                    self,
-                    "Empty File",
-                    "No schedules found in the selected file.",
-                )
-                return
-
-            loaded_courses_by_id = {
-                course.id: course
-                for course in self._controller.courses
-            }
-
-            courses_by_id = {
-                course_id: loaded_courses_by_id.get(course_id, imported_course)
-                for course_id, imported_course in imported.courses_by_id.items()
-            }
-
-            self._controller.clear_results_stale()
-
-            result_tuple = ([], schedules_by_period, courses_by_id, {}, set(), True)
-
-            self.generation_started.emit(([], {}))
-            self.schedule_generated.emit(result_tuple)
-            self._set_status(f"✓  Schedule loaded from {Path(path).name}.", ok=True)
-
-        except Exception:
-            QMessageBox.critical(
+            imported = self._controller.import_schedule(Path(path))
+        except EmptyScheduleImportError:
+            # Atomic import: controller state is untouched when the file is empty.
+            QMessageBox.warning(
                 self,
-                "Load Error",
-                "Could not parse the schedule file. Please check the file format.",
+                "Empty File",
+                "No schedules found in the selected file.",
             )
-            logger.exception("Error loading schedule file")
+            logger.info("Imported schedule file contained no schedules")
+            return
+        except FileNotFoundError:
+            QMessageBox.critical(self, "Load Error", "The file no longer exists.")
+            logger.exception("Schedule file missing during import")
+            return
+        except PermissionError:
+            QMessageBox.critical(self, "Load Error", "Permission denied to read the file.")
+            logger.exception("Permission denied reading schedule file")
+            return
+        except UnicodeDecodeError:
+            QMessageBox.critical(self, "Load Error", "The file encoding is not valid UTF-8.")
+            logger.exception("Encoding error reading schedule file")
+            return
+        except ValueError as e:
+            QMessageBox.critical(self, "Load Error", f"Data format error: {e}")
+            logger.exception("ValueError reading schedule file")
+            return
+        except OSError:
+            QMessageBox.critical(self, "Load Error", "Could not read the schedule file.")
+            logger.exception("OSError reading schedule file")
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "Load Error", f"An unexpected error occurred: {e}")
+            logger.exception("Unexpected error reading schedule file")
+            return
+
+        # import_schedule() guarantees a non-empty result (it raises
+        # EmptyScheduleImportError otherwise), so we can render directly.
+        schedules_by_period = imported.schedules_by_period
+
+        self._last_courses_by_id = imported.courses_by_id
+
+        result_tuple = ([], schedules_by_period, imported.courses_by_id, {}, set(), True)
+
+        self.schedule_generated.emit(result_tuple)
+        self._set_status(f"✓  Schedule loaded from {Path(path).name}.", ok=True)
+
+    def _import_size_ok(self, path: str) -> bool:
+        """Reject oversized files before parsing, failing safe if stat() errors."""
+        max_import_bytes = 50 * 1024 * 1024
+        try:
+            size = Path(path).stat().st_size
+        except FileNotFoundError:
+            QMessageBox.critical(self, "Load Error", "The file no longer exists.")
+            logger.exception("Schedule file missing before import")
+            return False
+        except PermissionError:
+            QMessageBox.critical(self, "Load Error", "Permission denied to read the file.")
+            logger.exception("Permission denied stat-ing schedule file")
+            return False
+        except OSError:
+            QMessageBox.critical(self, "Load Error", "Could not access the schedule file.")
+            logger.exception("OSError stat-ing schedule file")
+            return False
+
+        if size > max_import_bytes:
+            QMessageBox.warning(
+                self,
+                "File Too Large",
+                "The selected file exceeds the 50 MB import limit. "
+                "Please select a smaller schedule file.",
+            )
+            return False
+
+        return True
 
     def _on_generation_succeeded(self, result_tuple: object) -> None:
         self._notify_settings_state(False)
         self._gen_btn.setEnabled(True)
         self._set_status("✓  Schedule generated.", ok=True)
+        if isinstance(result_tuple, tuple) and len(result_tuple) >= 3:
+            self._last_courses_by_id = result_tuple[2]
         self.schedule_generated.emit(result_tuple)
 
     def _fail(self, msg: str) -> None:

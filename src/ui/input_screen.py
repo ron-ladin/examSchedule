@@ -410,6 +410,9 @@ class InputScreen(QWidget):
         )
         self._results.hide_loading()
 
+        if read_only_import:
+            self._stacked.setCurrentIndex(1)
+
     def _on_generation_failed(self, error_msg: str) -> None:
         self._results.hide_loading()
         self._stacked.setCurrentIndex(0)

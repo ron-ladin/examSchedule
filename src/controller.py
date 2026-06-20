@@ -30,6 +30,11 @@ from src.adapters.readers.classroom_file_reader import ClassroomFileReader
 from src.adapters.readers.course_file_reader import CourseFileReader
 from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
 from src.adapters.readers.proctor_config_reader import ProctorConfigReader
+from src.adapters.readers.schedule_file_reader import (
+    EmptyScheduleImportError,
+    ImportedScheduleData,
+    ScheduleFileReader,
+)
 from src.adapters.readers.program_selector_reader import ProgramSelectorReader
 from src.adapters.readers.settings_file_reader import SettingsFileReader
 from src.adapters.readers.slots_file_reader import SlotsFileReader
@@ -106,6 +111,12 @@ class DesktopController:
             thresholds=ThresholdSettings(),
             sorting=SortingConfig(),
         )
+        self._imported_courses_by_id: dict[str, Course] = {}
+
+        # True while the cached results come from an imported schedules.txt file
+        # (read-only mode), so a sort-only change must re-render the imported
+        # schedule rather than fall back to stale generated results.
+        self._read_only_import: bool = False
 
         # Cache of the last threshold-valid results, kept so a sort-only change
         # can re-rank in place instead of regenerating from scratch.
@@ -117,6 +128,60 @@ class DesktopController:
     @property
     def settings(self) -> Settings:
         return self._settings
+
+    def set_imported_state(self, courses_by_id: dict[str, "Course"]) -> None:
+        """Store courses from an imported schedule file for proctor report resolution."""
+        self._imported_courses_by_id = dict(courses_by_id)
+
+    def clear_imported_state(self) -> None:
+        """Clear imported-schedule state when a normal generation run starts."""
+        self._imported_courses_by_id = {}
+        self._read_only_import = False
+
+    @property
+    def read_only_import(self) -> bool:
+        """True while the cached results come from an imported schedule file."""
+        return self._read_only_import
+
+    def import_schedule(self, path: Path) -> ImportedScheduleData:
+        """Parse a previously exported schedules.txt file and cache it as
+        read-only imported results.
+
+        Parsing, course-metadata resolution, and result caching all live here so
+        the view only chooses a path and renders the returned data (MVC).
+
+        Course metadata is taken from the currently loaded courses when an id is
+        present there, otherwise from the metadata parsed out of the file.
+        """
+        # Parse and validate FULLY before touching any controller state, so a
+        # failed import (empty file, malformed data, reader error) leaves the
+        # previous results, read-only flag and imported courses exactly as they
+        # were. The import is atomic: all-or-nothing.
+        imported = ScheduleFileReader().read_with_metadata(Path(path))
+
+        if not imported.schedules_by_period:
+            raise EmptyScheduleImportError(
+                "No schedules were found in the selected file."
+            )
+
+        loaded_courses_by_id = {course.id: course for course in self._courses}
+        courses_by_id = {
+            course_id: loaded_courses_by_id.get(course_id, imported_course)
+            for course_id, imported_course in imported.courses_by_id.items()
+        }
+
+        # Validation passed — now commit the new imported state. Importing does
+        # not change the underlying input data, so results are not stale; they
+        # are simply read-only.
+        self.clear_results_stale()
+        self.set_imported_state(courses_by_id)
+        self._read_only_import = True
+        self._last_results = dict(imported.schedules_by_period)
+
+        return ImportedScheduleData(
+            schedules_by_period=imported.schedules_by_period,
+            courses_by_id=courses_by_id,
+        )
 
     def apply_sort(self, config: SortingConfig) -> None:
         """Store a new sort config immediately on sort-list change (§281).
@@ -150,14 +215,15 @@ class DesktopController:
         reader = CourseFileReader(Path(path))
         new_courses = reader.read()
 
-        # Pre-merge validation (spec 4.3): build the would-be-merged result on a
-        # deep copy so a failed validation never mutates committed state. Merge
-        # helpers mutate existing Course objects in place, so a shallow copy is
-        # NOT enough — only a deep copy isolates self._courses fully.
-        candidate = copy.deepcopy(self._courses)
+        # Pre-merge validation (spec 4.3): build the would-be-merged result without
+        # mutating committed state.  update_merge_courses modifies Course objects
+        # in-place, so it needs a deep copy. replace/append only mutate the list
+        # structure (not the Course objects themselves), so a shallow copy suffices.
         if mode == "update":
+            candidate = copy.deepcopy(self._courses)
             update_merge_courses(candidate, new_courses)
         else:
+            candidate = list(self._courses)
             merge_by_key(candidate, new_courses, mode, key_fn=lambda c: c.id)
 
         # When Feature 4 is enabled, every Exam offering must carry a
@@ -520,6 +586,7 @@ class DesktopController:
         self._remaining_schedule_iterators.clear()
         self._has_more_schedules.clear()
         self._iterator_overflows.clear()
+        self.clear_imported_state()
 
         data_provider = InMemoryDataProvider(
             courses=self._courses,
@@ -565,7 +632,13 @@ class DesktopController:
         )
 
     def resort(self, config: SortingConfig) -> dict[str, list[Schedule]]:
-        """Re-rank cached threshold-valid results without regenerating schedules."""
+        """Re-rank cached threshold-valid results without regenerating schedules.
+
+        Works for imported read-only results too: the read-only flag is NOT
+        cleared here and imported course metadata is used for ranking, so an
+        imported schedule stays sortable in place and never falls back to stale
+        generated results. See import_schedule() / set_imported_state().
+        """
         if self._last_results is None:
             raise ValueError(
                 "No results to re-sort. Generate schedules before changing sort order."
@@ -573,7 +646,13 @@ class DesktopController:
 
         self.apply_sort(config)
 
-        courses = list(self._courses)
+        # Imported read-only schedules may have no courses file loaded, so use
+        # the imported course metadata when present.
+        if self._read_only_import and self._imported_courses_by_id:
+            courses = list(self._imported_courses_by_id.values())
+        else:
+            courses = list(self._courses)
+
         resorted = {
             period_key: SortingEngine.sort(schedules, courses, config, self._selected_programs)
             for period_key, schedules in self._last_results.items()
@@ -592,6 +671,8 @@ class DesktopController:
         The parent process re-applies the current sorting config before displaying,
         because sort order may have changed while generation was running.
         """
+        self.clear_imported_state()
+
         courses = list(self._courses)
         sorting = self._settings.sorting
 
@@ -802,9 +883,15 @@ class DesktopController:
         logger.info("Exported schedules to %s", output_path)
 
     def proctor_report_text(self, schedule: Schedule) -> str:
-        """Return the spec 4.6 proctor report text for one schedule."""
-        courses_by_id = {course.id: course for course in self._courses}
-        return build_proctor_report(schedule, courses_by_id)
+        """Return the spec 4.6 proctor report text for one schedule.
+
+        Uses imported courses state when present (set via set_imported_state),
+        otherwise falls back to courses loaded from the courses file.
+        """
+        resolved = self._imported_courses_by_id or {
+            course.id: course for course in self._courses
+        }
+        return build_proctor_report(schedule, resolved)
 
     def export_proctor_report(self, schedule: Schedule, output_path: Path) -> None:
         """Write the spec 4.6 proctor report for one schedule to a .txt file."""

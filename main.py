@@ -25,8 +25,64 @@ Usage:
 
 import logging
 import sys
+from pathlib import Path
 
 _CLI_MAX_COMBINATIONS = 10_000
+
+
+def _resolve_output_path(output: Path) -> Path:
+    """Honor the user-provided --output path exactly, creating its parent dir.
+
+    The user explicitly passes --output, so we write to that path verbatim — a
+    bare filename lands in the working directory, output/foo.txt lands in
+    output/. We only ensure the parent directory exists so the write succeeds;
+    we never rewrite the path the user asked for.
+    """
+    output = Path(output)
+    if str(output.parent) not in ("", "."):
+        output.parent.mkdir(parents=True, exist_ok=True)
+    return output
+
+
+def _write_cli_proctor_report(output_path, schedules_by_period, courses_by_id):
+    """Write the Feature 4 proctor report from in-memory schedules.
+
+    Built directly from the generated schedules (not by re-parsing the exported
+    text file) and — crucially — using the SAME combined "Schedule #N" numbering
+    and structure as the exported schedules file. The schedules file is a
+    Cartesian product across periods (one Schedule #N per combination), so the
+    proctor report mirrors that exactly: one section per combined schedule, with
+    a per-period sub-block inside, capped at the same combination limit.
+    """
+    from itertools import product as cartesian_product
+
+    from src.engine.proctor_report import build_proctor_report
+
+    period_keys = list(schedules_by_period.keys())
+    schedule_lists = [schedules_by_period[key] for key in period_keys]
+
+    sections: list[str] = []
+    if period_keys and all(schedule_lists):
+        for count, combo in enumerate(cartesian_product(*schedule_lists), 1):
+            if count > _CLI_MAX_COMBINATIONS:
+                break
+            blocks = [f"=== Schedule #{count} ==="]
+            for period_key, schedule in zip(period_keys, combo):
+                report = build_proctor_report(schedule, courses_by_id)
+                blocks.append(f"  [{period_key}]\n{report}")
+            sections.append("\n".join(blocks))
+
+    proctor_path = output_path.with_name(output_path.stem + "_proctor.txt")
+
+    if not sections:
+        proctor_path.write_text(
+            "No schedules were generated, so no proctor report is available.\n",
+            encoding="utf-8",
+        )
+    else:
+        proctor_path.write_text("\n\n".join(sections), encoding="utf-8")
+
+    logging.info("Proctor report written to %s", proctor_path.resolve())
 
 
 def _configure_logging() -> None:
@@ -77,6 +133,7 @@ def _run_cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--proctor", type=Path, default=None)
 
     args = parser.parse_args(argv)
+    args.output = _resolve_output_path(args.output)
 
     logging.info("Starting CLI generation...")
 
@@ -105,10 +162,15 @@ def _run_cli(argv: list[str] | None = None) -> None:
     # SAFEGUARD:
     # Never allow the CLI exporter to write an unbounded number of combinations.
     # This prevents runaway combinatorics from producing massive output files.
-    exporter = TextFileExporter(
-        output_path=args.output,
-        max_combinations=_CLI_MAX_COMBINATIONS,
-    )
+    #
+    # Capture the final per-period schedules in memory (already filtered, room-
+    # assigned and sorted by AppController). The file is written from this capture
+    # and — crucially — so is the proctor report, instead of re-parsing the
+    # exported text file. settings=None so the capture is NOT re-sorted here;
+    # AppController already applied the sort config.
+    from src.engine.generation_workers import _MemoryExporter
+
+    exporter = _MemoryExporter(cap=_CLI_MAX_COMBINATIONS, settings=None)
 
     conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
     generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
@@ -163,10 +225,25 @@ def _run_cli(argv: list[str] | None = None) -> None:
         classroom_variant_mode=CLASSROOM_VARIANT_MODE_FIRST,
     ).run()
 
+    # Write the schedules file from the captured in-memory results.
+    TextFileExporter(
+        output_path=args.output,
+        max_combinations=_CLI_MAX_COMBINATIONS,
+    ).export_schedules(exporter.schedules_by_period, exporter.courses_by_id)
+
     logging.info(
-        "CLI generation completed successfully. Export capped at %s combinations.",
+        "CLI generation completed successfully. Schedules written to %s "
+        "(export capped at %s combinations).",
+        args.output.resolve(),
         f"{_CLI_MAX_COMBINATIONS:,}",
     )
+
+    if feature4_requested:
+        _write_cli_proctor_report(
+            args.output,
+            exporter.schedules_by_period,
+            exporter.courses_by_id,
+        )
 
 
 def _run_cli_safely(argv: list[str] | None = None) -> None:
