@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.adapters.readers.schedule_file_reader import EmptyScheduleImportError
 from src.controller import DesktopController, MissingStudentCountError
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
@@ -675,6 +676,15 @@ class ConfigScreen(QWidget):
 
         try:
             imported = self._controller.import_schedule(Path(path))
+        except EmptyScheduleImportError:
+            # Atomic import: controller state is untouched when the file is empty.
+            QMessageBox.warning(
+                self,
+                "Empty File",
+                "No schedules found in the selected file.",
+            )
+            logger.info("Imported schedule file contained no schedules")
+            return
         except FileNotFoundError:
             QMessageBox.critical(self, "Load Error", "The file no longer exists.")
             logger.exception("Schedule file missing during import")
@@ -700,15 +710,9 @@ class ConfigScreen(QWidget):
             logger.exception("Unexpected error reading schedule file")
             return
 
+        # import_schedule() guarantees a non-empty result (it raises
+        # EmptyScheduleImportError otherwise), so we can render directly.
         schedules_by_period = imported.schedules_by_period
-
-        if not schedules_by_period:
-            QMessageBox.warning(
-                self,
-                "Empty File",
-                "No schedules found in the selected file.",
-            )
-            return
 
         self._last_courses_by_id = imported.courses_by_id
 

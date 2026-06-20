@@ -31,6 +31,7 @@ from src.adapters.readers.course_file_reader import CourseFileReader
 from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
 from src.adapters.readers.proctor_config_reader import ProctorConfigReader
 from src.adapters.readers.schedule_file_reader import (
+    EmptyScheduleImportError,
     ImportedScheduleData,
     ScheduleFileReader,
 )
@@ -152,7 +153,16 @@ class DesktopController:
         Course metadata is taken from the currently loaded courses when an id is
         present there, otherwise from the metadata parsed out of the file.
         """
+        # Parse and validate FULLY before touching any controller state, so a
+        # failed import (empty file, malformed data, reader error) leaves the
+        # previous results, read-only flag and imported courses exactly as they
+        # were. The import is atomic: all-or-nothing.
         imported = ScheduleFileReader().read_with_metadata(Path(path))
+
+        if not imported.schedules_by_period:
+            raise EmptyScheduleImportError(
+                "No schedules were found in the selected file."
+            )
 
         loaded_courses_by_id = {course.id: course for course in self._courses}
         courses_by_id = {
@@ -160,8 +170,9 @@ class DesktopController:
             for course_id, imported_course in imported.courses_by_id.items()
         }
 
-        # Importing does not change the underlying input data, so results are not
-        # stale; they are simply read-only.
+        # Validation passed — now commit the new imported state. Importing does
+        # not change the underlying input data, so results are not stale; they
+        # are simply read-only.
         self.clear_results_stale()
         self.set_imported_state(courses_by_id)
         self._read_only_import = True
@@ -621,7 +632,13 @@ class DesktopController:
         )
 
     def resort(self, config: SortingConfig) -> dict[str, list[Schedule]]:
-        """Re-rank cached threshold-valid results without regenerating schedules."""
+        """Re-rank cached threshold-valid results without regenerating schedules.
+
+        Works for imported read-only results too: the read-only flag is NOT
+        cleared here and imported course metadata is used for ranking, so an
+        imported schedule stays sortable in place and never falls back to stale
+        generated results. See import_schedule() / set_imported_state().
+        """
         if self._last_results is None:
             raise ValueError(
                 "No results to re-sort. Generate schedules before changing sort order."

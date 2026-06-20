@@ -673,6 +673,20 @@ Saturdays are excluded automatically.
 
 ## Output Format
 
+### Where files are written
+
+`--output` is honored **exactly** — the schedule file is written to the path you
+provide, verbatim:
+
+- `--output schedules.txt` → writes `schedules.txt` in the current directory.
+- `--output output/schedules.txt` → writes `output/schedules.txt` (it is **not**
+  rewritten to `output/output/schedules.txt`).
+
+Any missing parent directory is created automatically so the write succeeds. In
+Feature 4 mode the proctor report is written next to the schedule file, reusing
+its name with a `_proctor` suffix — e.g. `--output path/to/schedules.txt`
+produces the report at `path/to/schedules_proctor.txt`.
+
 Results are written to the specified output file, grouped by semester then moed. Courses within each schedule are sorted chronologically.
 
 ```text

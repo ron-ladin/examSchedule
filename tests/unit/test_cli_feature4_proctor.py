@@ -85,24 +85,21 @@ def test_cli_feature4_writes_nonduplicated_proctor_report(tmp_path):
     report = proctor_path.read_text(encoding="utf-8")
     assert report.strip()  # non-empty
 
-    # Sections are split on the "=== Schedule #N - <period> ===" headers.
-    sections = [s for s in report.split("=== ") if s.strip()]
+    schedules_text = paths["output"].read_text(encoding="utf-8")
 
-    # The report must contain one section per distinct per-period schedule,
-    # matching the deduplicated reader output (no inflated/duplicated blocks).
+    # The proctor report must mirror the combined "Schedule #N" numbering of the
+    # exported schedules file (one section per Cartesian-product combination),
+    # not a per-period numbering. Count the headers in each and compare.
+    schedule_blocks = schedules_text.count("Schedule #")
+    proctor_sections = report.count("=== Schedule #")
+    assert proctor_sections == schedule_blocks > 0
+
+    # Numbering must be the same combined 1..N sequence in both files.
+    for n in range(1, schedule_blocks + 1):
+        assert f"Schedule #{n}:" in schedules_text
+        assert f"=== Schedule #{n} ===" in report
+
+    # Each combined section carries a per-period sub-block for every period.
     imported = ScheduleFileReader().read_with_metadata(paths["output"])
-    expected_sections = sum(
-        len(schedules) for schedules in imported.schedules_by_period.values()
-    )
-    assert len(sections) == expected_sections
-
-    # No two schedule report bodies are byte-identical within a period.
-    bodies_by_period: dict[str, list[str]] = {}
-    for section in sections:
-        header, _, body = section.partition("\n")
-        # header looks like "Schedule #N - FALL - Aleph ==="
-        period = header.split(" - ", 1)[1].rsplit(" ===", 1)[0]
-        bodies_by_period.setdefault(period, []).append(body)
-
-    for period, bodies in bodies_by_period.items():
-        assert len(bodies) == len(set(bodies)), f"Duplicate report block in {period}"
+    for period_key in imported.schedules_by_period:
+        assert f"[{period_key}]" in report

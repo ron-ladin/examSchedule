@@ -29,38 +29,48 @@ from pathlib import Path
 
 _CLI_MAX_COMBINATIONS = 10_000
 
-# All CLI-generated artifacts (schedules + proctor reports) land here so they
-# stay out of the repo root and are covered by a single .gitignore entry.
-_OUTPUT_DIR = Path("output")
-
 
 def _resolve_output_path(output: Path) -> Path:
-    """Place relative CLI output under output/, creating the directory.
+    """Honor the user-provided --output path exactly, creating its parent dir.
 
-    Absolute paths are respected as-is (the user asked for a specific location).
-    Relative paths — including a bare filename — are rooted at output/ so the
-    generated schedules and proctor report never clutter the working directory.
+    The user explicitly passes --output, so we write to that path verbatim — a
+    bare filename lands in the working directory, output/foo.txt lands in
+    output/. We only ensure the parent directory exists so the write succeeds;
+    we never rewrite the path the user asked for.
     """
     output = Path(output)
-    resolved = output if output.is_absolute() else _OUTPUT_DIR / output
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    return resolved
+    if str(output.parent) not in ("", "."):
+        output.parent.mkdir(parents=True, exist_ok=True)
+    return output
 
 
 def _write_cli_proctor_report(output_path, schedules_by_period, courses_by_id):
     """Write the Feature 4 proctor report from in-memory schedules.
 
-    Built directly from the generated per-period schedules (not by re-parsing the
-    exported text file), so it is neither fragile nor duplicated: each distinct
-    per-period schedule yields exactly one report section, in generation order.
+    Built directly from the generated schedules (not by re-parsing the exported
+    text file) and — crucially — using the SAME combined "Schedule #N" numbering
+    and structure as the exported schedules file. The schedules file is a
+    Cartesian product across periods (one Schedule #N per combination), so the
+    proctor report mirrors that exactly: one section per combined schedule, with
+    a per-period sub-block inside, capped at the same combination limit.
     """
+    from itertools import product as cartesian_product
+
     from src.engine.proctor_report import build_proctor_report
 
+    period_keys = list(schedules_by_period.keys())
+    schedule_lists = [schedules_by_period[key] for key in period_keys]
+
     sections: list[str] = []
-    for period_key, schedules in schedules_by_period.items():
-        for i, schedule in enumerate(schedules, 1):
-            report = build_proctor_report(schedule, courses_by_id)
-            sections.append(f"=== Schedule #{i} - {period_key} ===\n{report}")
+    if period_keys and all(schedule_lists):
+        for count, combo in enumerate(cartesian_product(*schedule_lists), 1):
+            if count > _CLI_MAX_COMBINATIONS:
+                break
+            blocks = [f"=== Schedule #{count} ==="]
+            for period_key, schedule in zip(period_keys, combo):
+                report = build_proctor_report(schedule, courses_by_id)
+                blocks.append(f"  [{period_key}]\n{report}")
+            sections.append("\n".join(blocks))
 
     proctor_path = output_path.with_name(output_path.stem + "_proctor.txt")
 

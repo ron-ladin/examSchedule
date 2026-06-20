@@ -15,6 +15,14 @@ from src.domain.semester import normalize_semester
 from src.domain.time_slot import TimeSlot
 
 
+class EmptyScheduleImportError(ValueError):
+    """Raised when an imported file parses cleanly but contains no schedules.
+
+    Subclasses ValueError so existing ValueError handlers still catch it, while
+    callers that want to distinguish "empty" from "malformed" can catch it first.
+    """
+
+
 @dataclass(frozen=True)
 class ImportedScheduleData:
     """Imported schedule data plus course metadata parsed from the file."""

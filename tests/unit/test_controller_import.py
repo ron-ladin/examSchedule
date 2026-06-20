@@ -14,6 +14,9 @@ Covers the Sprint 3 "live sort after import" fixes:
 from datetime import date
 from pathlib import Path
 
+import pytest
+
+from src.adapters.readers.schedule_file_reader import EmptyScheduleImportError
 from src.controller import DesktopController
 from src.domain.sorting import SortCriterion, SortingConfig, SortRule
 
@@ -132,3 +135,57 @@ def test_generate_then_import_then_resort_ignores_generated_results(tmp_path):
         for schedule in schedules:
             assert "11111" not in schedule.assignments
             assert "22222" not in schedule.assignments
+
+
+def test_import_empty_file_raises_and_leaves_state_untouched(tmp_path):
+    # Start from a valid imported state so we can prove it is preserved.
+    ctrl = DesktopController()
+    ctrl.import_schedule(_write_import_file(tmp_path))
+
+    before_results = ctrl.resort(SortingConfig())
+    before_read_only = ctrl.read_only_import
+    before_courses = dict(ctrl._imported_courses_by_id)
+
+    empty = tmp_path / "empty.txt"
+    empty.write_text("", encoding="utf-8")
+
+    with pytest.raises(EmptyScheduleImportError):
+        ctrl.import_schedule(empty)
+
+    # Atomic: nothing mutated by the failed import.
+    assert ctrl.read_only_import is before_read_only is True
+    assert ctrl._imported_courses_by_id == before_courses
+    assert ctrl.resort(SortingConfig()) == before_results
+
+
+def test_import_file_with_no_schedules_raises_empty_error(tmp_path):
+    ctrl = DesktopController()
+    no_schedules = tmp_path / "header_only.txt"
+    no_schedules.write_text("No valid schedules found.\n", encoding="utf-8")
+
+    with pytest.raises(EmptyScheduleImportError):
+        ctrl.import_schedule(no_schedules)
+
+    # A fresh controller importing an empty file must not enter read-only mode.
+    assert ctrl.read_only_import is False
+    assert ctrl._imported_courses_by_id == {}
+
+
+def test_failed_import_after_generation_keeps_generated_results(tmp_path):
+    ctrl = _make_generating_controller(tmp_path)
+    generated_by_period, _, _ = ctrl.generate()
+    assert generated_by_period
+    assert ctrl.read_only_import is False
+
+    before_results = ctrl.resort(SortingConfig())
+
+    empty = tmp_path / "empty.txt"
+    empty.write_text("", encoding="utf-8")
+
+    with pytest.raises(EmptyScheduleImportError):
+        ctrl.import_schedule(empty)
+
+    # Generated results survive; no accidental read-only flip.
+    assert ctrl.read_only_import is False
+    assert ctrl._imported_courses_by_id == {}
+    assert ctrl.resort(SortingConfig()) == before_results
