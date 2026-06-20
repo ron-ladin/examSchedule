@@ -39,7 +39,7 @@ class ScheduleGenerator(IScheduleGenerator):
         ordered = sorted(courses, key=lambda c: len(conflict_graph[c]), reverse=True)
 
         # Hand off to the recursive backtracker with an empty initial assignment
-        yield from self._backtrack({}, ordered, valid_dates, conflict_graph, exam_period)
+        yield from self._backtrack({}, ordered, 0, valid_dates, conflict_graph, exam_period)
 
     def _build_conflict_graph(self, courses: list[Course]) -> dict[Course, set[Course]]:
         """Return an adjacency map: course → set of courses it conflicts with.
@@ -62,6 +62,7 @@ class ScheduleGenerator(IScheduleGenerator):
         self,
         assignment: dict[Course, date],
         remaining: list[Course],
+        index: int,
         valid_dates: list[date],
         conflict_graph: dict[Course, set[Course]],
         exam_period: ExamPeriod,
@@ -79,12 +80,15 @@ class ScheduleGenerator(IScheduleGenerator):
         how many schedules exist.
         """
         # Base case: every course has been assigned — emit one complete schedule
-        if not remaining:
+        if index >= len(remaining):
             # Copy assignment so the yielded Schedule is independent of future mutations
             yield Schedule(period=exam_period, assignments={c.id: d for c, d in assignment.items()})
             return
 
-        course = remaining[0]
+        # Advance through `remaining` by index instead of slicing (remaining[1:]),
+        # which would allocate a fresh list at every node — O(n) extra work per
+        # call and O(n) garbage per branch. An index keeps recursion allocation-free.
+        course = remaining[index]
 
         # Collect dates already taken by conflicting neighbors (already assigned).
         # Building this set once per call keeps the inner loop O(1) per date.
@@ -97,7 +101,7 @@ class ScheduleGenerator(IScheduleGenerator):
 
                 # Explore: recurse on the remaining courses
                 yield from self._backtrack(
-                    assignment, remaining[1:], valid_dates, conflict_graph, exam_period
+                    assignment, remaining, index + 1, valid_dates, conflict_graph, exam_period
                 )
 
                 # Un-choose: remove the assignment so the next iteration starts clean

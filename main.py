@@ -25,8 +25,54 @@ Usage:
 
 import logging
 import sys
+from pathlib import Path
 
 _CLI_MAX_COMBINATIONS = 10_000
+
+# All CLI-generated artifacts (schedules + proctor reports) land here so they
+# stay out of the repo root and are covered by a single .gitignore entry.
+_OUTPUT_DIR = Path("output")
+
+
+def _resolve_output_path(output: Path) -> Path:
+    """Place relative CLI output under output/, creating the directory.
+
+    Absolute paths are respected as-is (the user asked for a specific location).
+    Relative paths — including a bare filename — are rooted at output/ so the
+    generated schedules and proctor report never clutter the working directory.
+    """
+    output = Path(output)
+    resolved = output if output.is_absolute() else _OUTPUT_DIR / output
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
+def _write_cli_proctor_report(output_path, schedules_by_period, courses_by_id):
+    """Write the Feature 4 proctor report from in-memory schedules.
+
+    Built directly from the generated per-period schedules (not by re-parsing the
+    exported text file), so it is neither fragile nor duplicated: each distinct
+    per-period schedule yields exactly one report section, in generation order.
+    """
+    from src.engine.proctor_report import build_proctor_report
+
+    sections: list[str] = []
+    for period_key, schedules in schedules_by_period.items():
+        for i, schedule in enumerate(schedules, 1):
+            report = build_proctor_report(schedule, courses_by_id)
+            sections.append(f"=== Schedule #{i} - {period_key} ===\n{report}")
+
+    proctor_path = output_path.with_name(output_path.stem + "_proctor.txt")
+
+    if not sections:
+        proctor_path.write_text(
+            "No schedules were generated, so no proctor report is available.\n",
+            encoding="utf-8",
+        )
+    else:
+        proctor_path.write_text("\n\n".join(sections), encoding="utf-8")
+
+    logging.info("Proctor report written to %s", proctor_path.resolve())
 
 
 def _configure_logging() -> None:
@@ -77,6 +123,7 @@ def _run_cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--proctor", type=Path, default=None)
 
     args = parser.parse_args(argv)
+    args.output = _resolve_output_path(args.output)
 
     logging.info("Starting CLI generation...")
 
@@ -105,10 +152,15 @@ def _run_cli(argv: list[str] | None = None) -> None:
     # SAFEGUARD:
     # Never allow the CLI exporter to write an unbounded number of combinations.
     # This prevents runaway combinatorics from producing massive output files.
-    exporter = TextFileExporter(
-        output_path=args.output,
-        max_combinations=_CLI_MAX_COMBINATIONS,
-    )
+    #
+    # Capture the final per-period schedules in memory (already filtered, room-
+    # assigned and sorted by AppController). The file is written from this capture
+    # and — crucially — so is the proctor report, instead of re-parsing the
+    # exported text file. settings=None so the capture is NOT re-sorted here;
+    # AppController already applied the sort config.
+    from src.engine.generation_workers import _MemoryExporter
+
+    exporter = _MemoryExporter(cap=_CLI_MAX_COMBINATIONS, settings=None)
 
     conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
     generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
@@ -163,25 +215,25 @@ def _run_cli(argv: list[str] | None = None) -> None:
         classroom_variant_mode=CLASSROOM_VARIANT_MODE_FIRST,
     ).run()
 
+    # Write the schedules file from the captured in-memory results.
+    TextFileExporter(
+        output_path=args.output,
+        max_combinations=_CLI_MAX_COMBINATIONS,
+    ).export_schedules(exporter.schedules_by_period, exporter.courses_by_id)
+
     logging.info(
-        "CLI generation completed successfully. Export capped at %s combinations.",
+        "CLI generation completed successfully. Schedules written to %s "
+        "(export capped at %s combinations).",
+        args.output.resolve(),
         f"{_CLI_MAX_COMBINATIONS:,}",
     )
 
     if feature4_requested:
-        from src.adapters.readers.schedule_file_reader import ScheduleFileReader
-        from src.engine.proctor_report import build_proctor_report
-
-        imported = ScheduleFileReader().read_with_metadata(args.output)
-        sections: list[str] = []
-        for period_key, schedules in imported.schedules_by_period.items():
-            for i, schedule in enumerate(schedules, 1):
-                report = build_proctor_report(schedule, imported.courses_by_id)
-                sections.append(f"=== Schedule #{i} - {period_key} ===\n{report}")
-
-        proctor_path = args.output.with_name(args.output.stem + "_proctor.txt")
-        proctor_path.write_text("\n\n".join(sections), encoding="utf-8")
-        logging.info("Proctor report written to %s", proctor_path)
+        _write_cli_proctor_report(
+            args.output,
+            exporter.schedules_by_period,
+            exporter.courses_by_id,
+        )
 
 
 def _run_cli_safely(argv: list[str] | None = None) -> None:

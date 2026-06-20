@@ -264,9 +264,10 @@ sprint3_source_of_truth.md
 
 ECC/
 
-# Local generated schedule outputs
+# Local generated schedule outputs (CLI + GUI)
+# CLI artifacts go under output/ (already ignored above); main.py creates the
+# directory on demand. These cover legacy/loose output filenames.
 schedules.txt
 out_f4.txt
 out_new_cli.txt
 out_old_cli.txt
-output/schedules.txt

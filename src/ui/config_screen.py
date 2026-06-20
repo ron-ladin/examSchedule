@@ -47,7 +47,6 @@ from src.ui.generation_poller import GenerationPoller
 from src.ui.periods_editor_dialog import ExamPeriodsEditorDialog
 from src.ui.results_panel import _display_period_key
 from src.ui.tokens import PROGRAMME_COLOURS, PROGRAM_NAMES_MAPPING
-from src.adapters.readers.schedule_file_reader import ScheduleFileReader
 from src.ui.widgets.config_input_cards import FilesCard, LoadModeCard
 from src.ui.widgets.feature4_card import Feature4Card
 from src.ui.widgets.programme_row import ProgrammeRow
@@ -593,7 +592,10 @@ class ConfigScreen(QWidget):
         except ValueError:
             self._controller.apply_sort(config)
             return
-        self.schedule_generated.emit(([], resorted, self._last_courses_by_id, {}, set(), False))
+        read_only_import = self._controller.read_only_import
+        self.schedule_generated.emit(
+            ([], resorted, self._last_courses_by_id, {}, set(), read_only_import)
+        )
 
     def _on_settings_changed(self, new_settings: Settings) -> None:
         """Persist the full settings (thresholds + sort) from the dialog OK path."""
@@ -668,18 +670,15 @@ class ConfigScreen(QWidget):
         if not path:
             return
 
-        _MAX_IMPORT_BYTES = 50 * 1024 * 1024
-        if Path(path).stat().st_size > _MAX_IMPORT_BYTES:
-            QMessageBox.warning(
-                self,
-                "File Too Large",
-                "The selected file exceeds the 50 MB import limit. "
-                "Please select a smaller schedule file.",
-            )
+        if not self._import_size_ok(path):
             return
 
         try:
-            imported = ScheduleFileReader().read_with_metadata(Path(path))
+            imported = self._controller.import_schedule(Path(path))
+        except FileNotFoundError:
+            QMessageBox.critical(self, "Load Error", "The file no longer exists.")
+            logger.exception("Schedule file missing during import")
+            return
         except PermissionError:
             QMessageBox.critical(self, "Load Error", "Permission denied to read the file.")
             logger.exception("Permission denied reading schedule file")
@@ -691,6 +690,10 @@ class ConfigScreen(QWidget):
         except ValueError as e:
             QMessageBox.critical(self, "Load Error", f"Data format error: {e}")
             logger.exception("ValueError reading schedule file")
+            return
+        except OSError:
+            QMessageBox.critical(self, "Load Error", "Could not read the schedule file.")
+            logger.exception("OSError reading schedule file")
             return
         except Exception as e:
             QMessageBox.critical(self, "Load Error", f"An unexpected error occurred: {e}")
@@ -707,24 +710,41 @@ class ConfigScreen(QWidget):
             )
             return
 
-        loaded_courses_by_id = {
-            course.id: course
-            for course in self._controller.courses
-        }
+        self._last_courses_by_id = imported.courses_by_id
 
-        courses_by_id = {
-            course_id: loaded_courses_by_id.get(course_id, imported_course)
-            for course_id, imported_course in imported.courses_by_id.items()
-        }
-
-        self._controller.clear_results_stale()
-        self._controller.set_imported_state(courses_by_id)
-        self._last_courses_by_id = courses_by_id
-
-        result_tuple = ([], schedules_by_period, courses_by_id, {}, set(), True)
+        result_tuple = ([], schedules_by_period, imported.courses_by_id, {}, set(), True)
 
         self.schedule_generated.emit(result_tuple)
         self._set_status(f"✓  Schedule loaded from {Path(path).name}.", ok=True)
+
+    def _import_size_ok(self, path: str) -> bool:
+        """Reject oversized files before parsing, failing safe if stat() errors."""
+        max_import_bytes = 50 * 1024 * 1024
+        try:
+            size = Path(path).stat().st_size
+        except FileNotFoundError:
+            QMessageBox.critical(self, "Load Error", "The file no longer exists.")
+            logger.exception("Schedule file missing before import")
+            return False
+        except PermissionError:
+            QMessageBox.critical(self, "Load Error", "Permission denied to read the file.")
+            logger.exception("Permission denied stat-ing schedule file")
+            return False
+        except OSError:
+            QMessageBox.critical(self, "Load Error", "Could not access the schedule file.")
+            logger.exception("OSError stat-ing schedule file")
+            return False
+
+        if size > max_import_bytes:
+            QMessageBox.warning(
+                self,
+                "File Too Large",
+                "The selected file exceeds the 50 MB import limit. "
+                "Please select a smaller schedule file.",
+            )
+            return False
+
+        return True
 
     def _on_generation_succeeded(self, result_tuple: object) -> None:
         self._notify_settings_state(False)

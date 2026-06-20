@@ -86,21 +86,61 @@ Schedule #2:
     assert "SUMMER - Bet" not in result
 
 
+def test_multi_period_cartesian_export_deduplicates_repeated_period_schedules(
+    tmp_path: Path,
+) -> None:
+    """An exported combined file repeats each per-period schedule across the
+    Cartesian product of periods. The reader must keep each distinct per-period
+    schedule only once, while preserving the distinct schedules of other periods.
+
+    Here FALL - Aleph has a single schedule (A1) that repeats in every combined
+    block, while FALL - Bet has two distinct schedules (B1, B2).
+    """
+    content = """\
+Schedule #1:
+  [FALL - Aleph]
+  - Physics 1 | Course ID: 83102 | Date: 29-01-2026 | Instructor: Prof. A
+  [FALL - Bet]
+  - Calculus 1 | Course ID: 83112 | Date: 10-04-2026 | Instructor: Dr. B
+
+Schedule #2:
+  [FALL - Aleph]
+  - Physics 1 | Course ID: 83102 | Date: 29-01-2026 | Instructor: Prof. A
+  [FALL - Bet]
+  - Calculus 1 | Course ID: 83112 | Date: 11-04-2026 | Instructor: Dr. B
+
+"""
+    f = tmp_path / "schedules.txt"
+    f.write_text(content, encoding="utf-8")
+
+    result = ScheduleFileReader().read(f)
+
+    # Repeated period schedule appears only once.
+    assert len(result["FALL - Aleph"]) == 1
+    assert result["FALL - Aleph"][0].assignments["83102"] == date(2026, 1, 29)
+
+    # The other period keeps both distinct schedules, in order.
+    assert len(result["FALL - Bet"]) == 2
+    assert result["FALL - Bet"][0].assignments["83112"] == date(2026, 4, 10)
+    assert result["FALL - Bet"][1].assignments["83112"] == date(2026, 4, 11)
+
+
 def test_empty_file_returns_empty_dict(tmp_path: Path) -> None:
     f = tmp_path / "empty.txt"
     f.write_text("", encoding="utf-8")
     assert ScheduleFileReader().read(f) == {}
 
 
-def test_reads_real_output_file() -> None:
-    path = Path("output/schedules.txt")
-    if not path.exists():
-        pytest.skip("output/schedules.txt not present")
+def test_reads_real_output_file(tmp_path: Path) -> None:
+    """Round-trip a realistic exported file.
 
-    if path.stat().st_size > _MAX_SAFE_REAL_OUTPUT_BYTES:
-        pytest.skip(
-            "output/schedules.txt is too large (>10MB) for safe unit testing."
-        )
+    Self-contained: writes an exported-shape file and reads it back, so the test
+    always runs instead of silently skipping when output/schedules.txt is absent.
+    """
+    path = tmp_path / "schedules.txt"
+    path.write_text(_SAMPLE + _MULTI_PERIOD, encoding="utf-8")
+
+    assert path.stat().st_size <= _MAX_SAFE_REAL_OUTPUT_BYTES
 
     result = ScheduleFileReader().read(path)
     assert result

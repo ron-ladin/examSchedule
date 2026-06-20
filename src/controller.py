@@ -30,6 +30,10 @@ from src.adapters.readers.classroom_file_reader import ClassroomFileReader
 from src.adapters.readers.course_file_reader import CourseFileReader
 from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
 from src.adapters.readers.proctor_config_reader import ProctorConfigReader
+from src.adapters.readers.schedule_file_reader import (
+    ImportedScheduleData,
+    ScheduleFileReader,
+)
 from src.adapters.readers.program_selector_reader import ProgramSelectorReader
 from src.adapters.readers.settings_file_reader import SettingsFileReader
 from src.adapters.readers.slots_file_reader import SlotsFileReader
@@ -108,6 +112,11 @@ class DesktopController:
         )
         self._imported_courses_by_id: dict[str, Course] = {}
 
+        # True while the cached results come from an imported schedules.txt file
+        # (read-only mode), so a sort-only change must re-render the imported
+        # schedule rather than fall back to stale generated results.
+        self._read_only_import: bool = False
+
         # Cache of the last threshold-valid results, kept so a sort-only change
         # can re-rank in place instead of regenerating from scratch.
         self._last_results: dict[str, list[Schedule]] | None = None
@@ -126,6 +135,42 @@ class DesktopController:
     def clear_imported_state(self) -> None:
         """Clear imported-schedule state when a normal generation run starts."""
         self._imported_courses_by_id = {}
+        self._read_only_import = False
+
+    @property
+    def read_only_import(self) -> bool:
+        """True while the cached results come from an imported schedule file."""
+        return self._read_only_import
+
+    def import_schedule(self, path: Path) -> ImportedScheduleData:
+        """Parse a previously exported schedules.txt file and cache it as
+        read-only imported results.
+
+        Parsing, course-metadata resolution, and result caching all live here so
+        the view only chooses a path and renders the returned data (MVC).
+
+        Course metadata is taken from the currently loaded courses when an id is
+        present there, otherwise from the metadata parsed out of the file.
+        """
+        imported = ScheduleFileReader().read_with_metadata(Path(path))
+
+        loaded_courses_by_id = {course.id: course for course in self._courses}
+        courses_by_id = {
+            course_id: loaded_courses_by_id.get(course_id, imported_course)
+            for course_id, imported_course in imported.courses_by_id.items()
+        }
+
+        # Importing does not change the underlying input data, so results are not
+        # stale; they are simply read-only.
+        self.clear_results_stale()
+        self.set_imported_state(courses_by_id)
+        self._read_only_import = True
+        self._last_results = dict(imported.schedules_by_period)
+
+        return ImportedScheduleData(
+            schedules_by_period=imported.schedules_by_period,
+            courses_by_id=courses_by_id,
+        )
 
     def apply_sort(self, config: SortingConfig) -> None:
         """Store a new sort config immediately on sort-list change (§281).
@@ -584,7 +629,13 @@ class DesktopController:
 
         self.apply_sort(config)
 
-        courses = list(self._courses)
+        # Imported read-only schedules may have no courses file loaded, so use
+        # the imported course metadata when present.
+        if self._read_only_import and self._imported_courses_by_id:
+            courses = list(self._imported_courses_by_id.values())
+        else:
+            courses = list(self._courses)
+
         resorted = {
             period_key: SortingEngine.sort(schedules, courses, config, self._selected_programs)
             for period_key, schedules in self._last_results.items()
@@ -603,6 +654,8 @@ class DesktopController:
         The parent process re-applies the current sorting config before displaying,
         because sort order may have changed while generation was running.
         """
+        self.clear_imported_state()
+
         courses = list(self._courses)
         sorting = self._settings.sorting
 

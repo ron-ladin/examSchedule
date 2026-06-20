@@ -102,13 +102,53 @@ def _offering_fingerprint(offering: CourseOffering) -> tuple:
     )
 
 
+def _schedule_fingerprint(schedule: Schedule, period: str) -> tuple:
+    """Uniquely identify a period schedule by its full content.
+
+    Exported combined schedules are Cartesian products of per-period schedules,
+    so the same period schedule is written across many ``Schedule #N`` blocks.
+    Fingerprinting by period + assignments + classroom assignments + unassigned
+    exams lets the reader keep only the first occurrence of each distinct
+    per-period schedule.
+    """
+    assignments = tuple(
+        sorted((cid, d.isoformat()) for cid, d in schedule.assignments.items())
+    )
+    classrooms = tuple(
+        (
+            cid,
+            tuple(
+                (
+                    a.room.room_id,
+                    a.slot.time.isoformat(),
+                    a.date.isoformat(),
+                    a.students_assigned,
+                    a.proctor_count,
+                )
+                for a in assigns
+            ),
+        )
+        for cid, assigns in sorted(schedule.classroom_assignments.items())
+    )
+    unassigned = tuple(sorted(schedule.unassigned_classroom_exams.items()))
+    return (period, assignments, classrooms, unassigned)
+
+
 def _flush(
     result: dict[str, list[Schedule]],
     schedule: Schedule,
     period: str,
+    seen: set[tuple],
 ) -> None:
-    if schedule.assignments:
-        result.setdefault(period, []).append(schedule)
+    if not schedule.assignments:
+        return
+
+    fingerprint = _schedule_fingerprint(schedule, period)
+    if fingerprint in seen:
+        return
+
+    seen.add(fingerprint)
+    result.setdefault(period, []).append(schedule)
 
 
 class ScheduleFileReader:
@@ -138,6 +178,7 @@ class ScheduleFileReader:
         result: dict[str, list[Schedule]] = {}
         courses_by_id: dict[str, Course] = {}
         seen_offerings: dict[str, set[tuple]] = {}
+        seen_schedules: set[tuple] = set()
 
         current_schedule: Schedule | None = None
         current_period: str | None = None
@@ -148,7 +189,7 @@ class ScheduleFileReader:
         for line in lines:
             if _SCHEDULE_HEADER.match(line):
                 if current_schedule is not None and current_period is not None:
-                    _flush(result, current_schedule, current_period)
+                    _flush(result, current_schedule, current_period, seen_schedules)
 
                 current_schedule = None
                 current_period = None
@@ -170,7 +211,7 @@ class ScheduleFileReader:
             period_match = _PERIOD_HEADER.match(line)
             if period_match:
                 if current_period is not None:
-                    _flush(result, current_schedule, current_period)
+                    _flush(result, current_schedule, current_period, seen_schedules)
 
                 current_period = _normalize_period_key(period_match.group(1).strip())
                 current_schedule = Schedule(period=_stub_period(current_period))
@@ -268,7 +309,7 @@ class ScheduleFileReader:
                 continue
 
         if current_schedule is not None and current_period is not None:
-            _flush(result, current_schedule, current_period)
+            _flush(result, current_schedule, current_period, seen_schedules)
 
         return ImportedScheduleData(
             schedules_by_period=result,
