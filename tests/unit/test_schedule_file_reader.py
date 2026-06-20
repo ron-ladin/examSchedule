@@ -8,6 +8,9 @@ import pytest
 from src.adapters.readers.schedule_file_reader import ScheduleFileReader
 
 
+_MAX_SAFE_REAL_OUTPUT_BYTES = 10 * 1024 * 1024
+
+
 _SAMPLE = """\
 Schedule #1:
   [FALL - Aleph]
@@ -70,6 +73,11 @@ def test_reads_real_output_file() -> None:
     path = Path("output/schedules.txt")
     if not path.exists():
         pytest.skip("output/schedules.txt not present")
+
+    if path.stat().st_size > _MAX_SAFE_REAL_OUTPUT_BYTES:
+        pytest.skip(
+            "output/schedules.txt is too large (>10MB) for safe unit testing."
+        )
 
     result = ScheduleFileReader().read(path)
     assert result

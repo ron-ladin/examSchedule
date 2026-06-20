@@ -262,4 +262,11 @@ sprint3_source_of_truth.md
 .devcontainer/devcontainer.json
 
 
-ECC/ 
+ECC/
+
+# Local generated schedule outputs
+schedules.txt
+out_f4.txt
+out_new_cli.txt
+out_old_cli.txt
+output/schedules.txt

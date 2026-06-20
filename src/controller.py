@@ -187,6 +187,21 @@ class DesktopController:
         self.mark_results_stale()
         return len(self._classrooms)
 
+    def set_classrooms_from_text(self, text: str) -> int:
+        """
+        Parse classrooms from manual GUI input.
+
+        Uses the same format and validation rules as the classrooms file:
+            $$$$
+            Room Name
+            Capacity
+
+        Returns the number of valid classrooms loaded.
+        """
+        self._classrooms = ClassroomFileReader.parse_text(text)
+        self.mark_results_stale()
+        return len(self._classrooms)
+
     def load_time_slots(self, path: Path) -> int:
         """Load and validate the optional Feature 4 slots file."""
         self._time_slots = SlotsFileReader(Path(path)).read()
@@ -758,20 +773,31 @@ class DesktopController:
         self,
         schedules_by_period: dict[str, list[Schedule]],
         output_path: Path,
+        courses_by_id: dict[str, Course] | None = None,
     ) -> None:
-        """Write selected schedules to a text file using TextFileExporter."""
+        """Write selected schedules to a text file using TextFileExporter.
+
+        If courses_by_id is provided, use it as the export metadata source.
+        This is needed for imported schedules, where the controller may not have
+        the original courses file loaded but the imported schedules.txt file
+        still contains course names and instructors.
+        """
         if self._results_stale:
             raise ValueError(
                 "Cannot export stale schedules. Generate schedules again first."
             )
 
-        courses_by_id = {course.id: course for course in self._courses}
+        export_courses_by_id = (
+            courses_by_id
+            if courses_by_id is not None
+            else {course.id: course for course in self._courses}
+        )
 
         exporter = TextFileExporter(
             output_path=Path(output_path),
             max_combinations=None,
         )
-        exporter.export_schedules(schedules_by_period, courses_by_id)
+        exporter.export_schedules(schedules_by_period, export_courses_by_id)
 
         logger.info("Exported schedules to %s", output_path)
 

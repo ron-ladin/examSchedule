@@ -79,7 +79,7 @@ flowchart TD
 > **University exam scheduler** — given a course catalog, exam windows, and a set of study programs, generates every valid conflict-free timetable using a backtracking CSP solver with an MCV heuristic.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-191%20passed-2ecc71?style=flat-square)
+![Tests](https://img.shields.io/badge/Tests-511%20passed-2ecc71?style=flat-square)
 ![Architecture](https://img.shields.io/badge/Architecture-Clean%20%2F%20Ports%20%26%20Adapters-c678dd?style=flat-square)
 ![Algorithm](https://img.shields.io/badge/Algorithm-Backtracking%20%2B%20MCV-e5a22e?style=flat-square)
 ![UI](https://img.shields.io/badge/UI-PyQt6%20Desktop-4a90d9?style=flat-square)
@@ -117,6 +117,24 @@ Main capabilities:
 - Yields every valid complete schedule **lazily** — no list of all schedules is ever held in memory by the core generator
 - Displays generated schedules in the desktop results screen
 - Allows exporting schedules to a structured text file, grouped by semester and moed
+- Imports previously generated schedule files back into the Results panel for review
+
+### Phase 3 Capabilities — Optimal Scheduling
+
+Phase 3 turns the raw set of valid schedules into a *ranked, filtered* result set:
+
+- **Threshold filtering** — discard schedules that violate configurable limits, such as a minimum number of days between mandatory exams or a maximum number of exams per day.
+- **Advanced sorting** — rank the surviving schedules by quality metrics: minimum days between exams, average days between exams, number of elective collisions, and more.
+- **Real-time control** — thresholds and sort criteria can be toggled on/off and re-ordered on the fly, so the user can re-rank results without regenerating them.
+
+### Feature 4 Capabilities — Classroom & Time Slot Assignment
+
+Feature 4 extends a finished schedule with physical room and staffing logistics:
+
+- **Automatic classroom assignment** — rooms are allocated by matching exact per-course student counts against room capacities.
+- **Time slot distribution** — exams are spread chronologically into configurable daily time slots, honoring the mandatory gap between slots.
+- **Proctor recommendation report** — the number of proctors per room is computed automatically as `ceil(students_in_room / X)` and emitted as a recommendation report.
+- **Optional & graceful** — the whole feature is optional; if classroom, slot, or proctor data is missing, the system gracefully degrades to standard scheduling instead of failing.
 
 **Key design properties:**
 
@@ -519,16 +537,57 @@ The desktop app supports:
 - Generating schedules
 - Browsing generated schedules
 - Exporting a selected schedule or result set to a readable text file
+- **Importing a previously generated schedule** — use the "Load Schedule" button on the Config Screen to load an existing `schedules.txt` file and view it directly in the Results panel
 
-### Headless CLI
+### CLI Usage
+
+The CLI supports three operating modes. All modes share the same four base arguments.
+
+#### Base Mode — Standard Scheduling (Feature 4 OFF)
+
+Generates conflict-free exam schedules without classroom assignment:
 
 ```bash
 python main.py --cli \
-  --programs data/programs.txt \
-  --courses  data/courses.txt \
-  --periods  data/dates.txt \
-  --output   output/schedules.txt
+  --programs selected_programs.txt \
+  --courses  courses.txt \
+  --periods  exam_periods.txt \
+  --output   schedules.txt
 ```
+
+#### Phase 3 Mode — Thresholds & Sorting
+
+Activates Phase 3 sorting, filtering, and threshold rules defined in a settings file:
+
+```bash
+python main.py --cli \
+  --programs selected_programs.txt \
+  --courses  courses.txt \
+  --periods  exam_periods.txt \
+  --output   schedules.txt \
+  --settings data/settings.txt
+```
+
+`data/settings.txt` controls sort order and result-count thresholds as specified in the SRS Phase 3 requirements.
+
+#### Feature 4 Mode — Classroom Assignment (Feature 4 ON)
+
+Assigns physical classrooms, time slots, and proctors to every scheduled exam.
+
+> **Note:** `courses.txt` must include the **5th column (`StudentCount`)** for capacity matching to work.
+
+```bash
+python main.py --cli \
+  --programs    selected_programs.txt \
+  --courses     courses.txt \
+  --periods     exam_periods.txt \
+  --output      schedules.txt \
+  --classrooms  classrooms.txt \
+  --slots       slots.txt \
+  --proctor     proctors.txt
+```
+
+`--classrooms`, `--slots`, and `--proctor` are all optional; omitting them disables Feature 4 and falls back to Base Mode. Existing scripts that do not pass these flags are 100% backward-compatible.
 
 ---
 
@@ -658,7 +717,7 @@ python -m pytest tests/e2e/ -v
 QT_QPA_PLATFORM=offscreen python -m pytest tests/unit/test_ui_smoke.py tests/unit/test_ui_controller_integration.py -v
 ```
 
-**191 tests · all passing**
+**511 tests · all passing**
 
 | Suite | Scope |
 |---|---|

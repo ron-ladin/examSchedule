@@ -345,10 +345,29 @@ def test_c1_missing_student_count_snaps_toggle_back_with_dialog(monkeypatch):
     # Attempt to turn the toggle ON — it must snap back off.
     screen._feature4_card._toggle.setChecked(True)
 
+    # A critical dialog must have been shown with an explanatory message.
     assert errors_shown, "A critical dialog must explain why Feature 4 can't enable"
-    assert controller.feature4_enabled is False, "Toggle snapped back — Feature 4 stays OFF"
+    dialog_args = errors_shown[0]
+    dialog_message = " ".join(str(a) for a in dialog_args)
+    assert "StudentCount" in dialog_message or "student" in dialog_message.lower(), (
+        f"Dialog message must mention StudentCount, got: {dialog_message!r}"
+    )
+    assert "Feature 4" in dialog_message or "feature 4" in dialog_message.lower(), (
+        f"Dialog message must mention Feature 4, got: {dialog_message!r}"
+    )
+
+    # Toggle and controller state must both be snapped back to OFF.
+    assert controller.feature4_enabled is False, "Controller: Feature 4 stays OFF"
     assert screen._feature4_card._toggle.isChecked() is False, "Checkbox snapped back to OFF"
-    assert screen._feature4_card._load_classrooms_btn.isEnabled() is False
+    assert screen._feature4_card._load_classrooms_btn.isEnabled() is False, (
+        "Browse button must be disabled when toggle is OFF"
+    )
+
+    # Status label must reflect DISABLED, not ACTIVE or INCOMPLETE.
+    status_text = screen._feature4_card._status_lbl.text()
+    assert "DISABLED" in status_text, (
+        f"Status label must show DISABLED after snap-back, got: {status_text!r}"
+    )
 
     # Generate stays blocked while Feature 4 cannot be activated.
     assert screen._gen_btn.isEnabled() is False, "Generate button must be disabled"

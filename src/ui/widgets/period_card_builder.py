@@ -66,9 +66,15 @@ def _make_data_table(headers: list[str]) -> QTableWidget:
 
 def build_period_card(panel, period_key: str) -> QWidget:
     """Build the results card for ``period_key`` and register it on ``panel``."""
+    read_only_import = (
+        panel.is_imported_schedule_view()
+        if hasattr(panel, "is_imported_schedule_view")
+        else False
+    )
+
     card = QWidget()
     card.setStyleSheet("background: transparent;")
-    card.setMinimumHeight(320)
+    card.setMinimumHeight(260 if read_only_import else 320)
 
     layout = QVBoxLayout(card)
     layout.setSpacing(8)
@@ -133,7 +139,8 @@ def build_period_card(panel, period_key: str) -> QWidget:
     date_nav.addStretch()
     date_nav.addWidget(next_date_btn)
 
-    layout.addLayout(date_nav)
+    if not read_only_import:
+        layout.addLayout(date_nav)
 
     # Bottom navigation row: Feature 4 variants for the same date schedule.
     # These buttons move between different classroom/time-slot allocations
@@ -192,7 +199,8 @@ def build_period_card(panel, period_key: str) -> QWidget:
     nav.addStretch()
     nav.addWidget(next_btn)
 
-    layout.addLayout(nav)
+    if not read_only_import:
+        layout.addLayout(nav)
 
     has_more = period_key in panel._truncated_periods
 
@@ -243,7 +251,8 @@ def build_period_card(panel, period_key: str) -> QWidget:
     lm_row.addWidget(auto_variants_btn)
     lm_row.addStretch()
 
-    layout.addLayout(lm_row)
+    if not read_only_import:
+        layout.addLayout(lm_row)
 
     table = _make_data_table(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"])
     table.setMinimumHeight(220)

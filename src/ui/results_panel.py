@@ -7,7 +7,13 @@ LOAD_BATCH_SIZE batch — clicking it spawns a background subprocess to fetch
 only the next batch.
 
 Public API:
-    load(schedules_by_period, courses_by_id, prog_color_map, truncated_periods)
+    load(
+        schedules_by_period,
+        courses_by_id,
+        prog_color_map,
+        truncated_periods,
+        read_only_import=False,
+    )
 """
 
 import logging
@@ -26,6 +32,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.ui.assets.animated_widgets import AnimatedPlaceholder
+
 # _group_exams_by_slot is re-exported here for input_screen / tests.
 from src.ui.calendar_cell_delegate import (
     _course_ids_for_click_position,
@@ -107,6 +114,10 @@ class _ResultsPanel(QWidget):
 
     Each exam period is a card with its own Prev/Next navigator and an optional
     "Load More" button that fires a background subprocess to fetch the full set.
+
+    When results are loaded from an exported schedule file, the panel switches
+    into read-only imported mode. In that mode, navigation/load-more controls are
+    hidden by the period-card builder and no additional schedules are fetched.
     """
 
     def __init__(self, controller: DesktopController, parent=None):
@@ -119,6 +130,7 @@ class _ResultsPanel(QWidget):
         self._prog_color_map: dict[str, str] = {}
         self._period_indices: dict[str, int] = {}
         self._truncated_periods: set[str] = set()
+        self._is_imported_schedule: bool = False
 
         # Date/variant navigation indexing lives in a plain-Python model that
         # reads the panel's live schedules dict, so button clicks stay O(1)
@@ -137,12 +149,17 @@ class _ResultsPanel(QWidget):
         self._lm = LoadMoreController(self)
         self._lm.messageRequested.connect(self._show_message)
         self._lm.cardRefreshRequested.connect(self._refresh_period_card)
+
         self._navigator = PeriodNavigator(
             self._nav_model,
             self._cards,
             get_schedules=lambda: self._schedules_by_period,
             get_indices=lambda: self._period_indices,
-            has_more=self._controller.has_more_schedules,
+            has_more=lambda period_key: (
+                False
+                if self._is_imported_schedule
+                else self._controller.has_more_schedules(period_key)
+            ),
             parent=self,
         )
         self._navigator.navigationRequested.connect(self._on_navigation_requested)
@@ -155,6 +172,7 @@ class _ResultsPanel(QWidget):
         self._cell_data: dict[str, dict[tuple[int, int], tuple]] = {}
 
         self._has_stale_results: bool = False
+
         # Per-period Auto Load is user-controlled. It loads one batch, waits
         # AUTO_LOAD_DELAY_MS, then requests the next batch until there is no more
         # data or the user presses Stop Auto Load. Never use a blocking while-loop.
@@ -183,8 +201,10 @@ class _ResultsPanel(QWidget):
         courses_by_id: dict[str, Course],
         prog_color_map: dict[str, str],
         truncated_periods: set[str] | None = None,
+        read_only_import: bool = False,
     ) -> None:
         self.clear_stale()
+        self._is_imported_schedule = read_only_import
 
         # Stop any in-flight Load More operation before rebuilding the results UI.
         # A QTimer timeout may already be queued while a new generation/load starts,
@@ -195,10 +215,19 @@ class _ResultsPanel(QWidget):
         # They will be recreated lazily if the user clicks Load More / Auto again.
         self._controller.shutdown_load_workers()
 
+        # Imported schedules are fixed read-only snapshots. Do not keep any
+        # old generation/load-more state from a previous Generate run.
+        if read_only_import:
+            self._controller.reset_generation_state()
+
         self._schedules_by_period = schedules_by_period
         self._courses_by_id = courses_by_id
         self._prog_color_map = prog_color_map
-        self._truncated_periods = truncated_periods or set()
+        self._truncated_periods = (
+            set()
+            if read_only_import
+            else (truncated_periods or set())
+        )
         self._period_indices = {k: 0 for k in schedules_by_period}
         self._total_by_period = {}
 
@@ -241,6 +270,9 @@ class _ResultsPanel(QWidget):
 
     def _on_navigator_load_more_dates(self, period_key: str) -> None:
         """Slot: load the next date-options batch and advance once it arrives."""
+        if self._is_imported_schedule:
+            return
+
         self._lm.advance_after_load.add(period_key)
         self._lm.on_load_more(period_key)
 
@@ -251,6 +283,9 @@ class _ResultsPanel(QWidget):
         private dicts directly. Keeps the navigation cache and the controller's
         cached results in sync (so a later re-sort includes the appended batch).
         """
+        if self._is_imported_schedule:
+            return
+
         self._schedules_by_period[period_key].extend(extra)
         self._rebuild_navigation_cache(period_key)
         self._controller.cache_generated_results(dict(self._schedules_by_period))
@@ -262,6 +297,9 @@ class _ResultsPanel(QWidget):
         index of the first newly appended schedule when no navigation position is
         available yet.
         """
+        if self._is_imported_schedule:
+            return
+
         options = self._date_options_for_period(period_key)
         current_idx = self._period_indices.get(period_key, 0)
         nav_pos = self._nav_position_for_index(period_key, current_idx)
@@ -275,6 +313,11 @@ class _ResultsPanel(QWidget):
 
     def set_period_truncated(self, period_key: str, still_more: bool) -> None:
         """Record whether more date options remain for a period after a load."""
+        if self._is_imported_schedule:
+            self._controller.set_has_more_for_period(period_key, False)
+            self._truncated_periods.discard(period_key)
+            return
+
         self._controller.set_has_more_for_period(period_key, still_more)
         if still_more:
             self._truncated_periods.add(period_key)
@@ -297,11 +340,11 @@ class _ResultsPanel(QWidget):
         return self._controller
 
     def has_period(self, period_key: str) -> bool:
-        """Return True if *period_key* is a known period (even if empty)."""
+        """Return True if *period_key* is a known period even if empty."""
         return period_key in self._schedules_by_period
 
     def get_schedules(self, period_key: str) -> list[Schedule]:
-        """Return the loaded schedules for *period_key* (empty list if none)."""
+        """Return the loaded schedules for *period_key* or an empty list."""
         return self._schedules_by_period.get(period_key, [])
 
     def get_current_index(self, period_key: str) -> int:
@@ -315,6 +358,10 @@ class _ResultsPanel(QWidget):
     def get_truncated_periods(self) -> set[str]:
         """Return a copy of the periods that still have more schedules to load."""
         return set(self._truncated_periods)
+
+    def is_imported_schedule_view(self) -> bool:
+        """Return True when results came from Load Schedule, not Generate."""
+        return self._is_imported_schedule
 
     def has_classroom_results(self, period_key: str) -> bool:
         """Return True if the loaded period contains Feature 4 classroom data."""
@@ -333,9 +380,11 @@ class _ResultsPanel(QWidget):
         schedules = self._schedules_by_period.get(period_key, [])
         if not schedules:
             return None
+
         idx = self._period_indices.get(period_key, 0)
         if 0 <= idx < len(schedules):
             return self._date_signature(schedules[idx])
+
         return None
 
     def get_date_option_count(self, period_key: str) -> int:
@@ -418,6 +467,7 @@ class _ResultsPanel(QWidget):
         self._period_tabs = QTabWidget()
         self._period_tabs.setStyleSheet(PERIOD_TAB_STYLE)
         cl.addWidget(self._period_tabs)
+
         root.addWidget(self._content)
 
     def _build_period_card(self, period_key: str) -> QWidget:
@@ -444,14 +494,14 @@ class _ResultsPanel(QWidget):
         )
 
     def _rebuild_navigation_cache(self, period_key: str | None = None) -> None:
-        """Rebuild navigation indexes (delegates to NavigationModel)."""
+        """Rebuild navigation indexes through NavigationModel."""
         self._nav_model.rebuild(period_key)
 
     def _date_options_for_period(
         self,
         period_key: str,
     ) -> list[tuple[_DateSignature, list[int]]]:
-        """Return cached date options (delegates to NavigationModel)."""
+        """Return cached date options through NavigationModel."""
         return self._nav_model.date_options(period_key)
 
     def _nav_position_for_index(
@@ -477,7 +527,11 @@ class _ResultsPanel(QWidget):
     def _refresh_period_card(self, period_key: str) -> None:
         schedules = self._schedules_by_period[period_key]
         total = len(schedules)
-        has_more = self._controller.has_more_schedules(period_key)
+        has_more = (
+            False
+            if self._is_imported_schedule
+            else self._controller.has_more_schedules(period_key)
+        )
         card = self._cards.get(period_key)
 
         # The navigation cache should already be current after load/load-more,
@@ -539,12 +593,16 @@ class _ResultsPanel(QWidget):
 
         card.date_jump_input.setEnabled(total > 0)
         card.date_jump_input.setPlaceholderText(
-            str(date_option_pos + 1) if total > 0 and date_option_pos >= 0 else "#"
+            str(date_option_pos + 1)
+            if total > 0 and date_option_pos >= 0
+            else "#"
         )
 
         card.variant_jump_input.setEnabled(total > 0)
         card.variant_jump_input.setPlaceholderText(
-            str(variant_pos + 1) if total > 0 and variant_pos >= 0 else "#"
+            str(variant_pos + 1)
+            if total > 0 and variant_pos >= 0
+            else "#"
         )
 
         card.prev_date_btn.setEnabled(total > 0 and date_option_pos > 0)
@@ -571,11 +629,17 @@ class _ResultsPanel(QWidget):
             self._lm.stop_auto_load(period_key, refresh=False)
 
         has_classroom_variants = self._has_classroom_feature_results(period_key)
-        card.auto_date_btn.setVisible(has_more or active_mode == _AUTO_MODE_DATES)
-        card.auto_variant_btn.setVisible(
-            has_classroom_variants or active_mode == _AUTO_MODE_VARIANTS
+        card.auto_date_btn.setVisible(
+            not self._is_imported_schedule
+            and (has_more or active_mode == _AUTO_MODE_DATES)
         )
-        self._lm.update_auto_load_button(period_key)
+        card.auto_variant_btn.setVisible(
+            not self._is_imported_schedule
+            and (has_classroom_variants or active_mode == _AUTO_MODE_VARIANTS)
+        )
+
+        if not self._is_imported_schedule:
+            self._lm.update_auto_load_button(period_key)
 
         if schedules:
             self._cell_data[period_key] = self._calendar.populate(
@@ -617,14 +681,21 @@ class _ResultsPanel(QWidget):
             non_empty
         )
 
+        self._summary_lbl.setStyleSheet(
+            "color: #059669; font-weight: 600; font-size: 12px;"
+        )
+
+        if self._is_imported_schedule:
+            self._summary_lbl.setText(
+                f"✓  Imported schedule loaded "
+                f"({period_schedules_total:,} period schedules in view)"
+            )
+            return
+
         has_more = any(
             self._controller.has_more_schedules(period_key)
             or period_key in self._truncated_periods
             for period_key in non_empty
-        )
-
-        self._summary_lbl.setStyleSheet(
-            "color: #059669; font-weight: 600; font-size: 12px;"
         )
 
         if has_more:
@@ -765,20 +836,23 @@ class _ResultsPanel(QWidget):
         """)
         msg.exec()
 
-    def _selected_schedules(self) -> dict[str, "Schedule"]:
-        """Currently displayed schedule per period (one each).
+    def _selected_schedules(self) -> dict[str, Schedule]:
+        """Currently displayed schedule per period, one each.
 
         Guards the per-period index against missing keys and out-of-range
         values so a stale or unset index can never raise IndexError/KeyError;
         such a period is simply skipped.
         """
-        selected: dict[str, "Schedule"] = {}
+        selected: dict[str, Schedule] = {}
+
         for key, schedules in self._schedules_by_period.items():
             if not schedules:
                 continue
+
             idx = self._period_indices.get(key, 0)
             if 0 <= idx < len(schedules):
                 selected[key] = schedules[idx]
+
         return selected
 
     def _on_proctor_report(self) -> None:
@@ -796,7 +870,7 @@ class _ResultsPanel(QWidget):
         if not selected:
             self._show_message(
                 "No Schedules",
-                "Generate schedules before viewing the proctor report.",
+                "Generate or load schedules before viewing the proctor report.",
                 QMessageBox.Icon.Warning,
             )
             return
@@ -805,6 +879,7 @@ class _ResultsPanel(QWidget):
         for period_key, schedule in selected.items():
             body = self._controller.proctor_report_text(schedule)
             sections.append(f"=== {_display_period_key(period_key)} ===\n{body}")
+
         report_text = "\n\n".join(sections)
 
         if not any(s.classroom_assignments for s in selected.values()):
@@ -835,7 +910,7 @@ class _ResultsPanel(QWidget):
         if not self._schedules_by_period:
             self._show_message(
                 "Nothing to Save",
-                "No schedules have been generated.",
+                "No schedules have been generated or loaded.",
                 QMessageBox.Icon.Warning,
             )
             return
@@ -865,7 +940,11 @@ class _ResultsPanel(QWidget):
             return
 
         try:
-            self._controller.export(selected, Path(path))
+            self._controller.export(
+                selected,
+                Path(path),
+                courses_by_id=self._courses_by_id,
+            )
             self._show_message(
                 "Saved",
                 f"Schedule saved to:\n{path}",
