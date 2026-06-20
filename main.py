@@ -168,6 +168,21 @@ def _run_cli(argv: list[str] | None = None) -> None:
         f"{_CLI_MAX_COMBINATIONS:,}",
     )
 
+    if feature4_requested:
+        from src.adapters.readers.schedule_file_reader import ScheduleFileReader
+        from src.engine.proctor_report import build_proctor_report
+
+        imported = ScheduleFileReader().read_with_metadata(args.output)
+        sections: list[str] = []
+        for period_key, schedules in imported.schedules_by_period.items():
+            for i, schedule in enumerate(schedules, 1):
+                report = build_proctor_report(schedule, imported.courses_by_id)
+                sections.append(f"=== Schedule #{i} - {period_key} ===\n{report}")
+
+        proctor_path = args.output.with_name(args.output.stem + "_proctor.txt")
+        proctor_path.write_text("\n\n".join(sections), encoding="utf-8")
+        logging.info("Proctor report written to %s", proctor_path)
+
 
 def _run_cli_safely(argv: list[str] | None = None) -> None:
     try:

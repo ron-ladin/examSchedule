@@ -63,6 +63,29 @@ def test_reads_multiple_periods(tmp_path: Path) -> None:
     assert result["FALL - Bet"][0].assignments["83102"] == date(2026, 4, 10)
 
 
+def test_period_key_round_trip_normalizes_display_semesters(tmp_path: Path) -> None:
+    """Period keys from display names (SPRING/SUMMER) must match ExamPeriod.get_key()."""
+    content = """\
+Schedule #1:
+  [SPRING - Aleph]
+  - Physics 1 | Course ID: 83102 | Date: 29-01-2026 | Instructor: Prof. A
+
+Schedule #2:
+  [SUMMER - Bet]
+  - Calculus 1 | Course ID: 83112 | Date: 10-06-2026 | Instructor: Dr. B
+
+"""
+    f = tmp_path / "schedules.txt"
+    f.write_text(content, encoding="utf-8")
+
+    result = ScheduleFileReader().read(f)
+
+    assert "SPRI - Aleph" in result, f"Expected 'SPRI - Aleph', got keys: {list(result)}"
+    assert "SUMM - Bet" in result, f"Expected 'SUMM - Bet', got keys: {list(result)}"
+    assert "SPRING - Aleph" not in result
+    assert "SUMMER - Bet" not in result
+
+
 def test_empty_file_returns_empty_dict(tmp_path: Path) -> None:
     f = tmp_path / "empty.txt"
     f.write_text("", encoding="utf-8")

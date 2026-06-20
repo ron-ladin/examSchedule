@@ -106,6 +106,7 @@ class DesktopController:
             thresholds=ThresholdSettings(),
             sorting=SortingConfig(),
         )
+        self._imported_courses_by_id: dict[str, Course] = {}
 
         # Cache of the last threshold-valid results, kept so a sort-only change
         # can re-rank in place instead of regenerating from scratch.
@@ -117,6 +118,14 @@ class DesktopController:
     @property
     def settings(self) -> Settings:
         return self._settings
+
+    def set_imported_state(self, courses_by_id: dict[str, "Course"]) -> None:
+        """Store courses from an imported schedule file for proctor report resolution."""
+        self._imported_courses_by_id = dict(courses_by_id)
+
+    def clear_imported_state(self) -> None:
+        """Clear imported-schedule state when a normal generation run starts."""
+        self._imported_courses_by_id = {}
 
     def apply_sort(self, config: SortingConfig) -> None:
         """Store a new sort config immediately on sort-list change (§281).
@@ -150,14 +159,15 @@ class DesktopController:
         reader = CourseFileReader(Path(path))
         new_courses = reader.read()
 
-        # Pre-merge validation (spec 4.3): build the would-be-merged result on a
-        # deep copy so a failed validation never mutates committed state. Merge
-        # helpers mutate existing Course objects in place, so a shallow copy is
-        # NOT enough — only a deep copy isolates self._courses fully.
-        candidate = copy.deepcopy(self._courses)
+        # Pre-merge validation (spec 4.3): build the would-be-merged result without
+        # mutating committed state.  update_merge_courses modifies Course objects
+        # in-place, so it needs a deep copy. replace/append only mutate the list
+        # structure (not the Course objects themselves), so a shallow copy suffices.
         if mode == "update":
+            candidate = copy.deepcopy(self._courses)
             update_merge_courses(candidate, new_courses)
         else:
+            candidate = list(self._courses)
             merge_by_key(candidate, new_courses, mode, key_fn=lambda c: c.id)
 
         # When Feature 4 is enabled, every Exam offering must carry a
@@ -520,6 +530,7 @@ class DesktopController:
         self._remaining_schedule_iterators.clear()
         self._has_more_schedules.clear()
         self._iterator_overflows.clear()
+        self.clear_imported_state()
 
         data_provider = InMemoryDataProvider(
             courses=self._courses,
@@ -802,9 +813,15 @@ class DesktopController:
         logger.info("Exported schedules to %s", output_path)
 
     def proctor_report_text(self, schedule: Schedule) -> str:
-        """Return the spec 4.6 proctor report text for one schedule."""
-        courses_by_id = {course.id: course for course in self._courses}
-        return build_proctor_report(schedule, courses_by_id)
+        """Return the spec 4.6 proctor report text for one schedule.
+
+        Uses imported courses state when present (set via set_imported_state),
+        otherwise falls back to courses loaded from the courses file.
+        """
+        resolved = self._imported_courses_by_id or {
+            course.id: course for course in self._courses
+        }
+        return build_proctor_report(schedule, resolved)
 
     def export_proctor_report(self, schedule: Schedule, output_path: Path) -> None:
         """Write the spec 4.6 proctor report for one schedule to a .txt file."""
