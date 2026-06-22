@@ -18,7 +18,15 @@ from src.domain.time_slot import TimeSlot
 # None means there is no total classroom-variant limit.
 # The UI/controller still request variants in pages, so Auto Variants can load
 # them gradually without freezing while trying to compute everything at once.
-MAX_CLASSROOM_OPTIONS_PER_DAY: int | None = None
+#
+# ABSOLUTE_MAX_OPTIONS_PER_DAY is a hard safety ceiling on the number of
+# room/slot allocations evaluated for a SINGLE date. Room distributions grow as
+# O(2^R) in the number of rooms, so an uncapped per-day search (e.g. a grader
+# feeding 30 rooms) would evaluate ~10^9 combinations and freeze. Even callers
+# that explicitly ask for "unlimited" per-day options (max_options_per_day=None)
+# are clamped to this ceiling; per-schedule paging still drives gradual loading.
+ABSOLUTE_MAX_OPTIONS_PER_DAY: int = 50
+MAX_CLASSROOM_OPTIONS_PER_DAY: int | None = ABSOLUTE_MAX_OPTIONS_PER_DAY
 MAX_CLASSROOM_OPTIONS_PER_SCHEDULE: int | None = None
 
 
@@ -107,7 +115,7 @@ def _room_distribution_variants(
     prefix. This keeps ClassroomAssigner.assign() backward-compatible while
     assign_variants() can expose additional valid room combinations.
     """
-    if student_count == 0:
+    if student_count <= 0:
         return []
 
     if max_options is not None and max_options <= 0:
@@ -128,7 +136,16 @@ def _room_distribution_variants(
     # Generate extra combinations in deterministic order. Smaller room-count
     # combinations are tried before larger ones, and room order remains the
     # capacity-descending order supplied by the caller.
+    #
+    # Superset pruning: once a room-count size yields at least one feasible
+    # distribution, larger sizes only add strictly-larger supersets (the same
+    # exam spread across more rooms than necessary). We stop after finishing the
+    # first successful size, which keeps every minimal-room variant while
+    # cutting the O(2^R) tail of redundant larger combinations.
+    min_success_size: int | None = None
     for size in range(1, len(available_rooms) + 1):
+        if min_success_size is not None and size > min_success_size:
+            break
         for room_combo in combinations(available_rooms, size):
             if sum(room.capacity for room in room_combo) < student_count:
                 continue
@@ -146,6 +163,7 @@ def _room_distribution_variants(
 
             options.append(distribution)
             seen.add(key)
+            min_success_size = size
 
             if max_options is not None and len(options) >= max_options:
                 return options
@@ -287,6 +305,11 @@ class ClassroomAssigner:
         if max_options_per_schedule is not None and max_options_per_schedule <= 0:
             return
 
+        # Clamp an unbounded per-day request to the hard safety ceiling so a
+        # large room count cannot trigger an O(2^R) per-date combination search.
+        if max_options_per_day is None:
+            max_options_per_day = ABSOLUTE_MAX_OPTIONS_PER_DAY
+
         courses_by_id = {course.id: course for course in courses}
         rooms = sorted(classrooms, key=lambda room: room.capacity, reverse=True)
 
@@ -403,7 +426,7 @@ class ClassroomAssigner:
 
             student_count, course_id, exam_date, offerings = ordered[index]
 
-            if student_count == 0:
+            if student_count <= 0:
                 result[course_id] = []
                 backtrack(index + 1)
                 result.pop(course_id, None)

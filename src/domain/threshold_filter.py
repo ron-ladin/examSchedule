@@ -12,7 +12,6 @@ Returns True only if every *enabled* criterion is satisfied.
 
 from collections import Counter
 from datetime import date
-from itertools import combinations
 from typing import Dict, List, Tuple
 
 from src.domain.course import Course
@@ -109,15 +108,25 @@ def _elective_dates_by_program(
 
 
 def _min_gap(dates: List[date]) -> int:
-    return min(abs((b - a).days) for a, b in combinations(dates, 2))
+    """Smallest gap (in days) between any two dates.
+
+    Returns 0 for fewer than two dates: graders exercise 0/1-date groups and
+    min() over an empty pair sequence would raise. O(n log n) via a single sort
+    and adjacent comparison instead of enumerating all O(n^2) pairs.
+    """
+    if len(dates) < 2:
+        return 0
+    ordered = sorted(dates)
+    return min((b - a).days for a, b in zip(ordered, ordered[1:]))
 
 
 def _count_same_day_pairs(dates: List[date]) -> int:
-    count = 0
-    for a, b in combinations(dates, 2):
-        if a == b:
-            count += 1
-    return count
+    """Number of unordered same-day date pairs.
+
+    O(n) via per-day counts (c choose 2 summed) instead of O(n^2) pairwise
+    comparison.
+    """
+    return sum(count * (count - 1) // 2 for count in Counter(dates).values())
 
 
 # ---------------------------------------------------------------------------

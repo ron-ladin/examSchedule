@@ -41,8 +41,15 @@ def build_proctor_report(
 
     for course_id, assignments in schedule.classroom_assignments.items():
         for assignment in assignments:
+            # Defensive: an assignment without a slot (or a slot without a time)
+            # carries no schedulable position, so it cannot appear under a
+            # time-slot heading. Skip it rather than crash with AttributeError.
+            slot = assignment.slot
+            slot_time = slot.time if slot is not None else None
+            if slot_time is None:
+                continue
             slots = by_date.setdefault(assignment.date, {})
-            slots.setdefault(assignment.slot.time, []).append((course_id, assignment))
+            slots.setdefault(slot_time, []).append((course_id, assignment))
 
     if not by_date:
         return "No room assignments for this schedule."

@@ -122,7 +122,8 @@ def _avg_gap(dates: List[date]) -> float:
 
 
 def _count_same_day_pairs(dates: List[date]) -> int:
-    return sum(1 for a, b in combinations(dates, 2) if a == b)
+    """Number of unordered same-day date pairs — O(n) via per-day counts."""
+    return sum(count * (count - 1) // 2 for count in Counter(dates).values())
 
 
 # ---------------------------------------------------------------------------
