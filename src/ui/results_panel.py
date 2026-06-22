@@ -287,8 +287,20 @@ class _ResultsPanel(QWidget):
             return
 
         self._schedules_by_period[period_key].extend(extra)
+
+        # Re-sort the full accumulated set after appending the new page.
+        # Sorting only the fresh page is not enough: once Load More / Auto
+        # Variants adds another block, the combined list must still reflect the
+        # active global ranking. cache_generated_results() returns the sorted
+        # full cache, so keep the panel state in sync with it.
+        self._schedules_by_period = self._controller.cache_generated_results(
+            dict(self._schedules_by_period)
+        )
+        self._period_indices[period_key] = min(
+            self._period_indices.get(period_key, 0),
+            max(0, len(self._schedules_by_period[period_key]) - 1),
+        )
         self._rebuild_navigation_cache(period_key)
-        self._controller.cache_generated_results(dict(self._schedules_by_period))
 
     def advance_to_next_date_option(self, period_key: str, prev_len: int) -> None:
         """Move the displayed index to the next date option after a load.

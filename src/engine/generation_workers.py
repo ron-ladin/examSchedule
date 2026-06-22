@@ -226,11 +226,12 @@ def _run_classroom_variants_process(
         )
 
         if not classrooms or not time_slots or proctor_config is None:
-            result_queue.put(
-                GenerationResult.ok(
-                    {period_key: []}, {c.id: c for c in courses}, set()
-                )
+            message = (
+                "Cannot generate classroom variants: missing classroom, "
+                "time-slot, or proctor configuration."
             )
+            logger.warning(message)
+            result_queue.put(GenerationResult.failure(message))
             return
 
         # Important for Auto Variants:
@@ -453,11 +454,12 @@ def _run_classroom_variants_from_state(
         )
 
         if not classrooms or not time_slots or proctor_config is None:
-            result_queue.put(
-                GenerationResult.ok(
-                    {period_key: []}, {c.id: c for c in courses}, set()
-                )
+            message = (
+                "Cannot generate classroom variants: missing classroom, "
+                "time-slot, or proctor configuration."
             )
+            logger.warning(message)
+            result_queue.put(GenerationResult.failure(message))
             return
 
         request_key = _variant_request_key(
@@ -498,7 +500,9 @@ def _run_classroom_variants_from_state(
                 "overflow": [],
                 "emitted": skipped,
             }
-            variant_states.clear()
+            # Replace only the stale/missing cursor for this exact request.
+            # Do not clear other period/date cursors, because they may still be
+            # valid and can continue paging independently.
             variant_states[request_key] = state
 
             if skipped < offset:

@@ -171,6 +171,8 @@ def _room_combinations_by_capacity(
     def top_capacity_from(start: int, count: int) -> int:
         if count <= 0:
             return 0
+        # prefix_capacity has room_count + 1 items. Guard before indexing so
+        # prefix_capacity[start + count] is always within bounds.
         if start + count > room_count:
             return -1
         return prefix_capacity[start + count] - prefix_capacity[start]
