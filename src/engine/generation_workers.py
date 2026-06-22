@@ -200,6 +200,119 @@ def _run_generation_process(
         result_queue.put(GenerationResult.failure(str(exc)))
 
 
+# Sentinel for "iterator is exhausted" — distinct from any real Schedule and
+# from None, so a legitimately-yielded value is never mistaken for end-of-stream.
+_ITER_DONE = object()
+
+
+def _variant_cache_key(
+    period_key: str,
+    schedule: "Schedule",
+    cap: "int | None",
+    classrooms: "list[Classroom]",
+    time_slots: "list[TimeSlot]",
+    allow_unassigned: bool,
+) -> tuple:
+    """Stable identity for a paged variant request.
+
+    Two Load More clicks belong to the same lazy stream only when every input
+    that shapes the generator is identical. The fixed date block
+    (schedule.assignments) plus the room/slot inputs fully determine the variant
+    sequence, so a change in any of them must start a fresh generator rather than
+    resume a stale one.
+    """
+    return (
+        period_key,
+        tuple(sorted(schedule.assignments.items())),
+        cap,
+        tuple(room.room_id for room in classrooms),
+        tuple(slot.time for slot in time_slots),
+        allow_unassigned,
+    )
+
+
+def _build_variant_iterator(
+    schedule: "Schedule",
+    courses: "list[Course]",
+    selected_programs: "list[str]",
+    classrooms: "list[Classroom]",
+    time_slots: "list[TimeSlot]",
+    proctor_config: "ProctorConfig",
+    allow_unassigned: bool,
+) -> "Iterator[Schedule]":
+    """Build the raw, fully-lazy variant generator with no per-schedule cap.
+
+    Paging is driven by *consuming* this generator one page at a time (see
+    _ResumableVariantPager), not by re-running it with a growing limit. The
+    O(2^R) per-date blowup is still contained by the assigner's per-day ceiling
+    (max_options_per_day=None is clamped internally).
+    """
+    return ClassroomAssigner.assign_variants(
+        schedule,
+        courses,
+        selected_programs,
+        classrooms,
+        time_slots,
+        proctor_config,
+        allow_unassigned=allow_unassigned,
+        max_options_per_day=None,
+        max_options_per_schedule=None,
+    )
+
+
+class _ResumableVariantPager:
+    """Retain live variant generators across Load More calls.
+
+    The persistent worker outlives any single page request, so it can keep the
+    generator parked exactly where the previous page stopped. The next
+    contiguous request resumes from that point — O(page) work — instead of
+    rebuilding the generator and discarding `offset` items first (O(offset)
+    per page, i.e. O(N^2) over a full scroll). A non-contiguous offset (e.g. the
+    user jumped or the inputs changed) transparently falls back to a fresh
+    generator.
+    """
+
+    def __init__(self) -> None:
+        # key -> {"iter": Iterator[Schedule], "next_offset": int}
+        self._parked: dict[tuple, dict] = {}
+
+    def page(
+        self,
+        key: tuple,
+        build_iter,
+        offset: int,
+        cap: "int | None",
+    ) -> "tuple[list, bool]":
+        """Return (batch, still_more) for one page, resuming when possible."""
+        parked = self._parked.pop(key, None)
+        if parked is not None and parked["next_offset"] == offset:
+            variant_iter = parked["iter"]
+        else:
+            variant_iter = build_iter()
+            # Fresh stream (or a non-contiguous jump): skip to the requested
+            # offset once. Subsequent contiguous pages resume without re-skipping.
+            for _ in range(offset):
+                if next(variant_iter, _ITER_DONE) is _ITER_DONE:
+                    return [], False
+
+        if cap is None:
+            return list(variant_iter), False
+
+        batch = list(islice(variant_iter, cap))
+
+        # One look-ahead decides "is there another page" without forcing the
+        # rest of the stream. Park the look-ahead back onto the generator so the
+        # next page does not drop it.
+        lookahead = next(variant_iter, _ITER_DONE)
+        still_more = lookahead is not _ITER_DONE
+        if still_more:
+            self._parked[key] = {
+                "iter": chain([lookahead], variant_iter),
+                "next_offset": offset + len(batch),
+            }
+        return batch, still_more
+
+
 def _run_classroom_variants_process(
     result_queue,
     period_key: "str",
@@ -213,11 +326,17 @@ def _run_classroom_variants_process(
     time_slots: "list[TimeSlot] | None" = None,
     proctor_config: "ProctorConfig | None" = None,
     allow_unassigned_classrooms: bool = False,
+    pager: "_ResumableVariantPager | None" = None,
 ) -> None:
     """Generate classroom/time-slot variants for one already-chosen date schedule.
 
     This does not run the date generator again. It reuses schedule.assignments as
     the fixed date block and expands only classroom/time-slot allocations for it.
+
+    When a `pager` is supplied (the persistent Load More worker always supplies
+    one), the variant generator is retained between pages so each Load More
+    resumes from where the last page stopped. Without a pager (a one-shot call),
+    a fresh generator is built and advanced to `offset` for this single page.
     """
     try:
         active_settings = settings or Settings(
@@ -233,40 +352,27 @@ def _run_classroom_variants_process(
             )
             return
 
-        # Important for Auto Variants:
-        # do not ask the classroom assigner to materialise every possible
-        # variant before the UI receives a result.  For a paged request, only
-        # generate enough candidates to answer this page plus one look-ahead item
-        # used to decide whether another page exists.
-        #
-        # page_limit gates the total number of full-schedule variants
-        # (max_options_per_schedule). It must NOT be reused as the per-day limit:
-        # max_options_per_day caps room allocations for a single date, and
-        # setting it to page_limit lets one busy date exhaust the quota on its
-        # own, falsely reporting "no more variants" while other dates still have
-        # unexplored allocations. Leave per-day unbounded and let the per-schedule
-        # cap drive paging.
-        page_limit = None if cap is None else offset + cap + 1
+        def build_iter() -> "Iterator[Schedule]":
+            return _build_variant_iterator(
+                schedule,
+                courses,
+                selected_programs,
+                classrooms,
+                time_slots,
+                proctor_config,
+                allow_unassigned_classrooms,
+            )
 
-        variant_iter = ClassroomAssigner.assign_variants(
+        active_pager = pager if pager is not None else _ResumableVariantPager()
+        key = _variant_cache_key(
+            period_key,
             schedule,
-            courses,
-            selected_programs,
+            cap,
             classrooms,
             time_slots,
-            proctor_config,
-            allow_unassigned=allow_unassigned_classrooms,
-            max_options_per_day=None,
-            max_options_per_schedule=page_limit,
+            allow_unassigned_classrooms,
         )
-
-        if cap is None:
-            batch = list(islice(variant_iter, offset, None))
-            still_more = False
-        else:
-            batch_plus_one = list(islice(variant_iter, offset, offset + cap + 1))
-            still_more = len(batch_plus_one) > cap
-            batch = batch_plus_one[:cap]
+        batch, still_more = active_pager.page(key, build_iter, offset, cap)
 
         courses_by_id = {course.id: course for course in courses}
         if active_settings.sorting.rules:
@@ -316,6 +422,11 @@ def _run_load_more_worker(task_queue, result_queue) -> None:
     period and then reused for subsequent batches, so Auto Load does not create
     a new Python process for every page.
     """
+    # One pager lives for the whole worker lifetime, so every "variants" Load
+    # More resumes the same parked generator instead of rebuilding it and
+    # re-discarding `offset` items each page.
+    variant_pager = _ResumableVariantPager()
+
     while True:
         task = task_queue.get()
 
@@ -336,7 +447,10 @@ def _run_load_more_worker(task_queue, result_queue) -> None:
             )
         elif task_type == "variants":
             _run_classroom_variants_process(
-                _KindTaggedQueue(result_queue, "variants"), *args, **kwargs
+                _KindTaggedQueue(result_queue, "variants"),
+                *args,
+                pager=variant_pager,
+                **kwargs,
             )
         else:
             result_queue.put(
