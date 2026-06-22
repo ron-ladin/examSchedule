@@ -1,10 +1,10 @@
 """Assign rooms and time slots to every exam in a generated schedule."""
 
-import heapq
+from __future__ import annotations
+
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import date
-from itertools import combinations, product
 
 from src.domain.classroom import Classroom
 from src.domain.classroom_assignment import ClassroomAssignment
@@ -21,12 +21,25 @@ from src.domain.time_slot import TimeSlot
 MAX_CLASSROOM_OPTIONS_PER_DAY: int | None = None
 MAX_CLASSROOM_OPTIONS_PER_SCHEDULE: int | None = None
 
+# Safety guard for extreme classroom files. If an exam needs more rooms than
+# this threshold, return the first valid greedy allocation but do not enumerate
+# additional exact room-combination variants. That prevents UI freezes and deep
+# recursion for cases such as 1,000 tiny rooms and one very large exam.
+MAX_ROOMS_PER_EXACT_COMBINATION = 64
+
 
 def _balanced_distribution(
     rooms: list[Classroom],
     student_count: int,
 ) -> list[tuple[Classroom, int]] | None:
-    """Split students as evenly as possible without exceeding room capacities."""
+    """Split students as evenly as possible without exceeding room capacities.
+
+    The previous implementation placed students one-by-one through a heap. That
+    was correct, but with large classroom files and many generated variants it
+    repeated thousands of heap operations per option. This version computes the
+    same kind of balanced split in rounds, so it stays fast even when Auto
+    Variants asks for many blocks.
+    """
     selected: list[Classroom] = []
     total_capacity = 0
 
@@ -39,53 +52,73 @@ def _balanced_distribution(
     if total_capacity < student_count:
         return None
 
-    counts = [0] * len(selected)
-    heap = [(0, index) for index in range(len(selected))]
-    heapq.heapify(heap)
-
-    for _ in range(student_count):
-        while heap:
-            count, index = heapq.heappop(heap)
-            if count < selected[index].capacity:
-                break
-        else:
-            return None
-
-        counts[index] += 1
-        heapq.heappush(heap, (counts[index], index))
-
-    return list(zip(selected, counts))
+    return _balanced_distribution_for_selected_rooms(selected, student_count)
 
 
 def _balanced_distribution_for_selected_rooms(
     rooms: list[Classroom],
     student_count: int,
 ) -> list[tuple[Classroom, int]] | None:
-    """Split students across exactly the given rooms.
+    """Split students across the given rooms without exceeding capacity.
 
-    Unlike _balanced_distribution(), this helper does not pick a prefix of the
-    available room list. It is used for variant generation after a candidate
-    room combination has already been selected.
+    Rooms that receive zero students are omitted. This avoids producing duplicate
+    variants such as ``[Room A: 30]`` and ``[Room A: 30, Room B: 0]``.
     """
+    if student_count < 0:
+        return None
+
+    if student_count == 0:
+        return []
+
     if sum(room.capacity for room in rooms) < student_count:
         return None
 
     counts = [0] * len(rooms)
-    heap = [(0, index) for index in range(len(rooms))]
-    heapq.heapify(heap)
+    active = list(range(len(rooms)))
+    remaining = student_count
 
-    for _ in range(student_count):
-        while heap:
-            count, index = heapq.heappop(heap)
-            if count < rooms[index].capacity:
+    while remaining > 0 and active:
+        share, extra = divmod(remaining, len(active))
+        assigned_this_round = 0
+        next_active: list[int] = []
+
+        for pos, index in enumerate(active):
+            free_capacity = rooms[index].capacity - counts[index]
+            if free_capacity <= 0:
+                continue
+
+            desired = share + (1 if pos < extra else 0)
+            # When remaining < len(active), share is 0. The ``extra`` part still
+            # gives one student to the first ``remaining`` rooms.
+            if desired <= 0:
+                desired = 1
+
+            placed = min(free_capacity, desired)
+            counts[index] += placed
+            remaining -= placed
+            assigned_this_round += placed
+
+            if counts[index] < rooms[index].capacity:
+                next_active.append(index)
+
+            if remaining == 0:
+                # Keep deterministic order and exit as soon as all students are
+                # placed. Unused rooms will be filtered out below.
                 break
-        else:
+
+        if assigned_this_round == 0:
             return None
 
-        counts[index] += 1
-        heapq.heappush(heap, (counts[index], index))
+        active = next_active
 
-    return list(zip(rooms, counts))
+    if remaining != 0:
+        return None
+
+    return [
+        (room, placed)
+        for room, placed in zip(rooms, counts)
+        if placed > 0
+    ]
 
 
 def _distribution_key(distribution: list[tuple[Classroom, int]]) -> tuple:
@@ -93,48 +126,151 @@ def _distribution_key(distribution: list[tuple[Classroom, int]]) -> tuple:
     return tuple((room.room_id, placed) for room, placed in distribution)
 
 
+def _minimum_room_count(
+    available_rooms: list[Classroom],
+    student_count: int,
+) -> int | None:
+    """Return the fewest largest rooms that can contain ``student_count``."""
+    total = 0
+    for index, room in enumerate(available_rooms, start=1):
+        total += room.capacity
+        if total >= student_count:
+            return index
+    return None
+
+
+def _room_combinations_by_capacity(
+    available_rooms: list[Classroom],
+    size: int,
+    student_count: int,
+) -> Iterator[list[Classroom]]:
+    """Yield room combinations of a fixed size with capacity pruning.
+
+    The pruning logic depends on rooms being sorted by capacity in descending
+    order. Sort defensively here so the function remains correct even if a future
+    caller passes unsorted rooms.
+
+    ``itertools.combinations`` is unsafe here for large inputs because it still
+    walks every impossible prefix. With 1,000 classrooms, many sizes have a
+    huge combinatorial space. The recursive generator below checks whether the
+    best possible remaining rooms can still reach the required capacity; if not,
+    it cuts the whole branch before expanding it.
+    """
+    available_rooms = sorted(
+        available_rooms,
+        key=lambda room: room.capacity,
+        reverse=True,
+    )
+
+    room_count = len(available_rooms)
+    capacities = [room.capacity for room in available_rooms]
+    prefix_capacity = [0]
+    for capacity in capacities:
+        prefix_capacity.append(prefix_capacity[-1] + capacity)
+
+    def top_capacity_from(start: int, count: int) -> int:
+        if count <= 0:
+            return 0
+        # prefix_capacity has room_count + 1 items. Guard before indexing so
+        # prefix_capacity[start + count] is always within bounds.
+        if start + count > room_count:
+            return -1
+        return prefix_capacity[start + count] - prefix_capacity[start]
+
+    selected: list[Classroom] = []
+
+    def backtrack(start: int, capacity_sum: int) -> Iterator[list[Classroom]]:
+        remaining_slots = size - len(selected)
+
+        if remaining_slots == 0:
+            if capacity_sum >= student_count:
+                yield list(selected)
+            return
+
+        if room_count - start < remaining_slots:
+            return
+
+        # If even the largest possible remaining rooms cannot fit the exam,
+        # every branch below this point is impossible.
+        if capacity_sum + top_capacity_from(start, remaining_slots) < student_count:
+            return
+
+        last_start = room_count - remaining_slots
+        for index in range(start, last_start + 1):
+            max_after_pick = (
+                capacity_sum
+                + capacities[index]
+                + top_capacity_from(index + 1, remaining_slots - 1)
+            )
+            if max_after_pick < student_count:
+                # Rooms are capacity-sorted descending, so later indexes can only
+                # make this branch weaker.
+                break
+
+            selected.append(available_rooms[index])
+            yield from backtrack(index + 1, capacity_sum + capacities[index])
+            selected.pop()
+
+    yield from backtrack(0, 0)
+
+
 def _room_distribution_variants(
     available_rooms: list[Classroom],
     student_count: int,
     max_options: int | None,
-) -> list[list[tuple[Classroom, int]]]:
-    """Return possible room splits for one exam.
+) -> Iterator[list[tuple[Classroom, int]]]:
+    """Yield possible room splits for one exam lazily.
 
-    max_options=None means unlimited.  Auto Variants passes a small page limit
-    from the controller, so the UI can still load unlimited variants gradually.
     The first option intentionally matches the legacy behavior: choose rooms in
     sorted order until capacity is sufficient, then balance students across that
-    prefix. This keeps ClassroomAssigner.assign() backward-compatible while
-    assign_variants() can expose additional valid room combinations.
+    prefix. Additional options are generated one-by-one with capacity pruning;
+    the function never materialises all combinations for large classroom files.
     """
     if student_count == 0:
-        return []
+        return
 
     if max_options is not None and max_options <= 0:
-        return []
+        return
 
-    options: list[list[tuple[Classroom, int]]] = []
+    min_size = _minimum_room_count(available_rooms, student_count)
+    if min_size is None:
+        return
+
+    emitted = 0
     seen: set[tuple] = set()
 
     legacy = _balanced_distribution(available_rooms, student_count)
     if legacy is not None:
         key = _distribution_key(legacy)
-        options.append(legacy)
         seen.add(key)
+        emitted += 1
+        yield legacy
 
-    if max_options is not None and len(options) >= max_options:
-        return options
+        if max_options is not None and emitted >= max_options:
+            return
 
-    # Generate extra combinations in deterministic order. Smaller room-count
-    # combinations are tried before larger ones, and room order remains the
-    # capacity-descending order supplied by the caller.
-    for size in range(1, len(available_rooms) + 1):
-        for room_combo in combinations(available_rooms, size):
-            if sum(room.capacity for room in room_combo) < student_count:
-                continue
+    # If the exam needs a very large number of rooms, do not try to enumerate
+    # every possible exact room combination. The first greedy allocation above is
+    # enough for this extreme case and keeps the GUI responsive.
+    if min_size > MAX_ROOMS_PER_EXACT_COMBINATION:
+        return
 
+    # There is no value in assigning more rooms than students when zero-student
+    # rooms are filtered out. It only creates duplicates and wastes time.
+    max_size = min(
+        len(available_rooms),
+        student_count,
+        MAX_ROOMS_PER_EXACT_COMBINATION,
+    )
+
+    for size in range(min_size, max_size + 1):
+        for room_combo in _room_combinations_by_capacity(
+            available_rooms,
+            size,
+            student_count,
+        ):
             distribution = _balanced_distribution_for_selected_rooms(
-                list(room_combo),
+                room_combo,
                 student_count,
             )
             if distribution is None:
@@ -144,13 +280,12 @@ def _room_distribution_variants(
             if key in seen:
                 continue
 
-            options.append(distribution)
             seen.add(key)
+            emitted += 1
+            yield distribution
 
-            if max_options is not None and len(options) >= max_options:
-                return options
-
-    return options
+            if max_options is not None and emitted >= max_options:
+                return
 
 
 def _make_assignments(
@@ -178,8 +313,8 @@ class ClassroomAssigner:
     """Create room allocations for a generated date schedule.
 
     assign() keeps the old single-result behavior.
-    assign_variants() exposes up to a limited number of valid classroom/time-slot
-    allocations for the same date-only schedule.
+    assign_variants() exposes valid classroom/time-slot allocations for the same
+    date-only schedule without loading the whole variant space into memory.
     """
 
     @staticmethod
@@ -276,11 +411,16 @@ class ClassroomAssigner:
         """Yield valid classroom-allocation variants for one date schedule.
 
         Date generation still decides which exams are on which dates. This method
-        treats that result as a candidate and yields up to
-        max_options_per_schedule versions enriched with classroom assignments.
-        For each date, at most max_options_per_day room/slot allocations are
-        considered, so one busy day cannot explode the result count.
+        treats that result as a candidate and yields classroom-enriched variants
+        lazily. The caller can take one block, keep the iterator alive, and later
+        continue from the exact same point without recalculating earlier blocks.
         """
+        classrooms = sorted(
+            classrooms,
+            key=lambda classroom: classroom.capacity,
+            reverse=True,
+        )
+
         if max_options_per_day is not None and max_options_per_day <= 0:
             return
 
@@ -288,7 +428,7 @@ class ClassroomAssigner:
             return
 
         courses_by_id = {course.id: course for course in courses}
-        rooms = sorted(classrooms, key=lambda room: room.capacity, reverse=True)
+        rooms = classrooms
 
         collected = ClassroomAssigner._collect_exam_data(
             schedule,
@@ -316,53 +456,82 @@ class ClassroomAssigner:
             )
             return
 
-        per_date_options: list[
-            list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]
+        per_date_iterators: list[
+            Iterator[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]
         ] = []
         for exam_date in sorted(by_date):
-            day_options = ClassroomAssigner._day_assignment_options(
-                by_date[exam_date],
-                rooms,
-                slots,
-                proctor_config,
-                allow_unassigned,
-                max_options_per_day,
+            per_date_iterators.append(
+                ClassroomAssigner._day_assignment_options(
+                    by_date[exam_date],
+                    rooms,
+                    slots,
+                    proctor_config,
+                    allow_unassigned,
+                    max_options_per_day,
+                )
             )
 
-            # Spec 4.4: a date with no valid room allocation rejects the whole
-            # schedule, so there is nothing to combine.
-            if not day_options:
-                return
+        per_date_caches: list[
+            list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]
+        ] = [[] for _ in per_date_iterators]
 
-            per_date_options.append(day_options)
+        def get_day_option(day_index: int, option_index: int):
+            cache = per_date_caches[day_index]
+            iterator = per_date_iterators[day_index]
 
-        # Combine per-date options lazily with itertools.product. The previous
-        # implementation materialised the full cross-product (up to
-        # max_options_per_schedule) before yielding anything, so paged Auto
-        # Variants requests re-built every earlier combination on each page
-        # (O(n^2) work and unbounded memory). product() yields combinations one
-        # at a time in the same order, so the caller can islice through pages
-        # without forcing the whole result space into memory.
+            while len(cache) <= option_index:
+                try:
+                    cache.append(next(iterator))
+                except StopIteration:
+                    return None
+
+            return cache[option_index]
+
+        chosen: list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]] = []
         emitted = 0
-        for combo in product(*per_date_options):
-            merged_assignments: dict[str, list[ClassroomAssignment]] = {}
-            merged_unassigned: dict[str, int] = dict(initial_unassigned)
-            for day_assignments, day_unassigned in combo:
-                merged_assignments.update(day_assignments)
-                merged_unassigned.update(day_unassigned)
 
-            yield replace(
-                schedule,
-                classroom_assignments=merged_assignments,
-                unassigned_classroom_exams=merged_unassigned,
-            )
+        def combine(day_index: int) -> Iterator[Schedule]:
+            nonlocal emitted
 
-            emitted += 1
             if (
                 max_options_per_schedule is not None
                 and emitted >= max_options_per_schedule
             ):
                 return
+
+            if day_index >= len(per_date_iterators):
+                merged_assignments: dict[str, list[ClassroomAssignment]] = {}
+                merged_unassigned: dict[str, int] = dict(initial_unassigned)
+                for day_assignments, day_unassigned in chosen:
+                    merged_assignments.update(day_assignments)
+                    merged_unassigned.update(day_unassigned)
+
+                emitted += 1
+                yield replace(
+                    schedule,
+                    classroom_assignments=merged_assignments,
+                    unassigned_classroom_exams=merged_unassigned,
+                )
+                return
+
+            option_index = 0
+            while True:
+                if (
+                    max_options_per_schedule is not None
+                    and emitted >= max_options_per_schedule
+                ):
+                    return
+
+                option = get_day_option(day_index, option_index)
+                if option is None:
+                    return
+
+                chosen.append(option)
+                yield from combine(day_index + 1)
+                chosen.pop()
+                option_index += 1
+
+        yield from combine(0)
 
     @staticmethod
     def _day_assignment_options(
@@ -372,12 +541,18 @@ class ClassroomAssigner:
         proctor_config: ProctorConfig,
         allow_unassigned: bool,
         max_options: int | None,
-    ) -> list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]:
-        """Return valid room allocations for one date.
+    ) -> Iterator[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]:
+        """Yield valid room allocations for one date lazily.
 
-        max_options=None means unlimited options for that date.
+        ``max_options=None`` means unlimited options for that date, but the
+        generator still produces them one at a time. This is important for very
+        large classroom files: Auto Variants can stop after the current block
+        instead of forcing every classroom combination to be calculated.
         """
-        options: list[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]] = []
+        if max_options is not None and max_options <= 0:
+            return
+
+        emitted = 0
         used_rooms: dict[TimeSlot, set[str]] = {}
         result: dict[str, list[ClassroomAssignment]] = {}
         unassigned: dict[str, int] = {}
@@ -389,8 +564,10 @@ class ClassroomAssigner:
             reverse=True,
         )
 
-        def backtrack(index: int) -> None:
-            if max_options is not None and len(options) >= max_options:
+        def backtrack(index: int) -> Iterator[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]:
+            nonlocal emitted
+
+            if max_options is not None and emitted >= max_options:
                 return
 
             if index >= len(ordered):
@@ -398,14 +575,15 @@ class ClassroomAssigner:
                     course_id: list(assignments)
                     for course_id, assignments in result.items()
                 }
-                options.append((copied_result, dict(unassigned)))
+                emitted += 1
+                yield (copied_result, dict(unassigned))
                 return
 
             student_count, course_id, exam_date, offerings = ordered[index]
 
             if student_count == 0:
                 result[course_id] = []
-                backtrack(index + 1)
+                yield from backtrack(index + 1)
                 result.pop(course_id, None)
                 return
 
@@ -426,7 +604,7 @@ class ClassroomAssigner:
                 remaining_budget = (
                     None
                     if max_options is None
-                    else max_options - len(options)
+                    else max_options - emitted
                 )
                 distributions = _room_distribution_variants(
                     available,
@@ -448,23 +626,19 @@ class ClassroomAssigner:
                     used_for_slot.update(room_ids)
                     assigned_any_option = True
 
-                    backtrack(index + 1)
+                    yield from backtrack(index + 1)
 
                     used_for_slot.difference_update(room_ids)
                     result.pop(course_id, None)
 
-                    if max_options is not None and len(options) >= max_options:
-                        break
-
-                if max_options is not None and len(options) >= max_options:
-                    break
+                    if max_options is not None and emitted >= max_options:
+                        return
 
             if not assigned_any_option and allow_unassigned:
                 result[course_id] = []
                 unassigned[course_id] = student_count
-                backtrack(index + 1)
+                yield from backtrack(index + 1)
                 result.pop(course_id, None)
                 unassigned.pop(course_id, None)
 
-        backtrack(0)
-        return options
+        yield from backtrack(0)
