@@ -1,0 +1,25 @@
+=== FALL — Aleph ===
+29-01-2026
+  09:00
+    Operating Systems (10001)
+      Building 604 - Auditorium 101: 220/250 | Proctors: 11
+  13:00
+    Physics 1 (83102)
+      Building 604 - Auditorium 101: 150/250 | Proctors: 8
+01-02-2026
+  09:00
+    Calculus 1 (83112)
+      Building 604 - Auditorium 101: 140/250 | Proctors: 7
+
+=== FALL — Bet ===
+10-04-2026
+  09:00
+    Operating Systems (10001)
+      Building 604 - Auditorium 101: 220/250 | Proctors: 11
+  13:00
+    Physics 1 (83102)
+      Building 604 - Auditorium 101: 150/250 | Proctors: 8
+13-04-2026
+  09:00
+    Calculus 1 (83112)
+      Building 604 - Auditorium 101: 140/250 | Proctors: 7
