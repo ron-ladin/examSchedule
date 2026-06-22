@@ -72,7 +72,6 @@ def test_first_page_returns_without_explosion():
             slots,
             ProctorConfig(20),
             allow_unassigned=False,
-            max_options_per_day=None,            # exactly what the worker passes
             max_options_per_schedule=PAGE_SIZE + 1,  # first-page request
         )
         first_page = list(islice(variant_iter, 0, PAGE_SIZE))

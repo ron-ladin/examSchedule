@@ -99,7 +99,6 @@ def _apply_classroom_assignment(
                 slots,
                 proctor_config,
                 allow_unassigned=allow_unassigned,
-                max_options_per_day=1,
                 max_options_per_schedule=1,
             )
         else:

@@ -244,8 +244,10 @@ def _build_variant_iterator(
 
     Paging is driven by *consuming* this generator one page at a time (see
     _ResumableVariantPager), not by re-running it with a growing limit. The
-    O(2^R) per-date blowup is still contained by the assigner's per-day ceiling
-    (max_options_per_day=None is clamped internally).
+    assigner is lazy all the way down (room distributions, per-day allocations,
+    and the cross-date DFS are all generators), so there is no per-day cap and no
+    valid option is dropped — the first page returns without materialising the
+    full search space.
     """
     return ClassroomAssigner.assign_variants(
         schedule,
@@ -255,7 +257,6 @@ def _build_variant_iterator(
         time_slots,
         proctor_config,
         allow_unassigned=allow_unassigned,
-        max_options_per_day=None,
         max_options_per_schedule=None,
     )
 
