@@ -601,3 +601,30 @@ def test_stateful_variant_worker_continues_next_block_without_rebuild(monkeypatc
         _variant_signature(variant)
         for variant in first_batch
     }.isdisjoint({_variant_signature(variant) for variant in second_batch})
+
+
+def test_large_exam_that_requires_many_rooms_does_not_recurse_forever():
+    """Regression: 1,000 tiny rooms must not crash variant generation.
+
+    When an exam needs hundreds/thousands of rooms, exhaustive room-combination
+    enumeration is not useful for the UI and can hit Python's recursion limit.
+    The assigner should still return the first valid allocation safely.
+    """
+    rooms = [Classroom(f"Room {index:04d}", 1) for index in range(1000)]
+    course = _course("99999", 999)
+    schedule = Schedule(_period(), {"99999": date(2026, 1, 5)})
+
+    variants = list(
+        ClassroomAssigner.assign_variants(
+            schedule,
+            [course],
+            ["83101"],
+            rooms,
+            [TimeSlot(time(9, 0))],
+            ProctorConfig(20),
+            max_options_per_schedule=2,
+        )
+    )
+
+    assert len(variants) == 1
+    assert len(variants[0].classroom_assignments["99999"]) == 999
