@@ -228,6 +228,45 @@ def test_settings_rules_can_be_combined_and_numbers_accept_keyboard_input():
     dialog.close()
 
 
+def test_settings_changes_are_committed_only_when_save_is_clicked():
+    app = _get_qapp()
+    dialog = SettingsScreen(Settings(ThresholdSettings(), SortingConfig()))
+    settings_spy = QtTest.QSignalSpy(dialog.settings_changed)
+    sort_spy = QtTest.QSignalSpy(dialog.sort_order_changed)
+
+    toggle, spinbox = dialog._threshold_widgets[
+        Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS
+    ]
+    toggle.click()
+    spinbox.setValue(7)
+    dialog._sort_list.item(0).setCheckState(QtCore.Qt.CheckState.Checked)
+
+    dialog.reject()
+    app.processEvents()
+
+    assert len(settings_spy) == 0
+    assert len(sort_spy) == 0
+    assert toggle.isChecked() is False
+    assert spinbox.value() == 1
+    assert dialog._sort_list.item(0).checkState() == QtCore.Qt.CheckState.Unchecked
+
+    toggle.click()
+    spinbox.setValue(7)
+    dialog._sort_list.item(0).setCheckState(QtCore.Qt.CheckState.Checked)
+    dialog._on_accept()
+    app.processEvents()
+
+    assert len(settings_spy) == 1
+    assert len(sort_spy) == 1
+    saved = settings_spy[0][0]
+    saved_entry = saved.thresholds.for_criterion(
+        Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS
+    )
+    assert saved_entry.enabled is True
+    assert saved_entry.k == 7
+    assert len(saved.sorting.rules) == 1
+
+
 def test_results_panel_includes_standard_period_tabs_even_when_empty():
     """Results tabs should include Spring Bet and Summer periods even if no schedules exist."""
     app = _get_qapp()

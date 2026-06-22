@@ -396,8 +396,6 @@ class SettingsScreen(QDialog):
             if criterion not in seen:
                 self._add_sort_item(criterion, checked=False)
         self._sort_list.blockSignals(False)
-        self._sort_list.itemChanged.connect(self._on_sort_list_changed)
-        self._sort_list.model().rowsMoved.connect(self._on_sort_list_changed)
         layout.addWidget(self._sort_list)
         return widget
 
@@ -413,9 +411,6 @@ class SettingsScreen(QDialog):
             toggle.setEnabled(not is_running)
             spinbox.setEnabled(not is_running and toggle.isChecked())
 
-    def _on_sort_list_changed(self, *_args) -> None:
-        self.sort_order_changed.emit(self._build_sorting_config())
-
     def _on_accept(self) -> None:
         try:
             new_settings = self._build_settings()
@@ -423,8 +418,37 @@ class SettingsScreen(QDialog):
             _log.warning("SettingsScreen validation error: %s", exc)
             QMessageBox.warning(self, "Invalid Settings", str(exc))
             return
+        self._current = new_settings
         self.settings_changed.emit(new_settings)
+        self.sort_order_changed.emit(new_settings.sorting)
         self.accept()
+
+    def reject(self) -> None:
+        """Discard every unsaved edit before hiding the reusable dialog."""
+        self._restore_saved_settings()
+        super().reject()
+
+    def _restore_saved_settings(self) -> None:
+        for criterion, (toggle, spinbox) in self._threshold_widgets.items():
+            entry = self._current.thresholds.for_criterion(criterion)
+            enabled = entry.enabled if entry else False
+            value = entry.k if entry else CRITERION_MIN_K[criterion]
+            toggle.setChecked(enabled)
+            spinbox.setValue(value)
+            spinbox.setEnabled(enabled)
+
+        if self._sort_list is None:
+            return
+        self._sort_list.blockSignals(True)
+        self._sort_list.clear()
+        seen: set[SortCriterion] = set()
+        for rule in sorted(self._current.sorting.rules, key=lambda r: r.priority):
+            self._add_sort_item(rule.criterion, checked=True)
+            seen.add(rule.criterion)
+        for criterion in SortCriterion:
+            if criterion not in seen:
+                self._add_sort_item(criterion, checked=False)
+        self._sort_list.blockSignals(False)
 
     def _build_settings(self) -> Settings:
         return Settings(

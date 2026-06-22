@@ -587,7 +587,7 @@ class ConfigScreen(QWidget):
         self._settings_dialog.activateWindow()
 
     def _on_sort_order_changed(self, config: SortingConfig) -> None:
-        """Apply a live sort change and immediately re-render cached results."""
+        """Re-sort cached results after the settings dialog is saved."""
         try:
             resorted = self._controller.resort(config)
         except ValueError:
