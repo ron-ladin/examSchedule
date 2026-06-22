@@ -307,15 +307,230 @@ class _KindTaggedQueue:
         self._inner.put((self._kind, item))
 
 
+def _course_signature(course: Course) -> tuple:
+    """Stable course data key for reusing a variant cursor safely."""
+    offerings_key = tuple(
+        (
+            offering.program_id,
+            offering.year,
+            offering.semester,
+            offering.requirement,
+            offering.student_count,
+        )
+        for offering in course.offerings
+    )
+    return (course.id, course.evaluation_type, offerings_key)
+
+
+def _variant_request_key(
+    period_key: str,
+    schedule: Schedule,
+    courses: list[Course],
+    selected_programs: list[str],
+    settings: Settings,
+    classrooms: list[Classroom],
+    time_slots: list[TimeSlot],
+    proctor_config: ProctorConfig,
+    allow_unassigned_classrooms: bool,
+) -> tuple:
+    """Return a key identifying one classroom-variant stream.
+
+    The persistent worker keeps the generator for this key alive. As long as the
+    next request has the same key and the expected offset, the worker continues
+    exactly where the previous block stopped instead of rebuilding and skipping
+    all earlier classroom combinations again.
+    """
+    sorting_key = tuple(
+        (rule.priority, rule.criterion.value)
+        for rule in settings.sorting.rules
+    )
+    return (
+        period_key,
+        tuple(sorted(schedule.assignments.items())),
+        tuple(sorted(_course_signature(course) for course in courses)),
+        tuple(selected_programs),
+        tuple((room.room_id, room.capacity) for room in classrooms),
+        tuple(slot.time for slot in time_slots),
+        proctor_config.students_per_proctor,
+        allow_unassigned_classrooms,
+        sorting_key,
+    )
+
+
+def _build_variant_iterator(
+    schedule: Schedule,
+    courses: list[Course],
+    selected_programs: list[str],
+    classrooms: list[Classroom],
+    time_slots: list[TimeSlot],
+    proctor_config: ProctorConfig,
+    allow_unassigned_classrooms: bool,
+) -> Iterator[Schedule]:
+    """Create an unlimited lazy classroom-variant iterator for one date block."""
+    return ClassroomAssigner.assign_variants(
+        schedule,
+        courses,
+        selected_programs,
+        classrooms,
+        time_slots,
+        proctor_config,
+        allow_unassigned=allow_unassigned_classrooms,
+        max_options_per_day=None,
+        max_options_per_schedule=None,
+    )
+
+
+def _skip_variants(iterator: Iterator[Schedule], offset: int) -> int:
+    """Advance ``iterator`` by up to ``offset`` items and return skipped count."""
+    skipped = 0
+    while skipped < offset:
+        try:
+            next(iterator)
+        except StopIteration:
+            break
+        skipped += 1
+    return skipped
+
+
+def _take_variant_page(state: dict, cap: int | None) -> tuple[list[Schedule], bool]:
+    """Take the next page from a persistent variant cursor.
+
+    One look-ahead item is kept in ``state['overflow']`` to answer the
+    "has more" question without dropping that item from the next block.
+    """
+    iterator: Iterator[Schedule] = state["iterator"]
+    overflow: list[Schedule] = state["overflow"]
+
+    if cap is None:
+        batch = list(overflow)
+        overflow.clear()
+        batch.extend(iterator)
+        state["emitted"] += len(batch)
+        return batch, False
+
+    batch: list[Schedule] = []
+    while len(batch) < cap:
+        if overflow:
+            batch.append(overflow.pop(0))
+            continue
+
+        try:
+            batch.append(next(iterator))
+        except StopIteration:
+            state["emitted"] += len(batch)
+            return batch, False
+
+    try:
+        overflow.append(next(iterator))
+        still_more = True
+    except StopIteration:
+        still_more = False
+
+    state["emitted"] += len(batch)
+    return batch, still_more
+
+
+def _run_classroom_variants_from_state(
+    result_queue,
+    variant_states: dict[tuple, dict],
+    period_key: str,
+    schedule: Schedule,
+    courses: list[Course],
+    selected_programs: list[str],
+    settings: Settings | None = None,
+    cap: int | None = None,
+    offset: int = 0,
+    classrooms: list[Classroom] | None = None,
+    time_slots: list[TimeSlot] | None = None,
+    proctor_config: ProctorConfig | None = None,
+    allow_unassigned_classrooms: bool = False,
+) -> None:
+    """Stateful Auto Variants implementation used by the persistent worker."""
+    try:
+        active_settings = settings or Settings(
+            thresholds=ThresholdSettings(),
+            sorting=SortingConfig(),
+        )
+
+        if not classrooms or not time_slots or proctor_config is None:
+            result_queue.put(
+                GenerationResult.ok(
+                    {period_key: []}, {c.id: c for c in courses}, set()
+                )
+            )
+            return
+
+        request_key = _variant_request_key(
+            period_key,
+            schedule,
+            courses,
+            selected_programs,
+            active_settings,
+            classrooms,
+            time_slots,
+            proctor_config,
+            allow_unassigned_classrooms,
+        )
+
+        state = variant_states.get(request_key)
+        if state is None or state.get("emitted") != offset:
+            iterator = _build_variant_iterator(
+                schedule,
+                courses,
+                selected_programs,
+                classrooms,
+                time_slots,
+                proctor_config,
+                allow_unassigned_classrooms,
+            )
+            skipped = _skip_variants(iterator, offset)
+            state = {
+                "iterator": iterator,
+                "overflow": [],
+                "emitted": skipped,
+            }
+            variant_states.clear()
+            variant_states[request_key] = state
+
+            if skipped < offset:
+                courses_by_id = {course.id: course for course in courses}
+                result_queue.put(
+                    GenerationResult.ok({period_key: []}, courses_by_id, set())
+                )
+                return
+
+        batch, still_more = _take_variant_page(state, cap)
+
+        courses_by_id = {course.id: course for course in courses}
+        if active_settings.sorting.rules:
+            batch = SortingEngine.sort(
+                batch,
+                courses,
+                active_settings.sorting,
+                selected_programs,
+            )
+
+        result_queue.put(
+            GenerationResult.ok(
+                {period_key: batch},
+                courses_by_id,
+                {period_key} if still_more else set(),
+            )
+        )
+    except Exception as exc:
+        logger.exception("Stateful classroom variant process failed")
+        result_queue.put(GenerationResult.failure(str(exc)))
+
+
 def _run_load_more_worker(task_queue, result_queue) -> None:
     """Persistent worker process for ResultsPanel Load More / Auto Load tasks.
 
-    The old implementation opened a fresh multiprocessing.Process for every
-    Load More / Auto Dates / Auto Variants batch. On Windows, each new process
-    can briefly flash a small console window. This worker is started once per
-    period and then reused for subsequent batches, so Auto Load does not create
-    a new Python process for every page.
+    The worker keeps classroom-variant cursors alive between Auto Variants
+    batches. That means block 2 continues from block 1 instead of recalculating
+    all classroom combinations from the beginning and skipping the old results.
     """
+    variant_states: dict[tuple, dict] = {}
+
     while True:
         task = task_queue.get()
 
@@ -331,12 +546,19 @@ def _run_load_more_worker(task_queue, result_queue) -> None:
             continue
 
         if task_type == "date_options":
+            # A different date-options batch changes the visible date block. Drop
+            # variant cursors so stale classroom blocks cannot be reused after the
+            # user moves to another date schedule.
+            variant_states.clear()
             _run_generation_process(
                 _KindTaggedQueue(result_queue, "date_options"), *args, **kwargs
             )
         elif task_type == "variants":
-            _run_classroom_variants_process(
-                _KindTaggedQueue(result_queue, "variants"), *args, **kwargs
+            _run_classroom_variants_from_state(
+                _KindTaggedQueue(result_queue, "variants"),
+                variant_states,
+                *args,
+                **kwargs,
             )
         else:
             result_queue.put(
