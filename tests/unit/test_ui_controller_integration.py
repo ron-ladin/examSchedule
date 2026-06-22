@@ -620,6 +620,7 @@ def test_config_screen_period_load_replace_then_update(tmp_path, monkeypatch):
     screen._load_dates()
     assert [p.get_key() for p in controller.get_exam_periods()] == ["FALL - Aleph"]
     assert "periods_first.txt" in screen._files_card.dates_label.text()
+    assert "1 exam period(s) loaded" in screen._status_label.text()
 
     # Second Replace swaps to a different semester/moed.
     screen._load_dates()

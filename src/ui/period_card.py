@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtWidgets import QLabel, QLineEdit, QPushButton, QTableWidget
+from PyQt6.QtWidgets import QLabel, QLineEdit, QPushButton, QTableWidget, QWidget
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,7 @@ class PeriodCardWidgets:
     next_date_btn: QPushButton
 
     # Variant-level navigation: same dates, different Feature 4 allocations.
+    variant_navigation: QWidget
     counter_label: QLabel
     variant_jump_input: QLineEdit
     cal_table: QTableWidget

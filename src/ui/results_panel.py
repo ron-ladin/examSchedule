@@ -255,6 +255,13 @@ class _ResultsPanel(QWidget):
                 _display_period_key(period_key),
             )
 
+        has_proctor_report = any(
+            bool(getattr(schedule, "classroom_assignments", None))
+            for schedules in merged.values()
+            for schedule in schedules
+        )
+        self._proctor_btn.setVisible(has_proctor_report)
+
         self._update_summary()
         self._placeholder.setVisible(False)
         self._content.setVisible(True)
@@ -629,6 +636,9 @@ class _ResultsPanel(QWidget):
             self._lm.stop_auto_load(period_key, refresh=False)
 
         has_classroom_variants = self._has_classroom_feature_results(period_key)
+        card.variant_navigation.setVisible(
+            not self._is_imported_schedule and has_classroom_variants
+        )
         card.auto_date_btn.setVisible(
             not self._is_imported_schedule
             and (has_more or active_mode == _AUTO_MODE_DATES)

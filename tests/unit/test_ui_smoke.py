@@ -336,6 +336,55 @@ def test_results_navigation_buttons_repeat_while_held():
     panel.close()
 
 
+def test_results_hide_classroom_and_proctor_ui_when_feature4_was_not_used():
+    app = _get_qapp()
+    period = ExamPeriod(
+        "FALL",
+        "Aleph",
+        [(date(2026, 1, 5), date(2026, 1, 5))],
+    )
+    offering = CourseOffering("83101", 1, "FALL", "Obligatory", 30)
+    course = Course("11111", "Calculus", "Dr. Cohen", "Exam", [offering])
+    schedule = Schedule(period, {"11111": date(2026, 1, 5)})
+
+    panel = _ResultsPanel(DesktopController())
+    panel.load(
+        {"FALL - Aleph": [schedule]},
+        {"11111": course},
+        {"83101": "#7C3AED"},
+        set(),
+    )
+    panel.show()
+    app.processEvents()
+
+    card = panel._cards["FALL - Aleph"]
+    assert panel._proctor_btn.isVisible() is False
+    assert card.variant_navigation.isVisible() is False
+    assert card.auto_variant_btn.isVisible() is False
+
+    dialog = ExamDetailDialog(
+        date(2026, 1, 5),
+        ["11111"],
+        {"11111": course},
+        {"83101": "#7C3AED"},
+        {"11111": []},
+        all_classroom_assignments={"11111": []},
+    )
+    table = dialog.findChild(QtWidgets.QTableWidget)
+    assert table.columnCount() == 4
+    assert [
+        table.horizontalHeaderItem(column).text()
+        for column in range(table.columnCount())
+    ] == ["Course #", "Course Name", "Requirement", "Degree"]
+    assert table.item(0, 0).text() == "11111"
+    assert table.item(0, 1).text() == "Calculus"
+    assert table.item(0, 2).text() == "Obligatory"
+    assert table.item(0, 3).text().startswith("83101 -")
+
+    dialog.close()
+    panel.close()
+
+
 def test_results_panel_starts_truncated_period_loading_automatically(monkeypatch):
     app = _get_qapp()
     panel = _ResultsPanel(DesktopController())
@@ -487,6 +536,8 @@ def test_feature4_room_and_slot_are_visible_in_calendar_and_detail_dialog():
     panel.show()
     app.processEvents()
 
+    assert panel._proctor_btn.isVisible() is True
+    assert panel._cards["FALL - Aleph"].variant_navigation.isVisible() is True
     calendar_text = panel._cards["FALL - Aleph"].cal_table.item(0, 1).text()
     assert "09:00" in calendar_text
     assert "Room 101 (30/40)" in calendar_text

@@ -60,6 +60,20 @@ _COLUMN_WEIGHTS = {
     10: 0.06,
 }
 
+_BASIC_COLUMN_WIDTHS = {
+    0: 90,   # Course #
+    1: 220,  # Course Name
+    2: 140,  # Requirement
+    3: 360,  # Degree
+}
+
+_BASIC_COLUMN_WEIGHTS = {
+    0: 0.10,
+    1: 0.28,
+    2: 0.18,
+    3: 0.44,
+}
+
 _NORMAL_MAX_VISIBLE_ROWS = 6
 
 
@@ -88,6 +102,10 @@ class ExamDetailDialog(QDialog):
             all_classroom_assignments or classroom_assignments or {}
         )
         self._all_unassigned_exams = all_unassigned_exams or unassigned_exams or {}
+        self._show_feature4_columns = bool(
+            any(self._all_classroom_assignments.values())
+            or self._all_unassigned_exams
+        )
         self._show_all_btn: QPushButton | None = None
 
         self.setWindowTitle("Exam Details")
@@ -196,16 +214,14 @@ class ExamDetailDialog(QDialog):
 
         return header
 
-    @staticmethod
-    def _create_table() -> QTableWidget:
+    def _create_table(self) -> QTableWidget:
         table = QTableWidget()
         table.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Fixed,
         )
-        table.setColumnCount(11)
-        table.setHorizontalHeaderLabels(
-            [
+        if self._show_feature4_columns:
+            headers = [
                 "Course #",
                 "Course Name",
                 "Time Slot",
@@ -218,7 +234,11 @@ class ExamDetailDialog(QDialog):
                 "Degree",
                 "Proctors",
             ]
-        )
+        else:
+            headers = ["Course #", "Course Name", "Requirement", "Degree"]
+
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
 
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -277,8 +297,25 @@ class ExamDetailDialog(QDialog):
         if not hasattr(self, "_table"):
             return
 
-        for col, width in _COLUMN_WIDTHS.items():
+        for col, width in self._active_column_widths().items():
             self._table.setColumnWidth(col, width)
+
+    def _active_column_widths(self) -> dict[int, int]:
+        return (
+            _COLUMN_WIDTHS
+            if self._show_feature4_columns
+            else _BASIC_COLUMN_WIDTHS
+        )
+
+    def _active_column_weights(self) -> dict[int, float]:
+        return (
+            _COLUMN_WEIGHTS
+            if self._show_feature4_columns
+            else _BASIC_COLUMN_WEIGHTS
+        )
+
+    def _visible_column_width_total(self) -> int:
+        return sum(self._active_column_widths().values())
 
     def _apply_responsive_column_widths(self) -> None:
         """
@@ -291,29 +328,32 @@ class ExamDetailDialog(QDialog):
 
         viewport_width = max(
             self._table.viewport().width() - 6,
-            sum(_COLUMN_WIDTHS.values()),
+            self._visible_column_width_total(),
         )
-        min_total = sum(_COLUMN_WIDTHS.values())
+        min_total = self._visible_column_width_total()
 
         if viewport_width <= min_total:
             self._apply_normal_column_widths()
             return
 
         extra = viewport_width - min_total
-        weight_total = sum(_COLUMN_WEIGHTS.values())
+        widths_config = self._active_column_widths()
+        weights_config = self._active_column_weights()
+        weight_total = sum(weights_config.values())
 
         widths = {
             col: int(
-                _COLUMN_WIDTHS[col]
-                + extra * (_COLUMN_WEIGHTS[col] / weight_total)
+                widths_config[col]
+                + extra * (weights_config[col] / weight_total)
             )
-            for col in _COLUMN_WIDTHS
+            for col in widths_config
         }
 
         diff = viewport_width - sum(widths.values())
-        widths[9] = max(80, widths[9] + diff)
+        stretch_column = 9 if self._show_feature4_columns else 3
+        widths[stretch_column] = max(80, widths[stretch_column] + diff)
 
-        for col in range(11):
+        for col in range(self._table.columnCount()):
             self._table.setColumnWidth(col, widths[col])
 
     def _normal_table_height(self, row_count: int) -> int:
@@ -338,7 +378,7 @@ class ExamDetailDialog(QDialog):
             available_width = available.width()
             available_height = available.height()
 
-        table_width = sum(_COLUMN_WIDTHS.values())
+        table_width = self._visible_column_width_total()
         desired_width = table_width + 70
         max_width = int(available_width * 0.92)
         width = min(desired_width, max_width)
@@ -366,8 +406,7 @@ class ExamDetailDialog(QDialog):
 
         return item
 
-    @staticmethod
-    def _fill_table(table: QTableWidget, rows: list) -> None:
+    def _fill_table(self, table: QTableWidget, rows: list) -> None:
         table.setRowCount(len(rows))
 
         bold_font = QFont()
@@ -387,6 +426,25 @@ class ExamDetailDialog(QDialog):
                 affected,
                 proctors,
             ) = row
+
+            if not self._show_feature4_columns:
+                id_item = self._make_item(course_id, "#1D4ED8")
+                id_item.setFont(bold_font)
+                table.setItem(row_idx, 0, id_item)
+                table.setItem(row_idx, 1, self._make_item(name))
+
+                req_item = self._make_item(req)
+                if "Obligatory" in req:
+                    req_item.setForeground(QColor("#1D4ED8"))
+                elif "Elective" in req:
+                    req_item.setForeground(QColor("#7C3AED"))
+                table.setItem(row_idx, 2, req_item)
+
+                affected_item = self._make_item(affected)
+                if affected == "Not affected":
+                    affected_item.setForeground(QColor("#94A3B8"))
+                table.setItem(row_idx, 3, affected_item)
+                continue
 
             id_item = ExamDetailDialog._make_item(course_id, "#1D4ED8")
             id_item.setFont(bold_font)
