@@ -16,6 +16,7 @@ from src.domain.time_slot import TimeSlot
 from src.engine.classroom_assigner import (
     ClassroomAssigner,
     _balanced_distribution,
+    _room_combinations_by_capacity,
 )
 
 
@@ -604,12 +605,7 @@ def test_stateful_variant_worker_continues_next_block_without_rebuild(monkeypatc
 
 
 def test_large_exam_that_requires_many_rooms_does_not_recurse_forever():
-    """Regression: 1,000 tiny rooms must not crash variant generation.
-
-    When an exam needs hundreds/thousands of rooms, exhaustive room-combination
-    enumeration is not useful for the UI and can hit Python's recursion limit.
-    The assigner should still return the first valid allocation safely.
-    """
+    """Regression: 1,000 tiny rooms must not crash variant generation."""
     rooms = [Classroom(f"Room {index:04d}", 1) for index in range(1000)]
     course = _course("99999", 999)
     schedule = Schedule(_period(), {"99999": date(2026, 1, 5)})
@@ -628,3 +624,76 @@ def test_large_exam_that_requires_many_rooms_does_not_recurse_forever():
 
     assert len(variants) == 1
     assert len(variants[0].classroom_assignments["99999"]) == 999
+
+
+def test_room_combinations_sort_rooms_defensively_for_capacity_pruning():
+    """Unsorted rooms must not break capacity-pruned combination generation."""
+    rooms = [
+        Classroom("Small", 10),
+        Classroom("Large", 90),
+        Classroom("Medium", 20),
+    ]
+
+    combinations = list(
+        _room_combinations_by_capacity(
+            rooms,
+            size=2,
+            student_count=100,
+        )
+    )
+
+    assert combinations
+    assert any(
+        {room.room_id for room in combo} == {"Large", "Small"}
+        for combo in combinations
+    )
+
+
+def test_stateful_variant_worker_logs_and_self_heals_stale_offset(caplog):
+    """A stale pagination offset must rebuild safely instead of crashing."""
+    import logging
+    import src.engine.generation_workers as generation_workers
+
+    course = _course("11111", 2)
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+    rooms = [Classroom(f"Room {index}", 1) for index in range(10)]
+    states: dict[tuple, dict] = {}
+
+    first_queue = Queue()
+    generation_workers._run_classroom_variants_from_state(
+        first_queue,
+        states,
+        "FALL - Aleph",
+        schedule,
+        [course],
+        ["83101"],
+        cap=3,
+        offset=0,
+        classrooms=rooms,
+        time_slots=[TimeSlot(time(9, 0))],
+        proctor_config=ProctorConfig(20),
+    )
+    first = first_queue.get_nowait()
+    assert first.success is True
+
+    caplog.set_level(logging.WARNING, logger="src.engine.generation_workers")
+
+    second_queue = Queue()
+    generation_workers._run_classroom_variants_from_state(
+        second_queue,
+        states,
+        "FALL - Aleph",
+        schedule,
+        [course],
+        ["83101"],
+        cap=2,
+        offset=4,
+        classrooms=rooms,
+        time_slots=[TimeSlot(time(9, 0))],
+        proctor_config=ProctorConfig(20),
+    )
+    second = second_queue.get_nowait()
+
+    assert second.success is True
+    assert "Stale classroom variant pagination state detected" in caplog.text
+    assert second.schedules_by_period["FALL - Aleph"]

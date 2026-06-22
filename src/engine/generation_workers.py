@@ -473,6 +473,15 @@ def _run_classroom_variants_from_state(
         )
 
         state = variant_states.get(request_key)
+        if state is not None and state.get("emitted") != offset:
+            logger.warning(
+                "Stale classroom variant pagination state detected for %s: "
+                "expected offset %s, received offset %s. Rebuilding iterator.",
+                period_key,
+                state.get("emitted"),
+                offset,
+            )
+
         if state is None or state.get("emitted") != offset:
             iterator = _build_variant_iterator(
                 schedule,

@@ -21,12 +21,10 @@ from src.domain.time_slot import TimeSlot
 MAX_CLASSROOM_OPTIONS_PER_DAY: int | None = None
 MAX_CLASSROOM_OPTIONS_PER_SCHEDULE: int | None = None
 
-# Safety guard for extreme classroom files.
-# Enumerating all exact combinations is only practical while the number of rooms
-# used by one exam is reasonably small. For example, choosing 999 rooms out of
-# 1,000 is both useless for the UI and unsafe for a recursive combination
-# generator. In those cases we still yield the deterministic first/greedy
-# allocation, but we do not try to enumerate every near-identical alternative.
+# Safety guard for extreme classroom files. If an exam needs more rooms than
+# this threshold, return the first valid greedy allocation but do not enumerate
+# additional exact room-combination variants. That prevents UI freezes and deep
+# recursion for cases such as 1,000 tiny rooms and one very large exam.
 MAX_ROOMS_PER_EXACT_COMBINATION = 64
 
 
@@ -90,6 +88,8 @@ def _balanced_distribution_for_selected_rooms(
                 continue
 
             desired = share + (1 if pos < extra else 0)
+            # When remaining < len(active), share is 0. The ``extra`` part still
+            # gives one student to the first ``remaining`` rooms.
             if desired <= 0:
                 desired = 1
 
@@ -102,6 +102,8 @@ def _balanced_distribution_for_selected_rooms(
                 next_active.append(index)
 
             if remaining == 0:
+                # Keep deterministic order and exit as soon as all students are
+                # placed. Unused rooms will be filtered out below.
                 break
 
         if assigned_this_round == 0:
@@ -144,15 +146,24 @@ def _room_combinations_by_capacity(
 ) -> Iterator[list[Classroom]]:
     """Yield room combinations of a fixed size with capacity pruning.
 
+    The pruning logic depends on rooms being sorted by capacity in descending
+    order. Sort defensively here so the function remains correct even if a future
+    caller passes unsorted rooms.
+
     ``itertools.combinations`` is unsafe here for large inputs because it still
     walks every impossible prefix. With 1,000 classrooms, many sizes have a
     huge combinatorial space. The recursive generator below checks whether the
     best possible remaining rooms can still reach the required capacity; if not,
     it cuts the whole branch before expanding it.
     """
+    available_rooms = sorted(
+        available_rooms,
+        key=lambda room: room.capacity,
+        reverse=True,
+    )
+
     room_count = len(available_rooms)
     capacities = [room.capacity for room in available_rooms]
-
     prefix_capacity = [0]
     for capacity in capacities:
         prefix_capacity.append(prefix_capacity[-1] + capacity)
@@ -236,13 +247,14 @@ def _room_distribution_variants(
         if max_options is not None and emitted >= max_options:
             return
 
-    # Safety guard:
     # If the exam needs a very large number of rooms, do not try to enumerate
-    # every possible room combination. That can freeze the UI or hit recursion
-    # depth. The first greedy allocation above is enough for this extreme case.
+    # every possible exact room combination. The first greedy allocation above is
+    # enough for this extreme case and keeps the GUI responsive.
     if min_size > MAX_ROOMS_PER_EXACT_COMBINATION:
         return
 
+    # There is no value in assigning more rooms than students when zero-student
+    # rooms are filtered out. It only creates duplicates and wastes time.
     max_size = min(
         len(available_rooms),
         student_count,
@@ -315,12 +327,14 @@ class ClassroomAssigner:
         Returns (exam_data, unassigned) where exam_data is a list of
         (student_count, course_id, exam_date, offerings) for the exams that need
         rooms and unassigned maps unknown courses to 0. Returns None when an
-        unknown course must reject the schedule. Raises ValueError on a relevant
-        exam missing its StudentCount.
+        unknown course must reject the schedule (spec 4.4). Raises ValueError on
+        a relevant exam missing its StudentCount (spec 4.3).
+
+        Builds its own unassigned dict rather than mutating a caller-supplied one
+        so a None reject leaves no partial state behind (immutability rule).
         """
         exam_data: list[tuple] = []
         unassigned: dict[str, int] = {}
-
         for course_id, exam_date in schedule.assignments.items():
             course = courses_by_id.get(course_id)
             if course is None:
@@ -329,6 +343,8 @@ class ClassroomAssigner:
                     continue
                 return None
 
+            # Spec §4.4: only "Exam" evaluation types are assigned to rooms.
+            # Projects, Attendance, etc. keep their date but get no room.
             if not course.has_exam():
                 continue
 
@@ -337,6 +353,9 @@ class ClassroomAssigner:
                 schedule.period.semester,
             )
 
+            # Spec §4.3: a relevant Exam offering MUST carry a StudentCount.
+            # Silently treating a missing count as zero would hide invalid input
+            # and could assign no room to a real exam. Fail clearly instead.
             missing = [o for o in offerings if o.student_count is None]
             if missing:
                 raise ValueError(
@@ -347,7 +366,6 @@ class ClassroomAssigner:
 
             student_count = sum(offering.student_count for offering in offerings)
             exam_data.append((student_count, course_id, exam_date, offerings))
-
         return exam_data, unassigned
 
     @staticmethod
@@ -395,6 +413,12 @@ class ClassroomAssigner:
         lazily. The caller can take one block, keep the iterator alive, and later
         continue from the exact same point without recalculating earlier blocks.
         """
+        classrooms = sorted(
+            classrooms,
+            key=lambda classroom: classroom.capacity,
+            reverse=True,
+        )
+
         if max_options_per_day is not None and max_options_per_day <= 0:
             return
 
@@ -402,7 +426,7 @@ class ClassroomAssigner:
             return
 
         courses_by_id = {course.id: course for course in courses}
-        rooms = sorted(classrooms, key=lambda room: room.capacity, reverse=True)
+        rooms = classrooms
 
         collected = ClassroomAssigner._collect_exam_data(
             schedule,
@@ -420,6 +444,8 @@ class ClassroomAssigner:
             _, _, exam_date, _ = item
             by_date.setdefault(exam_date, []).append(item)
 
+        # No exam courses to assign: keep the date schedule valid and unchanged
+        # except for possible unknown-course unassigned markers.
         if not by_date:
             yield replace(
                 schedule,
@@ -431,7 +457,6 @@ class ClassroomAssigner:
         per_date_iterators: list[
             Iterator[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]
         ] = []
-
         for exam_date in sorted(by_date):
             per_date_iterators.append(
                 ClassroomAssigner._day_assignment_options(
@@ -475,7 +500,6 @@ class ClassroomAssigner:
             if day_index >= len(per_date_iterators):
                 merged_assignments: dict[str, list[ClassroomAssignment]] = {}
                 merged_unassigned: dict[str, int] = dict(initial_unassigned)
-
                 for day_assignments, day_unassigned in chosen:
                     merged_assignments.update(day_assignments)
                     merged_unassigned.update(day_unassigned)
@@ -531,15 +555,14 @@ class ClassroomAssigner:
         result: dict[str, list[ClassroomAssignment]] = {}
         unassigned: dict[str, int] = {}
 
+        # Place larger exams first to reduce avoidable assignment failures.
         ordered = sorted(
             exam_data,
             key=lambda item: (item[0], item[1]),
             reverse=True,
         )
 
-        def backtrack(
-            index: int,
-        ) -> Iterator[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]:
+        def backtrack(index: int) -> Iterator[tuple[dict[str, list[ClassroomAssignment]], dict[str, int]]]:
             nonlocal emitted
 
             if max_options is not None and emitted >= max_options:
@@ -567,7 +590,6 @@ class ClassroomAssigner:
 
             for slot in slots:
                 used_for_slot = used_rooms.setdefault(slot, set())
-
                 available = [
                     room
                     for room in rooms
@@ -582,7 +604,6 @@ class ClassroomAssigner:
                     if max_options is None
                     else max_options - emitted
                 )
-
                 distributions = _room_distribution_variants(
                     available,
                     student_count,
@@ -597,11 +618,7 @@ class ClassroomAssigner:
                         exam_date,
                         proctor_config,
                     )
-
-                    room_ids = {
-                        assignment.room.room_id
-                        for assignment in assignments
-                    }
+                    room_ids = {assignment.room.room_id for assignment in assignments}
 
                     result[course_id] = assignments
                     used_for_slot.update(room_ids)
