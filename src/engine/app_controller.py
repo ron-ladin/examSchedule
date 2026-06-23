@@ -39,8 +39,6 @@ from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
-from src.domain.sorting import SortingConfig
-from src.domain.sorting_engine import SortingEngine
 from src.domain.threshold import ThresholdSettings
 from src.domain.time_slot import TimeSlot
 from src.engine.classroom_assigner import ClassroomAssigner
@@ -124,7 +122,6 @@ class AppController:
         selected_programs: list[str],
         threshold_filter: IThresholdFilter | None = None,
         threshold_settings: ThresholdSettings | None = None,
-        sorting_config: SortingConfig | None = None,
         classrooms: list[Classroom] | None = None,
         time_slots: list[TimeSlot] | None = None,
         proctor_config: ProctorConfig | None = None,
@@ -137,7 +134,6 @@ class AppController:
         self._selected_programs = selected_programs
         self._threshold_filter = threshold_filter
         self._threshold_settings = threshold_settings
-        self._sorting_config = sorting_config
         self._classrooms = classrooms or []
         self._time_slots = time_slots or []
         self._proctor_config = proctor_config
@@ -206,16 +202,6 @@ class AppController:
                     self._proctor_config,
                     self._allow_unassigned_classrooms,
                     self._classroom_variant_mode,
-                )
-
-            if self._sorting_config and self._sorting_config.rules:
-                schedule_iter = iter(
-                    SortingEngine.sort(
-                        list(schedule_iter),
-                        relevant_courses,
-                        self._sorting_config,
-                        self._selected_programs,
-                    )
                 )
 
             schedules_by_period[period_key] = schedule_iter

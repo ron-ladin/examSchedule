@@ -21,7 +21,6 @@ Notes:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List
 
 
 class SortCriterion(Enum):
@@ -35,7 +34,7 @@ class SortCriterion(Enum):
 
 
 # Lowercased sort-criterion token -> SortCriterion, for case-insensitive parsing.
-SORT_CRITERION_ALIASES: Dict[str, SortCriterion] = {
+SORT_CRITERION_ALIASES: dict[str, SortCriterion] = {
     criterion.value.lower(): criterion for criterion in SortCriterion
 }
 
@@ -64,7 +63,7 @@ class SortingConfig:
 
     rules: tuple[SortRule, ...] = ()
 
-    def criteria_in_order(self) -> List[SortCriterion]:
+    def criteria_in_order(self) -> list[SortCriterion]:
         """Return the sort criteria from primary to least significant."""
         ordered = sorted(self.rules, key=lambda rule: rule.priority)
         return [rule.criterion for rule in ordered]

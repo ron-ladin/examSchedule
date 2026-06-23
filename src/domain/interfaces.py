@@ -5,7 +5,6 @@ Abstract contracts for domain services.
 """
 
 from abc import ABC, abstractmethod
-from typing import List
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule
@@ -19,8 +18,8 @@ class IThresholdFilter(ABC):
     @abstractmethod
     def is_valid(
         schedule: Schedule,
-        courses: List[Course],
+        courses: list[Course],
         settings: ThresholdSettings,
-        selected_programs: List[str] | None = None,
+        selected_programs: list[str] | None = None,
     ) -> bool:
         """Return True if the schedule satisfies all enabled threshold criteria."""

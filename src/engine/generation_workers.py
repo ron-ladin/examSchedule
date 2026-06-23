@@ -393,7 +393,9 @@ def _skip_variants(iterator: Iterator[Schedule], offset: int) -> int:
     return skipped
 
 
-def _take_variant_page(state: dict, cap: int | None) -> tuple[list[Schedule], bool]:
+def _take_variant_page(
+    state: dict, cap: int | None
+) -> tuple[list[Schedule], bool]:
     """Take the next page from a persistent variant cursor.
 
     One look-ahead item is kept in ``state['overflow']`` to answer the
@@ -552,7 +554,10 @@ def _run_load_more_worker(task_queue, result_queue) -> None:
 
         try:
             task_type, args, kwargs = task
-        except ValueError:
+        except (TypeError, ValueError):
+            # ValueError: a tuple/list of the wrong length.
+            # TypeError: a non-iterable payload (e.g. an int put on the queue).
+            # Either way the task is malformed — report it and keep serving.
             result_queue.put(
                 ("error", GenerationResult.failure("Invalid background worker task."))
             )

@@ -16,8 +16,6 @@ Notes:
 
 from dataclasses import dataclass
 from datetime import time as dt_time  # aliased so the `time` field does not shadow it
-from typing import List
-
 MINUTES_PER_HOUR = 60
 MIN_GAP_HOURS = 4  # an exam can last up to 4 hours (spec 2.3.4 / 7.3)
 MAX_SLOTS_PER_DAY = 3  # at most 3 slots may be defined per day (spec 2.3.3)
@@ -33,7 +31,7 @@ class TimeSlot:
             raise ValueError(f"Time slot must be a whole HH:MM minute: {self.time}")
 
     @staticmethod
-    def validate_sequence(slots: List["TimeSlot"]) -> None:
+    def validate_sequence(slots: list["TimeSlot"]) -> None:
         """
         Validate a day's slots: at most MAX_SLOTS_PER_DAY of them (spec 2.3.3),
         in strictly ascending order with at least MIN_GAP_HOURS between each

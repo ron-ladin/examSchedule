@@ -163,14 +163,28 @@ def _run_cli(argv: list[str] | None = None) -> None:
     # Never allow the CLI exporter to write an unbounded number of combinations.
     # This prevents runaway combinatorics from producing massive output files.
     #
-    # Capture the final per-period schedules in memory (already filtered, room-
-    # assigned and sorted by AppController). The file is written from this capture
-    # and — crucially — so is the proctor report, instead of re-parsing the
-    # exported text file. settings=None so the capture is NOT re-sorted here;
-    # AppController already applied the sort config.
+    # Capture the final per-period schedules in memory (already filtered and
+    # room-assigned by AppController). The file is written from this capture and
+    # — crucially — so is the proctor report, instead of re-parsing the exported
+    # text file. The loaded settings are passed in so the exporter applies the
+    # configured sort to each capped page (sorting is the exporter's job;
+    # AppController stays lazy and never materialises the full generator).
     from src.engine.generation_workers import _MemoryExporter
 
-    exporter = _MemoryExporter(cap=_CLI_MAX_COMBINATIONS, settings=None)
+    threshold_filter = None
+    threshold_settings = None
+    settings = None
+
+    if args.settings:
+        settings = SettingsFileReader(args.settings).read()
+        threshold_filter = ThresholdFilter()
+        threshold_settings = settings.thresholds
+
+    exporter = _MemoryExporter(
+        cap=_CLI_MAX_COMBINATIONS,
+        settings=settings,
+        selected_programs=selected_programs,
+    )
 
     conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
     generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
@@ -201,16 +215,6 @@ def _run_cli(argv: list[str] | None = None) -> None:
                 "is missing StudentCount."
             )
 
-    threshold_filter = None
-    threshold_settings = None
-    sorting_config = None
-
-    if args.settings:
-        settings = SettingsFileReader(args.settings).read()
-        threshold_filter = ThresholdFilter()
-        threshold_settings = settings.thresholds
-        sorting_config = settings.sorting
-
     AppController(
         data_provider=data_provider,
         exporter=exporter,
@@ -218,7 +222,6 @@ def _run_cli(argv: list[str] | None = None) -> None:
         selected_programs=selected_programs,
         threshold_filter=threshold_filter,
         threshold_settings=threshold_settings,
-        sorting_config=sorting_config,
         classrooms=classrooms,
         time_slots=time_slots,
         proctor_config=proctor_config,

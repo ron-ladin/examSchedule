@@ -19,7 +19,6 @@ Notes:
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
 
 from src.domain.semester import normalize_semester
 
@@ -30,7 +29,7 @@ class CourseOffering:
     year: int
     semester: str
     requirement: str  # Obligatory / Elective
-    student_count: Optional[int] = None  # Feature 4 (SCRUM-285); None when absent
+    student_count: int | None = None  # Feature 4 (SCRUM-285); None when absent
 
     def __post_init__(self) -> None:
         # student_count is optional; when present it is a count, so 0 is valid
@@ -40,7 +39,7 @@ class CourseOffering:
         ):
             raise ValueError(f"student_count cannot be negative: {self.student_count}")
 
-    def is_relevant(self, selected_programs: List[str], semester: str) -> bool:
+    def is_relevant(self, selected_programs: list[str], semester: str) -> bool:
         return (
             self.program_id in selected_programs
             and normalize_semester(self.semester) == normalize_semester(semester)
