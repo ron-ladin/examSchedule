@@ -36,7 +36,7 @@ University exam scheduling is a classic **NP-Hard Constraint Satisfaction Proble
 
 ---
 
-## Architecture & Data Flow
+## Architecture 
 
 ```mermaid
 graph TD
@@ -57,37 +57,6 @@ graph TD
     EX -->|CLI Mode| TX[TextFileExporter<br/>schedules.txt · schedules_proctor.txt]
 ```
 
-### Generation Pipeline — Sequence Diagram
-
-```mermaid
-sequenceDiagram
-    participant U as User / CLI
-    participant AC as AppController
-    participant SG as ScheduleGenerator
-    participant TF as ThresholdFilter
-    participant CA as ClassroomAssigner
-    participant EX as Exporter
-
-    U->>AC: run(programs, courses, periods, settings?)
-    AC->>SG: generate(conflict_graph, MCV order)
-
-    loop For each exam period
-        SG-->>AC: Schedule (raw date assignment)
-        AC->>TF: filter(schedule, thresholds)
-        TF-->>AC: passes / filtered out
-        opt Feature 4 enabled
-            AC->>CA: assign_variants(schedule) → Iterator
-            CA-->>AC: lazy variant stream (yield)
-        end
-    end
-
-    AC->>AC: sort(schedules, criteria)
-    AC->>EX: export(schedules_by_period)
-    EX-->>U: schedules.txt
-    opt Feature 4 enabled
-        EX-->>U: schedules_proctor.txt
-    end
-```
 
 ---
 
@@ -144,33 +113,6 @@ Syncademic's `ClassroomAssigner` avoids this entirely through **True Lazy Evalua
 4. **Largest-Exam-First Ordering** — Within each day, larger exams are assigned rooms first. This maximises the chance that a valid allocation exists for smaller exams by reserving fewer rooms for t[...]
 
 > **Result:** The GUI fetches classroom variants in pages at `O(1)` perceived latency. The full variant space is never materialised in memory. Iterators are kept alive between page requests and resume[...]
-
-```mermaid
-flowchart TD
-    A([Schedule with exam dates]) --> B[Sort exams: largest student count first]
-    B --> C{Next exam?}
-    C -->|All placed| YIELD([yield complete room variant])
-    YIELD --> C2{Caller wants\nmore variants?}
-    C2 -->|Yes| RESUME([Resume iterator\nfrom exact point])
-    RESUME --> C
-    C2 -->|No| DONE([Done — iterator kept alive])
-
-    C -->|Exam| D[Try each time slot]
-    D --> E[Filter: available rooms\nnot in use this slot]
-    E --> F{Sum of available\ncapacity ≥ students?}
-    F -->|No| SKIP[Skip slot]
-    SKIP --> D
-    F -->|Yes| G[Enumerate room combos\nvia recursive generator]
-    G --> H{Best possible\nremaining capacity\n≥ students?}
-    H -->|No| PRUNE([Prune branch — skip\nall sub-combinations])
-    H -->|Yes| I[yield room distribution]
-    I --> J{Seen this\ndistribution before?}
-    J -->|Yes — duplicate| G
-    J -->|No| K[Mark rooms as used\nfor this slot]
-    K --> L[Recurse: next exam]
-    L --> C
-```
-
 ### Proctor Calculation
 
 Proctor count per room is computed as `⌈students_in_room / X⌉` where *X* is the ratio denominator from your `proctors.txt` file. This is applied at assignment time and written to [...]
@@ -247,39 +189,6 @@ The GUI provides:
 - **Import Schedule** — load a previously exported `schedules.txt` back into the viewer
 - **Auto-Variants** — automatically page through classroom allocation variants without freezing
 - **Proctor Report viewer** — inspect per-room proctor assignments per schedule inline
-
-```
-╔══════════════════════════════════════════════════════════════════════════════════╗
-║  Syncademic — Exam Scheduling System                              [− □ ✕]      ║
-╠══════════════════════════════════════════════════════════════════════════════════╣
-║  INPUT FILES                              FEATURE 4 — CLASSROOM ASSIGNMENT      ║
-║  ┌──────────────────────────────────┐     ┌─────────────────────────────────┐   ║
-║  │ Programs:  [data/programs.txt  ] │     │ Classrooms: [classrooms.txt   ] │   ║
-║  │ Courses:   [data/courses.txt   ] │     │ Time Slots: 08:00, 12:00, 16:00 │   ║
-║  │ Periods:   [data/dates.txt     ] │     │ Proctor:    1:30                │   ║
-║  └──────────────────────────────────┘     └─────────────────────────────────┘   ║
-║                                                                                  ║
-║  PHASE 3 — SORTING & THRESHOLDS            [ Import Schedule ]  [ Generate ]    ║
-║  ☑ Min gap between mandatory exams                                               ║
-║  ☑ Avg gap between all exams                                                     ║
-║  ☑ Elective collision count                                                      ║
-╠══════════════════════════════════════════════════════════════════════════════════╣
-║  SCHEDULE #3  of  47          [ ◀ Prev ]  [ Next ▶ ]  [ Auto-Variants: ON  ]   ║
-║  ┌──────────────────────────────────────────────────────────────────────────┐   ║
-║  │  Semester A — Winter 2025                                                │   ║
-║  │                                                                          │   ║
-║  │  Sun 12-Jan   Calculus I  · Intro to CS                                 │   ║
-║  │  Mon 13-Jan   ─                                                          │   ║
-║  │  Tue 14-Jan   Linear Algebra  · Discrete Math                           │   ║
-║  │  Wed 15-Jan   ─                                                          │   ║
-║  │  Thu 16-Jan   Data Structures                                            │   ║
-║  │  Sun 19-Jan   Operating Systems  · Algorithms                           │   ║
-║  │                                                                          │   ║
-║  │  Min gap: 2d  ·  Avg gap: 2.4d  ·  Max/day: 2  ·  Collisions: 0        │   ║
-║  └──────────────────────────────────────────────────────────────────────────┘   ║
-║  [ View Proctor Report ]  [ Export Schedules ]   535 tests · all passing        ║
-╚══════════════════════════════════════════════════════════════════════════════════╝
-```
 
 ---
 
