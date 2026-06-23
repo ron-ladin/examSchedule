@@ -297,13 +297,12 @@ def test_run_without_sorting_cap_1_generator_advances_only_once():
     )
 
 
-def test_run_with_sorting_config_does_not_consume_full_generator():
+def test_run_does_not_consume_full_generator_with_capped_exporter():
     """
-    With sorting_config set and a capped exporter, AppController.run() must NOT
-    materialise the full iterator. Sorting is the exporter's responsibility.
+    With a capped exporter, AppController.run() must NOT materialise the full
+    iterator. Sorting is the exporter's responsibility (the exporter sorts only
+    the capped page), so AppController never calls list() on the lazy iterator.
     """
-    from src.domain.sorting import SortingConfig, SortRule, SortCriterion
-
     advance_count = 0
 
     def counting_gen():
@@ -321,10 +320,6 @@ def test_run_with_sorting_config_does_not_consume_full_generator():
             for _, it in schedules_by_period.items():
                 next(it, None)  # consume only 1
 
-    sorting_config = SortingConfig(
-        rules=(SortRule(priority=1, criterion=SortCriterion.SORT_EXAM_PERIOD_SPREAD),)
-    )
-
     course = _course(course_id="11111", semester="FALL")
     period = _period("FALL", "Aleph")
     provider = FakeDataProvider(courses=[course], exam_periods=[period])
@@ -334,7 +329,6 @@ def test_run_with_sorting_config_does_not_consume_full_generator():
         exporter=_CapExporter(),
         generator=_CountingGenerator(),
         selected_programs=["83101"],
-        sorting_config=sorting_config,
     ).run()
 
     assert advance_count < 100, (

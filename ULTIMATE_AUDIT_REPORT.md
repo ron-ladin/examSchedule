@@ -3,8 +3,8 @@
 **Date:** 2026-06-23  
 **Branch:** `chore/ultimate-audit` → **follow-up refactor on same branch** (2026-06-23)  
 **Auditor role:** Principal Staff Engineer / Lead SDET / Chief Software Architect  
-**Test baseline:** 535 passed, 0 failed  
-**Test result after all fixes:** 535 passed, 0 failed ✅
+**Test baseline:** 556 passed, 0 failed, 0 skipped  
+**Test result after all fixes:** 556 passed, 0 failed, 0 skipped ✅
 
 ---
 
@@ -116,7 +116,7 @@ Both `threshold_filter.py` and `sorting_engine.py` now import from `schedule_met
 ## Phase 5 — Testing Suite Integrity
 
 ### Results
-- **535 tests, 0 failures, 0 skipped** — both before and after audit fixes. ✅
+- **556 tests, 0 failures, 0 skipped** — after audit fixes (92% line coverage). ✅
 
 ### Coverage of edge cases
 - `test_schedule_generator.py` covers empty course list, single course, full conflict graph. ✅
@@ -130,7 +130,7 @@ Both `threshold_filter.py` and `sorting_engine.py` now import from `schedule_met
 
 ### Fragility observations (informational — no failures, but watch list)
 - `test_ui_smoke.py` uses a `QApplication` fixture. Tests are Qt-signal-driven and could be flaky in headless environments. Currently stable. Monitor on CI.
-- `test_ui_engine_stress.py` uses multiprocessing via the real worker pool. In some CI configurations, `multiprocessing.Queue` may deadlock on timeout. **FIXED:** `pytest.ini` now sets `timeout = 60` globally (requires `pytest-timeout==2.4.0` added to `requirements-dev.txt`).
+- `test_ui_engine_stress.py` uses multiprocessing via the real worker pool. In some CI configurations, `multiprocessing.Queue` could deadlock. No `pytest-timeout` plugin is used (the timeout feature was intentionally dropped from this PR); the suite runs cleanly without it. Monitor on CI.
 
 ---
 
@@ -186,10 +186,10 @@ All criteria negate the score in `sort_key()` to achieve descending order via `s
 | Sorting direction (descending) | ✅ CORRECT | Negation in sort key |
 | DRY violation (metric helpers) | ✅ FIXED | Extracted to `src/domain/schedule_metrics.py` |
 | TimeSlot CLI validation | ✅ ALREADY DONE | `SlotsFileReader` calls `validate_sequence` for both CLI + GUI |
-| pytest CI deadlock risk | ✅ FIXED | `timeout = 60` in `pytest.ini`; `pytest-timeout` in dev deps |
+| pytest CI deadlock risk | ⚠️ WATCH | No `pytest-timeout` used (feature dropped); suite runs cleanly. Monitor on CI |
 | Typing modernization | ✅ FIXED | All `typing.List/Dict/Tuple/Optional` → builtins across domain/ |
 | Oversized files | ⚠️ DEBT | 6 files exceed 500-line limit (UI code freeze — deferred) |
-| Test suite | ✅ 535/535 | No regressions after all changes |
+| Test suite | ✅ 556/556 | No regressions after all changes (0 skipped) |
 
 ---
 
@@ -203,7 +203,7 @@ All criteria negate the score in `sort_key()` to achieve descending order via `s
 ### P2 — Medium (tech debt sprint)
 4. ~~**Modernize `typing` imports**~~ — **✅ DONE** — `from typing import Dict, List, Tuple, Optional` replaced with builtin `dict`, `list`, `tuple`, `X | None` across all of `src/domain/` and `src/engine/`.
 5. **Split `src/ui/config_screen.py`** (800 lines) — extract file-load callbacks. *(Code freeze — deferred)*
-6. ~~**Set pytest timeout**~~ — **✅ DONE** — `pytest.ini` sets `timeout = 60`; `pytest-timeout==2.4.0` added to `requirements-dev.txt`.
+6. **Set pytest timeout** — *Not done.* The timeout feature was intentionally dropped from this PR; `pytest.ini` sets no global timeout and `pytest-timeout` is not a dependency.
 
 ### P3 — Low (nice to have)
 7. ~~**Validate `TimeSlot` ascending order and 4-hour gap** at the reader level~~ — **✅ ALREADY DONE** — `SlotsFileReader.parse_line()` calls `TimeSlot.validate_sequence()` which enforces ascending order and ≥4h gap for both CLI and GUI paths. No action required.

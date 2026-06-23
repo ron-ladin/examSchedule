@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![Build](https://img.shields.io/badge/Build-Passing-4CAF50?style=for-the-badge&logo=github-actions&logoColor=white)](#)
-[![Tests](https://img.shields.io/badge/Tests-535%20Passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#running-the-test-suite)
+[![Tests](https://img.shields.io/badge/Tests-556%20Passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#running-the-test-suite)
 [![UI](https://img.shields.io/badge/UI-PyQt6-41CD52?style=for-the-badge&logo=qt&logoColor=white)](https://pypi.org/project/PyQt6/)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 
@@ -293,13 +293,13 @@ To run with line-by-line coverage reporting:
 pytest --cov=src --cov-report=term-missing
 ```
 
-The suite contains **535 tests** across three layers:
+The suite contains **556 tests** across three layers:
 
 - **Unit tests** — every domain model, algorithm component, and reader class
 - **Integration tests** — full generation pipeline for all three CLI modes
 - **Regression guards** — lazy evaluation correctness, deduplication, proctor ratio edge cases, capacity overflow handling
 
-> All 535 tests pass on a clean checkout. Any failure blocks the merge.
+> All 556 tests pass on a clean checkout (0 skipped). Any failure blocks the merge.
 
 ---
 
@@ -318,7 +318,7 @@ examSchedule/
 │   │   ├── classroom_assigner.py  # Lazy room-assignment with capacity pruning
 │   │   └── proctor_report.py      # Proctor report builder
 │   └── ui/                        # PyQt6 desktop application
-├── tests/                         # 535 pytest tests
+├── tests/                         # 556 pytest tests
 ├── data/                          # Sample input files
 └── output/                        # Generated schedules land here
 ```
