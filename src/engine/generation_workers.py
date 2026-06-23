@@ -17,6 +17,7 @@ DesktopController re-exports these names for backwards compatibility.
 """
 
 import logging
+import time
 from collections.abc import Iterator
 from itertools import chain, islice
 
@@ -63,12 +64,14 @@ class _MemoryExporter(IOutputExporter):
         only_period_keys: set[str] | None = None,
         settings: Settings | None = None,
         selected_programs: list[str] | None = None,
+        timeout_seconds: float | None = None,
     ) -> None:
         self._cap = cap
         self._offset_by_period = offset_by_period or {}
         self._only_period_keys = only_period_keys
         self._settings = settings
         self._selected_programs = selected_programs or []
+        self._timeout_seconds = timeout_seconds
 
         self.schedules_by_period: dict[str, list[Schedule]] = {}
         self.courses_by_id: dict[str, Course] = {}
@@ -89,16 +92,39 @@ class _MemoryExporter(IOutputExporter):
 
         courses_list = list(courses_by_id.values())
 
+        deadline: float | None = (
+            time.perf_counter() + self._timeout_seconds
+            if self._timeout_seconds is not None
+            else None
+        )
+
         for key, schedule_iter in schedules_by_period.items():
             if self._only_period_keys is not None and key not in self._only_period_keys:
                 continue
 
             offset = self._offset_by_period.get(key, 0)
 
-            if self._cap is None:
+            if self._cap is None and deadline is None:
                 collected = list(islice(schedule_iter, offset, None))
                 self.schedules_by_period[key] = self._sort(collected, courses_list)
                 self.has_more_by_period[key] = False
+                continue
+
+            if self._cap is None:
+                # Timeout-bounded unbounded collection: stream one by one.
+                collected = []
+                timed_out = False
+                for schedule in islice(schedule_iter, offset, None):
+                    if deadline is not None and time.perf_counter() > deadline:
+                        timed_out = True
+                        break
+                    collected.append(schedule)
+                self.schedules_by_period[key] = self._sort(collected, courses_list)
+                if timed_out:
+                    self.truncated_periods.add(key)
+                    self.has_more_by_period[key] = True
+                else:
+                    self.has_more_by_period[key] = False
                 continue
 
             batch = list(islice(schedule_iter, offset, offset + self._cap + 1))
@@ -138,6 +164,7 @@ def _run_generation_process(
     proctor_config: "ProctorConfig | None" = None,
     allow_unassigned_classrooms: bool = False,
     classroom_variant_mode: str = CLASSROOM_VARIANT_MODE_FIRST,
+    timeout_seconds: float | None = None,
 ) -> None:
     """
     Entry point for background-worker schedule generation.
@@ -171,6 +198,7 @@ def _run_generation_process(
             only_period_keys={period_key} if period_key else None,
             settings=active_settings,
             selected_programs=selected_programs,
+            timeout_seconds=timeout_seconds,
         )
 
         engine = _EngineController(
@@ -213,6 +241,7 @@ def _run_classroom_variants_process(
     time_slots: "list[TimeSlot] | None" = None,
     proctor_config: "ProctorConfig | None" = None,
     allow_unassigned_classrooms: bool = False,
+    timeout_seconds: float | None = None,
 ) -> None:
     """Generate classroom/time-slot variants for one already-chosen date schedule.
 
@@ -262,8 +291,18 @@ def _run_classroom_variants_process(
         )
 
         if cap is None:
-            batch = list(islice(variant_iter, offset, None))
-            still_more = False
+            if timeout_seconds is not None:
+                deadline = time.perf_counter() + timeout_seconds
+                batch = []
+                still_more = False
+                for variant in islice(variant_iter, offset, None):
+                    if time.perf_counter() > deadline:
+                        still_more = True
+                        break
+                    batch.append(variant)
+            else:
+                batch = list(islice(variant_iter, offset, None))
+                still_more = False
         else:
             batch_plus_one = list(islice(variant_iter, offset, offset + cap + 1))
             still_more = len(batch_plus_one) > cap
@@ -393,11 +432,16 @@ def _skip_variants(iterator: Iterator[Schedule], offset: int) -> int:
     return skipped
 
 
-def _take_variant_page(state: dict, cap: int | None) -> tuple[list[Schedule], bool]:
+def _take_variant_page(
+    state: dict, cap: int | None, deadline: float | None = None
+) -> tuple[list[Schedule], bool]:
     """Take the next page from a persistent variant cursor.
 
     One look-ahead item is kept in ``state['overflow']`` to answer the
     "has more" question without dropping that item from the next block.
+
+    If ``deadline`` (absolute perf_counter timestamp) is provided and exceeded
+    mid-collection, returns the partial batch with ``still_more=True``.
     """
     iterator: Iterator[Schedule] = state["iterator"]
     overflow: list[Schedule] = state["overflow"]
@@ -405,12 +449,25 @@ def _take_variant_page(state: dict, cap: int | None) -> tuple[list[Schedule], bo
     if cap is None:
         batch = list(overflow)
         overflow.clear()
-        batch.extend(iterator)
+        if deadline is None:
+            batch.extend(iterator)
+            state["emitted"] += len(batch)
+            return batch, False
+        # Timeout-bounded unbounded collection.
+        for item in iterator:
+            if time.perf_counter() > deadline:
+                state["emitted"] += len(batch)
+                return batch, True
+            batch.append(item)
         state["emitted"] += len(batch)
         return batch, False
 
     batch: list[Schedule] = []
     while len(batch) < cap:
+        if deadline is not None and time.perf_counter() > deadline:
+            state["emitted"] += len(batch)
+            return batch, True
+
         if overflow:
             batch.append(overflow.pop(0))
             continue
@@ -445,6 +502,7 @@ def _run_classroom_variants_from_state(
     time_slots: list[TimeSlot] | None = None,
     proctor_config: ProctorConfig | None = None,
     allow_unassigned_classrooms: bool = False,
+    timeout_seconds: float | None = None,
 ) -> None:
     """Stateful Auto Variants implementation used by the persistent worker."""
     try:
@@ -512,7 +570,10 @@ def _run_classroom_variants_from_state(
                 )
                 return
 
-        batch, still_more = _take_variant_page(state, cap)
+        deadline = (
+            time.perf_counter() + timeout_seconds if timeout_seconds is not None else None
+        )
+        batch, still_more = _take_variant_page(state, cap, deadline)
 
         courses_by_id = {course.id: course for course in courses}
         if active_settings.sorting.rules:
