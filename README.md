@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎓 Exam Scheduling System
+# Exam Scheduling System
 
 ### *Syncademic — Solving the NP-Hard Exam Scheduling Problem*
 
@@ -17,13 +17,13 @@
 
 ---
 
-## 📖 Overview
+## Overview
 
 University exam scheduling is a classic **NP-Hard Constraint Satisfaction Problem (CSP)**. With hundreds of courses, dozens of programs, overlapping enrollments, and limited physical resources, manually constructing a conflict-free exam timetable is practically infeasible.
 
 **Syncademic** automates this entirely. It ingests your program, course, and period data, applies a backtracking engine with intelligent pruning, and produces every valid schedule variant — ranked and filtered to surface the best options first.
 
-### ✨ Core Capabilities
+### Core Capabilities
 
 | Capability | Description |
 |---|---|
@@ -36,13 +36,13 @@ University exam scheduling is a classic **NP-Hard Constraint Satisfaction Proble
 
 ---
 
-## 🏗️ Architecture & Data Flow
+## Architecture & Data Flow
 
 ```mermaid
 graph TD
-    A[📄 Input Files<br/>programs · courses · periods] --> B[FileDataProvider]
-    S[⚙️ settings.txt<br/>thresholds · sort config] --> TF[ThresholdFilter]
-    C[🏫 classrooms.txt<br/>slots.txt · proctors.txt] --> CA[ClassroomAssigner]
+    A[Input Files<br/>programs · courses · periods] --> B[FileDataProvider]
+    S[settings.txt<br/>thresholds · sort config] --> TF[ThresholdFilter]
+    C[classrooms.txt<br/>slots.txt · proctors.txt] --> CA[ClassroomAssigner]
 
     B --> AC[AppController]
     TF --> AC
@@ -59,7 +59,7 @@ graph TD
 
 ---
 
-## 🧠 Under the Hood: Algorithms
+## Under the Hood: Algorithms
 
 ### Constraint Satisfaction via Backtracking
 
@@ -100,7 +100,7 @@ Proctor count per room is computed as $\lceil \text{students\_in\_room} / X \rce
 
 ---
 
-## ⚙️ Installation & Setup
+## Installation & Setup
 
 ### Prerequisites
 
@@ -153,7 +153,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🚀 Running the Application
+## Running the Application
 
 ### GUI Mode (Desktop App)
 
@@ -234,7 +234,7 @@ You may combine `--settings` with Feature 4 flags to apply sorting and threshold
 
 ---
 
-## 🧪 Running the Test Suite
+## Running the Test Suite
 
 ```bash
 pip install -r requirements-dev.txt
@@ -257,7 +257,7 @@ The suite contains **535 tests** across three layers:
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 examSchedule/
@@ -279,7 +279,7 @@ examSchedule/
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
 
