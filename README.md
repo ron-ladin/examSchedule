@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![Build](https://img.shields.io/badge/Build-Passing-4CAF50?style=for-the-badge&logo=github-actions&logoColor=white)](#)
-[![Tests](https://img.shields.io/badge/Tests-556%20Passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#running-the-test-suite)
+[![Tests](https://img.shields.io/badge/Tests-556%20full%20%2F%20490%20headless-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#running-the-test-suite)
 [![UI](https://img.shields.io/badge/UI-PyQt6-41CD52?style=for-the-badge&logo=qt&logoColor=white)](https://pypi.org/project/PyQt6/)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 
@@ -100,6 +100,19 @@ Once raw schedules are generated, Phase 3 applies threshold filtering and multi-
 | Max exams on the same day | Descending — penalise dense days |
 
 Criteria can be combined and reordered in real time from the GUI without triggering a regeneration pass.
+
+**Sorting and the output cap (important):** to keep generation lazy, sorting is
+applied *after* the capped page of schedules is collected, not across the entire
+(potentially unbounded) solution space. Concretely:
+
+- **No cap** (GUI full load) — the complete collected list is sorted, so the
+  ranking is global.
+- **Capped** (CLI export, capped at 10,000 combinations) — only the collected
+  page is sorted. The cap is applied first; the engine does **not** rank every
+  possible schedule before truncating.
+
+This is a deliberate performance trade-off: the generator is never fully
+materialised just to sort it.
 
 ### Feature 4: True Lazy Classroom Assignment
 
@@ -299,7 +312,18 @@ The suite contains **556 tests** across three layers:
 - **Integration tests** — full generation pipeline for all three CLI modes
 - **Regression guards** — lazy evaluation correctness, deduplication, proctor ratio edge cases, capacity overflow handling
 
-> All 556 tests pass on a clean checkout (0 skipped). Any failure blocks the merge.
+Test counts depend on the environment, because the PyQt6 GUI tests skip
+themselves (via `pytest.importorskip`) when PyQt6 is not installed:
+
+| Environment | Result | Coverage |
+|-------------|--------|----------|
+| **Full** (PyQt6 installed + sample `data/` files) | **556 passed, 0 skipped** | **92.01%** |
+| **Headless / minimal** (PyQt6 absent) | **490 passed, 5 skipped** | **90.97%** |
+
+In the headless run, 66 PyQt6-dependent GUI tests are not collected (PyQt6
+import is skipped) and 5 end-to-end tests skip when the optional real-data
+files are absent. CI installs `requirements.txt` (which includes PyQt6), so a
+full CI run exercises all 556 tests. Any failure blocks the merge.
 
 ---
 
@@ -318,7 +342,7 @@ examSchedule/
 │   │   ├── classroom_assigner.py  # Lazy room-assignment with capacity pruning
 │   │   └── proctor_report.py      # Proctor report builder
 │   └── ui/                        # PyQt6 desktop application
-├── tests/                         # 556 pytest tests
+├── tests/                         # 556 pytest tests (490 without PyQt6)
 ├── data/                          # Sample input files
 └── output/                        # Generated schedules land here
 ```

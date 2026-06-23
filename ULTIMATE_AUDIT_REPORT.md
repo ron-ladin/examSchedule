@@ -3,8 +3,8 @@
 **Date:** 2026-06-23  
 **Branch:** `chore/ultimate-audit` → **follow-up refactor on same branch** (2026-06-23)  
 **Auditor role:** Principal Staff Engineer / Lead SDET / Chief Software Architect  
-**Test baseline:** 556 passed, 0 failed, 0 skipped  
-**Test result after all fixes:** 556 passed, 0 failed, 0 skipped ✅
+**Test baseline (full env, PyQt6 installed):** 556 passed, 0 failed, 0 skipped  
+**Test result after all fixes:** 556 passed / 0 skipped with PyQt6 (92.01% cov); 490 passed / 5 skipped headless without PyQt6 (90.97% cov) ✅
 
 ---
 
@@ -116,7 +116,7 @@ Both `threshold_filter.py` and `sorting_engine.py` now import from `schedule_met
 ## Phase 5 — Testing Suite Integrity
 
 ### Results
-- **556 tests, 0 failures, 0 skipped** — after audit fixes (92% line coverage). ✅
+- **556 tests, 0 failures, 0 skipped** with PyQt6 installed — **92.01%** line coverage. Headless without PyQt6: **490 passed, 5 skipped, 90.97%** (66 GUI tests are PyQt6-gated via `importorskip`; 5 e2e tests skip without optional real-data files). ✅
 
 ### Coverage of edge cases
 - `test_schedule_generator.py` covers empty course list, single course, full conflict graph. ✅
@@ -189,7 +189,7 @@ All criteria negate the score in `sort_key()` to achieve descending order via `s
 | pytest CI deadlock risk | ⚠️ WATCH | No `pytest-timeout` used (feature dropped); suite runs cleanly. Monitor on CI |
 | Typing modernization | ✅ FIXED | All `typing.List/Dict/Tuple/Optional` → builtins across domain/ |
 | Oversized files | ⚠️ DEBT | 6 files exceed 500-line limit (UI code freeze — deferred) |
-| Test suite | ✅ 556/556 | No regressions after all changes (0 skipped) |
+| Test suite | ✅ 556/556 (full) · 490/490 (headless) | No regressions; GUI tests PyQt6-gated, 5 e2e data-gated |
 
 ---
 
