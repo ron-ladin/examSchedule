@@ -202,8 +202,8 @@ def build_period_card(panel, period_key: str) -> QWidget:
     nav.addStretch()
     nav.addWidget(next_btn)
 
-    if not read_only_import:
-        layout.addWidget(variant_navigation)
+    layout.addWidget(variant_navigation)
+    variant_navigation.setVisible(not read_only_import)
 
     has_more = period_key in panel._truncated_periods
 

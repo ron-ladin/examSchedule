@@ -446,23 +446,23 @@ class ExamDetailDialog(QDialog):
                 table.setItem(row_idx, 3, affected_item)
                 continue
 
-            id_item = ExamDetailDialog._make_item(course_id, "#1D4ED8")
+            id_item = self._make_item(course_id, "#1D4ED8")
             id_item.setFont(bold_font)
             table.setItem(row_idx, 0, id_item)
 
-            table.setItem(row_idx, 1, ExamDetailDialog._make_item(name))
-            table.setItem(row_idx, 2, ExamDetailDialog._make_item(slot))
-            table.setItem(row_idx, 3, ExamDetailDialog._make_item(building))
+            table.setItem(row_idx, 1, self._make_item(name))
+            table.setItem(row_idx, 2, self._make_item(slot))
+            table.setItem(row_idx, 3, self._make_item(building))
 
-            room_item = ExamDetailDialog._make_item(room)
+            room_item = self._make_item(room)
             if room == "NO CLASSROOM":
                 room_item.setForeground(QColor("#DC2626"))
             table.setItem(row_idx, 4, room_item)
 
-            table.setItem(row_idx, 5, ExamDetailDialog._make_item(students))
-            table.setItem(row_idx, 6, ExamDetailDialog._make_item(capacity))
+            table.setItem(row_idx, 5, self._make_item(students))
+            table.setItem(row_idx, 6, self._make_item(capacity))
 
-            status_item = ExamDetailDialog._make_item(status)
+            status_item = self._make_item(status)
             if status == "FULL":
                 status_item.setForeground(QColor("#DC2626"))
                 status_item.setBackground(QColor("#FEE2E2"))
@@ -472,19 +472,19 @@ class ExamDetailDialog(QDialog):
                 status_item.setForeground(QColor("#B91C1C"))
             table.setItem(row_idx, 7, status_item)
 
-            req_item = ExamDetailDialog._make_item(req)
+            req_item = self._make_item(req)
             if "Obligatory" in req:
                 req_item.setForeground(QColor("#1D4ED8"))
             elif "Elective" in req:
                 req_item.setForeground(QColor("#7C3AED"))
             table.setItem(row_idx, 8, req_item)
 
-            aff_item = ExamDetailDialog._make_item(affected)
+            aff_item = self._make_item(affected)
             if affected == "Not affected":
                 aff_item.setForeground(QColor("#94A3B8"))
             table.setItem(row_idx, 9, aff_item)
 
-            table.setItem(row_idx, 10, ExamDetailDialog._make_item(proctors))
+            table.setItem(row_idx, 10, self._make_item(proctors))
 
         table.resizeRowsToContents()
 
