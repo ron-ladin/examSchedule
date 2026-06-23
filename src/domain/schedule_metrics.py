@@ -8,7 +8,6 @@ All functions are module-level (stateless) and operate on domain objects only.
 """
 
 from datetime import date
-from typing import Dict, List, Tuple
 
 from src.domain.course import Course
 from src.domain.schedule import Schedule

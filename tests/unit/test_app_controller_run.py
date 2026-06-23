@@ -257,3 +257,87 @@ def test_run_skips_periods_with_no_relevant_exam_courses_but_still_exports():
 
     assert exporter.called is True
     assert list(exporter.materialized_schedules.keys()) == ["FALL - Aleph"]
+
+
+def test_run_without_sorting_cap_1_generator_advances_only_once():
+    """
+    With cap=1 and no sorting, the generator should only be advanced enough
+    to produce the capped page — not fully consumed.
+    """
+    advance_count = 0
+
+    def counting_gen():
+        nonlocal advance_count
+        for i in range(100):
+            advance_count += 1
+            yield i
+
+    class _CountingGenerator:
+        def generate_schedules(self, courses, exam_period):
+            return counting_gen()
+
+    class _CapExporter:
+        def export_schedules(self, schedules_by_period, courses_by_id):
+            for _, it in schedules_by_period.items():
+                next(it, None)  # consume only 1
+
+    course = _course(course_id="11111", semester="FALL")
+    period = _period("FALL", "Aleph")
+    provider = FakeDataProvider(courses=[course], exam_periods=[period])
+
+    AppController(
+        data_provider=provider,
+        exporter=_CapExporter(),
+        generator=_CountingGenerator(),
+        selected_programs=["83101"],
+    ).run()
+
+    assert advance_count == 1, (
+        f"Generator advanced {advance_count} times; cap=1 should advance it only once"
+    )
+
+
+def test_run_with_sorting_config_does_not_consume_full_generator():
+    """
+    With sorting_config set and a capped exporter, AppController.run() must NOT
+    materialise the full iterator. Sorting is the exporter's responsibility.
+    """
+    from src.domain.sorting import SortingConfig, SortRule, SortCriterion
+
+    advance_count = 0
+
+    def counting_gen():
+        nonlocal advance_count
+        for i in range(100):
+            advance_count += 1
+            yield i
+
+    class _CountingGenerator:
+        def generate_schedules(self, courses, exam_period):
+            return counting_gen()
+
+    class _CapExporter:
+        def export_schedules(self, schedules_by_period, courses_by_id):
+            for _, it in schedules_by_period.items():
+                next(it, None)  # consume only 1
+
+    sorting_config = SortingConfig(
+        rules=(SortRule(priority=1, criterion=SortCriterion.SORT_EXAM_PERIOD_SPREAD),)
+    )
+
+    course = _course(course_id="11111", semester="FALL")
+    period = _period("FALL", "Aleph")
+    provider = FakeDataProvider(courses=[course], exam_periods=[period])
+
+    AppController(
+        data_provider=provider,
+        exporter=_CapExporter(),
+        generator=_CountingGenerator(),
+        selected_programs=["83101"],
+        sorting_config=sorting_config,
+    ).run()
+
+    assert advance_count < 100, (
+        "AppController.run() fully consumed the generator despite a capped exporter; "
+        "sorting must not call list() on the lazy iterator"
+    )

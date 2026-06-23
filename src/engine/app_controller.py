@@ -40,7 +40,6 @@ from src.domain.course import Course
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.sorting import SortingConfig
-from src.domain.sorting_engine import SortingEngine
 from src.domain.threshold import ThresholdSettings
 from src.domain.time_slot import TimeSlot
 from src.engine.classroom_assigner import ClassroomAssigner
@@ -206,16 +205,6 @@ class AppController:
                     self._proctor_config,
                     self._allow_unassigned_classrooms,
                     self._classroom_variant_mode,
-                )
-
-            if self._sorting_config and self._sorting_config.rules:
-                schedule_iter = iter(
-                    SortingEngine.sort(
-                        list(schedule_iter),
-                        relevant_courses,
-                        self._sorting_config,
-                        self._selected_programs,
-                    )
                 )
 
             schedules_by_period[period_key] = schedule_iter
