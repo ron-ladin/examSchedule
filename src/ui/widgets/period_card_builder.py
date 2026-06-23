@@ -145,7 +145,10 @@ def build_period_card(panel, period_key: str) -> QWidget:
     # Bottom navigation row: Feature 4 variants for the same date schedule.
     # These buttons move between different classroom/time-slot allocations
     # while keeping the exam dates unchanged.
-    nav = QHBoxLayout()
+    variant_navigation = QWidget()
+    variant_navigation.setStyleSheet("background: transparent;")
+    nav = QHBoxLayout(variant_navigation)
+    nav.setContentsMargins(0, 0, 0, 0)
 
     prev_btn = QPushButton("◀  Prev Variant")
     prev_btn.setFixedWidth(120)
@@ -199,8 +202,8 @@ def build_period_card(panel, period_key: str) -> QWidget:
     nav.addStretch()
     nav.addWidget(next_btn)
 
-    if not read_only_import:
-        layout.addLayout(nav)
+    layout.addWidget(variant_navigation)
+    variant_navigation.setVisible(not read_only_import)
 
     has_more = period_key in panel._truncated_periods
 
@@ -292,6 +295,7 @@ def build_period_card(panel, period_key: str) -> QWidget:
         date_jump_input=date_jump_input,
         prev_date_btn=prev_date_btn,
         next_date_btn=next_date_btn,
+        variant_navigation=variant_navigation,
         counter_label=counter,
         variant_jump_input=variant_jump_input,
         cal_table=table,
