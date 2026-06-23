@@ -93,6 +93,22 @@ class TestRunLoadMoreWorkerEdgeCases:
         assert not result.success
         t.join(timeout=2)
 
+    def test_non_iterable_task_returns_error_result(self):
+        """A non-iterable payload (e.g. an int) must not crash the worker.
+
+        Unpacking ``task_type, args, kwargs = 123`` raises TypeError (not
+        ValueError), so the worker has to catch both to stay alive.
+        """
+        task_q, result_q, t = _start_worker()
+        task_q.put(123)
+        task_q.put(None)  # stop sentinel — worker must keep serving until here
+        kind, result = result_q.get()
+        assert kind == "error"
+        assert not result.success
+        assert "Invalid background worker task" in result.error
+        t.join(timeout=2)
+        assert not t.is_alive()
+
     def test_unknown_task_type_returns_error_result(self):
         task_q, result_q, t = _start_worker()
         task_q.put(("unknown_type", [], {}))

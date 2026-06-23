@@ -554,7 +554,10 @@ def _run_load_more_worker(task_queue, result_queue) -> None:
 
         try:
             task_type, args, kwargs = task
-        except ValueError:
+        except (TypeError, ValueError):
+            # ValueError: a tuple/list of the wrong length.
+            # TypeError: a non-iterable payload (e.g. an int put on the queue).
+            # Either way the task is malformed — report it and keep serving.
             result_queue.put(
                 ("error", GenerationResult.failure("Invalid background worker task."))
             )
