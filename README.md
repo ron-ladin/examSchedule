@@ -19,9 +19,9 @@
 
 ## Overview
 
-University exam scheduling is a classic **NP-Hard Constraint Satisfaction Problem (CSP)**. With hundreds of courses, dozens of programs, overlapping enrollments, and limited physical resources, manually constructing a conflict-free exam timetable is practically infeasible.
+University exam scheduling is a classic **NP-Hard Constraint Satisfaction Problem (CSP)**. With hundreds of courses, dozens of programs, overlapping enrollments, and limited physical resources, manual[...]
 
-**Syncademic** automates this entirely. It ingests your program, course, and period data, applies a backtracking engine with intelligent pruning, and produces every valid schedule variant — ranked and filtered to surface the best options first.
+**Syncademic** automates this entirely. It ingests your program, course, and period data, applies a backtracking engine with intelligent pruning, and produces every valid schedule variant — ranked a[...]
 
 ### Core Capabilities
 
@@ -63,9 +63,9 @@ graph TD
 
 ### Constraint Satisfaction via Backtracking
 
-The core date-assignment engine is a **Recursive DFS with intelligent pruning**. Before placing an exam on a date, it checks a pre-built **Conflict Graph** — a mapping from every course to the set of programs enrolled in it. Two exams conflict if any student is in both programs and both semesters.
+The core date-assignment engine is a **Recursive DFS with intelligent pruning**. Before placing an exam on a date, it checks a pre-built **Conflict Graph** — a mapping from every course to the set o[...]
 
-The engine applies the **Most Constrained Variable (MCV) heuristic**: exams with more conflicts are scheduled first, dramatically reducing the search tree. Any partial assignment that would produce a conflict is pruned immediately rather than explored further.
+The engine applies the **Most Constrained Variable (MCV) heuristic**: exams with more conflicts are scheduled first, dramatically reducing the search tree. Any partial assignment that would produce a [...]
 
 ### Phase 3: Multi-Criteria Sorting
 
@@ -83,20 +83,20 @@ Criteria can be combined and reordered in real time from the GUI without trigger
 
 ### Feature 4: True Lazy Classroom Assignment
 
-Classroom assignment is where combinatorial explosion becomes a real danger. With *R* rooms and *E* exams per day, a naïve approach generates $O(2^R)$ room combinations, which is completely impractical for large institutions.
+Classroom assignment is where combinatorial explosion becomes a real danger. With *R* rooms and *E* exams per day, a naïve approach generates `O(2^R)` room combinations, which is completely impractic[...]
 
 Syncademic's `ClassroomAssigner` avoids this entirely through **True Lazy Evaluation**:
 
-1. **Capacity-Based Pruning** — Before recursing into any branch, the engine checks whether the best remaining rooms can *possibly* satisfy the exam's student count. Impossible branches are cut before expansion, not after.
-2. **Generator-Based DFS** — Room combinations are produced one at a time via Python `yield`. The caller (UI or CLI) consumes exactly as many variants as it needs. No variant is ever computed until it is requested.
+1. **Capacity-Based Pruning** — Before recursing into any branch, the engine checks whether the best remaining rooms can *possibly* satisfy the exam's student count. Impossible branches are cut befo[...]
+2. **Generator-Based DFS** — Room combinations are produced one at a time via Python `yield`. The caller (UI or CLI) consumes exactly as many variants as it needs. No variant is ever computed until [...]
 3. **Deduplication** — A `seen` set of distribution keys prevents the same room-to-student allocation from appearing twice, even when different room combinations produce identical splits.
-4. **Largest-Exam-First Ordering** — Within each day, larger exams are assigned rooms first. This maximises the chance that a valid allocation exists for smaller exams by reserving fewer rooms for them.
+4. **Largest-Exam-First Ordering** — Within each day, larger exams are assigned rooms first. This maximises the chance that a valid allocation exists for smaller exams by reserving fewer rooms for t[...]
 
-> **Result:** The GUI fetches classroom variants in pages at $O(1)$ perceived latency. The full variant space is never materialised in memory. Iterators are kept alive between page requests and resumed exactly where they left off — zero data loss, zero recalculation.
+> **Result:** The GUI fetches classroom variants in pages at `O(1)` perceived latency. The full variant space is never materialised in memory. Iterators are kept alive between page requests and resume[...]
 
 ### Proctor Calculation
 
-Proctor count per room is computed as $\lceil \text{students\_in\_room} / X \rceil$ where *X* is the ratio denominator from your `proctors.txt` file. This is applied at assignment time and written to a separate `_proctor.txt` report automatically.
+Proctor count per room is computed as `⌈students_in_room / X⌉` where *X* is the ratio denominator from your `proctors.txt` file. This is applied at assignment time and written to [...]
 
 ---
 
