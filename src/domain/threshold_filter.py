@@ -109,15 +109,13 @@ def _elective_dates_by_program(
 
 
 def _min_gap(dates: List[date]) -> int:
+    if len(dates) < 2:
+        return 0
     return min(abs((b - a).days) for a, b in combinations(dates, 2))
 
 
 def _count_same_day_pairs(dates: List[date]) -> int:
-    count = 0
-    for a, b in combinations(dates, 2):
-        if a == b:
-            count += 1
-    return count
+    return sum(1 for a, b in combinations(dates, 2) if a == b)
 
 
 # ---------------------------------------------------------------------------

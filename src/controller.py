@@ -77,7 +77,6 @@ logger = logging.getLogger(__name__)
 LOAD_BATCH_SIZE: int = 1000
 
 
-
 class MissingStudentCountError(ValueError):
     """Raised when a courses load would leave Exam offerings without a
     StudentCount while Feature 4 is enabled (spec 4.3 file-load abort).
