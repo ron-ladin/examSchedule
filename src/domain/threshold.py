@@ -20,7 +20,6 @@ Notes:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Optional
 
 
 class Criterion(Enum):
@@ -35,7 +34,7 @@ class Criterion(Enum):
 
 # Minimum allowed k per criterion when the criterion is enabled (ON).
 # Most criteria require a positive k; elective-collisions allows zero (spec 2.3).
-CRITERION_MIN_K: Dict[Criterion, int] = {
+CRITERION_MIN_K: dict[Criterion, int] = {
     Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS: 1,
     Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS: 1,
     Criterion.MAX_ELECTIVE_COLLISIONS: 0,
@@ -44,7 +43,7 @@ CRITERION_MIN_K: Dict[Criterion, int] = {
 }
 
 # Lowercased criterion token -> Criterion, for case-insensitive parsing.
-CRITERION_ALIASES: Dict[str, Criterion] = {
+CRITERION_ALIASES: dict[str, Criterion] = {
     criterion.value.lower(): criterion for criterion in Criterion
 }
 
@@ -74,7 +73,7 @@ class ThresholdSettings:
 
     entries: tuple[ThresholdEntry, ...] = ()
 
-    def for_criterion(self, criterion: Criterion) -> Optional[ThresholdEntry]:
+    def for_criterion(self, criterion: Criterion) -> ThresholdEntry | None:
         """Return the entry for the given criterion, or None if absent."""
         for entry in self.entries:
             if entry.criterion is criterion:

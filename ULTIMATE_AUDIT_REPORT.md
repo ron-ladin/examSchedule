@@ -1,10 +1,10 @@
 # Ultimate Audit Report — examSchedule
 
 **Date:** 2026-06-23  
-**Branch:** `chore/ultimate-audit` (based on `develop` @ e4438d4)  
+**Branch:** `chore/ultimate-audit` → **follow-up refactor on same branch** (2026-06-23)  
 **Auditor role:** Principal Staff Engineer / Lead SDET / Chief Software Architect  
 **Test baseline:** 535 passed, 0 failed  
-**Test result after fixes:** 535 passed, 0 failed ✅
+**Test result after all fixes:** 535 passed, 0 failed ✅
 
 ---
 
@@ -51,16 +51,16 @@
 | `src/engine/classroom_assigner.py` | 644 | Consider extracting `_room_distribution_variants` and `_balanced_distribution_*` into a `room_allocator.py` module |
 | `src/engine/generation_workers.py` | 584 | Extract `_KindTaggedQueue` and `_run_load_more_worker` into a `worker_dispatch.py` module |
 
-### DRY Violation — Critical (DOCUMENT ONLY — needs targeted refactor)
+### DRY Violation — ✅ FIXED
 
-`src/domain/threshold_filter.py` and `src/domain/sorting_engine.py` both define **identical private helpers**:
+`src/domain/schedule_metrics.py` was created containing the 4 shared helpers:
 
-- `_relevant_offerings(course, prog_set, semester)`
-- `_mandatory_dates_by_group(schedule, courses, prog_set)`
-- `_all_dates_by_group(schedule, courses, prog_set)`
-- `_elective_dates_by_program(schedule, courses, prog_set)`
+- `relevant_offerings(course, prog_set, semester)`
+- `mandatory_dates_by_group(schedule, courses, prog_set)`
+- `all_dates_by_group(schedule, courses, prog_set)`
+- `elective_dates_by_program(schedule, courses, prog_set)`
 
-**Recommended fix:** Extract these to `src/domain/schedule_metrics.py` and import from both files. This is the highest-priority architectural debt item.
+Both `threshold_filter.py` and `sorting_engine.py` now import from `schedule_metrics.py`. The ~40 lines of duplication are eliminated.
 
 ### Immutability
 - All domain models use `@dataclass(frozen=True)` or plain dataclasses with `dataclasses.replace()` for updates. ✅
@@ -130,7 +130,7 @@
 
 ### Fragility observations (informational — no failures, but watch list)
 - `test_ui_smoke.py` uses a `QApplication` fixture. Tests are Qt-signal-driven and could be flaky in headless environments. Currently stable. Monitor on CI.
-- `test_ui_engine_stress.py` uses multiprocessing via the real worker pool. In some CI configurations, `multiprocessing.Queue` may deadlock on timeout. Recommend setting `timeout` in `pytest.ini` for this module.
+- `test_ui_engine_stress.py` uses multiprocessing via the real worker pool. In some CI configurations, `multiprocessing.Queue` may deadlock on timeout. **FIXED:** `pytest.ini` now sets `timeout = 60` globally (requires `pytest-timeout==2.4.0` added to `requirements-dev.txt`).
 
 ---
 
@@ -184,24 +184,27 @@ All criteria negate the score in `sort_key()` to achieve descending order via `s
 | Lazy generation | ✅ CLEAN | All generators yield lazily |
 | Proctor calc (ceil) | ✅ CORRECT | Matches spec exactly |
 | Sorting direction (descending) | ✅ CORRECT | Negation in sort key |
-| DRY violation (metric helpers) | ⚠️ DEBT | Duplicate functions in threshold_filter + sorting_engine |
-| Oversized files | ⚠️ DEBT | 6 files exceed 500-line limit |
-| Test suite | ✅ 535/535 | No regressions |
+| DRY violation (metric helpers) | ✅ FIXED | Extracted to `src/domain/schedule_metrics.py` |
+| TimeSlot CLI validation | ✅ ALREADY DONE | `SlotsFileReader` calls `validate_sequence` for both CLI + GUI |
+| pytest CI deadlock risk | ✅ FIXED | `timeout = 60` in `pytest.ini`; `pytest-timeout` in dev deps |
+| Typing modernization | ✅ FIXED | All `typing.List/Dict/Tuple/Optional` → builtins across domain/ |
+| Oversized files | ⚠️ DEBT | 6 files exceed 500-line limit (UI code freeze — deferred) |
+| Test suite | ✅ 535/535 | No regressions after all changes |
 
 ---
 
 ## Team Action Items (Prioritized)
 
 ### P1 — High (next sprint)
-1. **Extract `src/domain/schedule_metrics.py`** — eliminate the ~40-line duplication of `_relevant_offerings`, `_mandatory_dates_by_group`, `_all_dates_by_group`, `_elective_dates_by_program` between `threshold_filter.py` and `sorting_engine.py`. One shared module, both import from it.
+1. ~~**Extract `src/domain/schedule_metrics.py`**~~ — **✅ DONE** — `schedule_metrics.py` created; both `threshold_filter.py` and `sorting_engine.py` import from it. DRY violation eliminated.
 2. **Split `src/controller.py`** (905 lines) — separate state/loading from export and combined-index navigation.
 3. **Split `src/ui/results_panel.py`** (971 lines) — extract schedule display and load-more into sub-widgets.
 
 ### P2 — Medium (tech debt sprint)
-4. **Modernize `typing` imports** — replace `from typing import Dict, List, Tuple, Optional` with builtin `dict`, `list`, `tuple`, `X | None` across all files. Python 3.10+ syntax already used elsewhere.
-5. **Split `src/ui/config_screen.py`** (800 lines) — extract file-load callbacks.
-6. **Set pytest timeout** for `tests/e2e/test_ui_engine_stress.py` to prevent CI deadlocks.
+4. ~~**Modernize `typing` imports**~~ — **✅ DONE** — `from typing import Dict, List, Tuple, Optional` replaced with builtin `dict`, `list`, `tuple`, `X | None` across all of `src/domain/` and `src/engine/`.
+5. **Split `src/ui/config_screen.py`** (800 lines) — extract file-load callbacks. *(Code freeze — deferred)*
+6. ~~**Set pytest timeout**~~ — **✅ DONE** — `pytest.ini` sets `timeout = 60`; `pytest-timeout==2.4.0` added to `requirements-dev.txt`.
 
 ### P3 — Low (nice to have)
-7. **Validate `TimeSlot` ascending order and 4-hour gap** at the reader level (currently only enforced by UI). Add it to `SlotsFileReader.read()` as well for CLI robustness.
+7. ~~**Validate `TimeSlot` ascending order and 4-hour gap** at the reader level~~ — **✅ ALREADY DONE** — `SlotsFileReader.parse_line()` calls `TimeSlot.validate_sequence()` which enforces ascending order and ≥4h gap for both CLI and GUI paths. No action required.
 8. **Add `conftest.py` fixtures** for `ProctorConfig` and `Schedule` with standard defaults, reducing boilerplate across unit tests.
