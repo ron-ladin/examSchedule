@@ -320,10 +320,22 @@ themselves (via `pytest.importorskip`) when PyQt6 is not installed:
 | **Full** (PyQt6 installed + sample `data/` files) | **557 passed, 0 skipped** | **92.01%** |
 | **Headless / minimal** (PyQt6 absent) | **491 passed, 5 skipped** | **90.97%** |
 
-In the headless run, 66 PyQt6-dependent GUI tests are not collected (PyQt6
-import is skipped) and 5 end-to-end tests skip when the optional real-data
-files are absent. CI installs `requirements.txt` (which includes PyQt6), so a
-full CI run exercises all 557 tests. Any failure blocks the merge.
+In the local/headless run, **5 PyQt-dependent GUI test modules are skipped
+because the PyQt6 native GUI libraries are unavailable** — the module-level
+`pytest.importorskip` skips each of them at import time:
+
+- `tests/unit/test_ui_smoke.py`
+- `tests/unit/test_programme_courses_dialog.py`
+- `tests/unit/test_ui_controller_integration.py`
+- `tests/unit/test_ui_import_schedule.py`
+- `tests/e2e/test_ui_engine_stress.py`
+
+Skipping those 5 modules leaves their individual GUI test cases uncollected,
+which is why the headless run collects 491 tests instead of 557. These GUI
+tests are expected to run in the full GUI/CI environment, where the required
+native libraries exist. CI installs `requirements.txt` (which includes PyQt6),
+so a full CI run exercises all 557 tests. Any failure blocks the merge.
+(Headless coverage reads ~91% — 90.97% on the reference run.)
 
 ---
 

@@ -116,7 +116,7 @@ Both `threshold_filter.py` and `sorting_engine.py` now import from `schedule_met
 ## Phase 5 — Testing Suite Integrity
 
 ### Results
-- **557 tests, 0 failures, 0 skipped** with PyQt6 installed — **92.01%** line coverage. Headless without PyQt6: **491 passed, 5 skipped, 90.97%** (66 GUI tests are PyQt6-gated via `importorskip`; 5 e2e tests skip without optional real-data files). ✅
+- **557 tests, 0 failures, 0 skipped** with PyQt6 installed — **92.01%** line coverage. Headless without PyQt6: **491 passed, 5 skipped, 90.97%** (reads ~91%). The 5 skips are PyQt-dependent GUI test **modules** skipped at import time because the PyQt6 native GUI libraries are unavailable (`test_ui_smoke.py`, `test_programme_courses_dialog.py`, `test_ui_controller_integration.py`, `test_ui_import_schedule.py`, `test_ui_engine_stress.py`); their individual cases are then uncollected, leaving 491 of 557. They run in the full GUI/CI environment. ✅
 
 ### Coverage of edge cases
 - `test_schedule_generator.py` covers empty course list, single course, full conflict graph. ✅
