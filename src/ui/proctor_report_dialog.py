@@ -9,7 +9,6 @@ controller (src.engine.proctor_report); this dialog is presentation only.
 import re
 from pathlib import Path
 
-from PyQt6.QtCore import QRegularExpression
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QSyntaxHighlighter
 from PyQt6.QtWidgets import (
     QDialog,
@@ -23,14 +22,22 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+_PERIOD_HEADER_RE = re.compile(r"===.*===")
+_DATE_LINE_RE = re.compile(r"\d{2}-\d{2}-\d{4}")
+_TIME_LINE_RE = re.compile(r"\d{2}:\d{2}")
+_PROCTOR_COUNT_RE = re.compile(r"Proctors:\s*(\d+)")
+
+_PRIMARY_COLOR = "#0755B5"
+_TEXT_COLOR = "#172033"
+
 
 class _ReportHighlighter(QSyntaxHighlighter):
     """Add visual hierarchy without changing the exportable text."""
 
     def __init__(self, document) -> None:
         super().__init__(document)
-        self._period = self._format("#0755B5", bold=True, background="#EAF2FF")
-        self._date = self._format("#172033", bold=True)
+        self._period = self._format(_PRIMARY_COLOR, bold=True, background="#EAF2FF")
+        self._date = self._format(_TEXT_COLOR, bold=True)
         self._time = self._format("#7C3AED", bold=True)
         self._course = self._format("#334155", bold=True)
         self._room = self._format("#047857")
@@ -50,19 +57,19 @@ class _ReportHighlighter(QSyntaxHighlighter):
 
     def highlightBlock(self, text: str) -> None:
         stripped = text.strip()
-        if stripped.startswith("===") and stripped.endswith("==="):
+        if _PERIOD_HEADER_RE.fullmatch(stripped):
             self.setFormat(0, len(text), self._period)
-        elif re.fullmatch(r"\d{2}-\d{2}-\d{4}", stripped):
+        elif _DATE_LINE_RE.fullmatch(stripped):
             self.setFormat(0, len(text), self._date)
-        elif re.fullmatch(r"\d{2}:\d{2}", stripped):
+        elif _TIME_LINE_RE.fullmatch(stripped):
             self.setFormat(0, len(text), self._time)
         elif text.startswith("      ") and "| Proctors:" in text:
             self.setFormat(0, len(text), self._room)
-            match = QRegularExpression(r"Proctors:\s*\d+").match(text)
-            if match.hasMatch():
+            match = _PROCTOR_COUNT_RE.search(text)
+            if match:
                 self.setFormat(
-                    match.capturedStart(),
-                    match.capturedLength(),
+                    match.start(),
+                    match.end() - match.start(),
                     self._proctors,
                 )
         elif text.startswith("    "):
@@ -80,7 +87,7 @@ class ProctorReportDialog(QDialog):
         self._report_text = report_text
         self.setStyleSheet(
             """
-            QDialog { background: #F4F7FB; color: #172033; }
+            QDialog { background: #F4F7FB; color: $TEXT_COLOR; }
             QFrame#reportHeader {
                 background: #FFFFFF; border: 1px solid #DCE5F0;
                 border-radius: 14px;
@@ -90,18 +97,18 @@ class ProctorReportDialog(QDialog):
                 border-radius: 10px;
             }
             QPlainTextEdit {
-                background: #FFFFFF; color: #172033;
+                background: #FFFFFF; color: $TEXT_COLOR;
                 border: 1px solid #DCE5F0; border-radius: 12px;
                 padding: 14px; selection-background-color: #BFDBFE;
-                selection-color: #172033;
+                selection-color: $TEXT_COLOR;
             }
             QPushButton {
                 min-height: 38px; padding: 0 18px; border-radius: 8px;
                 font-size: 12px; font-weight: 700;
             }
             QPushButton#exportButton {
-                background: #0755B5; color: #FFFFFF;
-                border: 1px solid #0755B5;
+                background: $PRIMARY_COLOR; color: #FFFFFF;
+                border: 1px solid $PRIMARY_COLOR;
             }
             QPushButton#exportButton:hover { background: #06499B; }
             QPushButton#closeButton {
@@ -110,6 +117,8 @@ class ProctorReportDialog(QDialog):
             }
             QPushButton#closeButton:hover { background: #F8FAFC; }
             """
+            .replace("$PRIMARY_COLOR", _PRIMARY_COLOR)
+            .replace("$TEXT_COLOR", _TEXT_COLOR)
         )
 
         layout = QVBoxLayout(self)
@@ -124,7 +133,7 @@ class ProctorReportDialog(QDialog):
 
         title = QLabel("Proctor assignment review")
         title.setStyleSheet(
-            "font-size:20px; font-weight:800; color:#172033; border:none;"
+            f"font-size:20px; font-weight:800; color:{_TEXT_COLOR}; border:none;"
         )
         header_layout.addWidget(title)
 
@@ -179,17 +188,17 @@ class ProctorReportDialog(QDialog):
     def _report_summary(report_text: str) -> tuple[tuple[str, str], ...]:
         lines = report_text.splitlines()
         periods = sum(
-            line.strip().startswith("===") and line.strip().endswith("===")
+            _PERIOD_HEADER_RE.fullmatch(line.strip()) is not None
             for line in lines
         )
         dates = sum(
-            re.fullmatch(r"\d{2}-\d{2}-\d{4}", line.strip()) is not None
+            _DATE_LINE_RE.fullmatch(line.strip()) is not None
             for line in lines
         )
         rooms = sum("| Proctors:" in line for line in lines)
         proctors = sum(
             int(match.group(1))
-            for match in re.finditer(r"Proctors:\s*(\d+)", report_text)
+            for match in _PROCTOR_COUNT_RE.finditer(report_text)
         )
         return (
             (str(periods), "Periods"),
@@ -208,7 +217,7 @@ class ProctorReportDialog(QDialog):
 
         value_label = QLabel(value)
         value_label.setStyleSheet(
-            "font-size:17px; font-weight:800; color:#0755B5; border:none;"
+            f"font-size:17px; font-weight:800; color:{_PRIMARY_COLOR}; border:none;"
         )
         text_label = QLabel(label)
         text_label.setStyleSheet(
