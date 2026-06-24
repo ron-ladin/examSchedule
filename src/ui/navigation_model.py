@@ -16,7 +16,6 @@ QApplication.
 """
 
 from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import date
 
@@ -53,20 +52,29 @@ class NavigationModel:
     def rebuild(self, period_key: str | None = None) -> None:
         """Build fast navigation indexes for loaded schedules.
 
-        Without this cache, every Next Dates / Next Variant / Go click would
-        rescan the entire loaded schedule list. Rebuilt after load and after
-        each Load More batch so navigation stays O(1).
+        Disk-backed schedule lists expose compact navigation metadata, so this
+        method can rebuild the date/variant cache without unpickling every stored
+        Schedule object from SQLite. Plain lists keep the original behavior.
         """
         all_schedules = self._source()
         keys = [period_key] if period_key is not None else list(all_schedules)
 
         for key in keys:
+            schedules = all_schedules.get(key, [])
             options: list[tuple[DateSignature, list[int]]] = []
             signature_to_pos: dict[DateSignature, int] = {}
             index_nav: dict[int, tuple[int, int]] = {}
 
-            for idx, schedule in enumerate(all_schedules.get(key, [])):
-                signature = self.date_signature(schedule)
+            nav_entries = getattr(schedules, "navigation_entries", None)
+            if callable(nav_entries):
+                entries = nav_entries()
+            else:
+                entries = [
+                    (self.date_signature(schedule), idx)
+                    for idx, schedule in enumerate(schedules)
+                ]
+
+            for signature, idx in entries:
                 date_pos = signature_to_pos.get(signature)
 
                 if date_pos is None:

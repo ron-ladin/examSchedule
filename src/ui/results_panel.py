@@ -1,5 +1,5 @@
 """
-Widget: _ResultsPanel — Schedule Results Tab (SRS §3.1–§3.5)
+Widget: _ResultsPanel — Schedule Results Tab
 --------------------------------------------------------------
 Shows one exam-period card per period with independent Prev/Next navigation.
 Each card has a "Load More" button when more schedules exist beyond the initial
@@ -41,6 +41,11 @@ from src.ui.calendar_cell_delegate import (
 from src.ui.tokens import PERIOD_TAB_STYLE
 
 from src.controller import DesktopController
+from src.adapters.sqlite_schedule_store import (
+    ABSOLUTE_MAX_STORED_SCHEDULES,
+    SQLiteScheduleStore,
+    StoredScheduleList,
+)
 from src.domain.course import Course
 from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
@@ -133,6 +138,7 @@ class _ResultsPanel(QWidget):
         self._period_indices: dict[str, int] = {}
         self._truncated_periods: set[str] = set()
         self._is_imported_schedule: bool = False
+        self._schedule_store: SQLiteScheduleStore | None = None
 
         # Date/variant navigation indexing lives in a plain-Python model that
         # reads the panel's live schedules dict, so button clicks stay O(1)
@@ -233,24 +239,79 @@ class _ResultsPanel(QWidget):
         if read_only_import:
             self._controller.reset_generation_state()
 
-        self._schedules_by_period = schedules_by_period
+        courses_for_scoring = list(courses_by_id.values())
+        selected_programs = self._controller.selected_programs
+        incoming_stores = {
+            schedules.store
+            for schedules in schedules_by_period.values()
+            if isinstance(schedules, StoredScheduleList)
+        }
+
+        if incoming_stores:
+            # The schedules are already backed by SQLite. Adopt the existing
+            # StoredScheduleList facades directly; never close/recreate the store
+            # that backs them. This keeps Result Ranking and repeated Generate
+            # flows from invalidating live views.
+            if self._schedule_store is not None and self._schedule_store not in incoming_stores:
+                self._schedule_store.close(delete=True)
+
+            self._schedule_store = next(iter(incoming_stores)) if len(incoming_stores) == 1 else None
+            stored_by_period: dict[str, list[Schedule]] = dict(schedules_by_period)
+
+            for schedules in stored_by_period.values():
+                if isinstance(schedules, StoredScheduleList):
+                    schedules.set_scoring_context(courses_for_scoring, selected_programs)
+                    schedules.set_sorting(self._controller.settings.sorting)
+
+        elif read_only_import:
+            # Imported files are small, fixed snapshots and should remain a simple
+            # read-only in-memory view. Do not create a temporary SQLite store just
+            # to display them.
+            if self._schedule_store is not None:
+                self._schedule_store.close(delete=True)
+                self._schedule_store = None
+            stored_by_period = dict(schedules_by_period)
+
+        else:
+            # Fresh subprocess generation returns bounded plain lists. Move them
+            # into one panel-owned SQLite store, then cache those StoredScheduleList
+            # facades in the controller so future Result Ranking does not copy the
+            # data back and forth between RAM and SQLite.
+            if self._schedule_store is not None:
+                self._schedule_store.close(delete=True)
+
+            self._schedule_store = SQLiteScheduleStore()
+            stored_by_period = {}
+            for key, scheds in schedules_by_period.items():
+                self._schedule_store.replace_period(
+                    key,
+                    scheds,
+                    courses=courses_for_scoring,
+                    selected_programs=selected_programs,
+                )
+                stored_by_period[key] = self._schedule_store.as_sequence(
+                    key,
+                    courses=courses_for_scoring,
+                    selected_programs=selected_programs,
+                    sorting=self._controller.settings.sorting,
+                )
+
+            stored_by_period = self._controller.cache_generated_results(stored_by_period)
+
+        self._schedules_by_period = stored_by_period
         self._courses_by_id = courses_by_id
         self._prog_color_map = prog_color_map
-        self._truncated_periods = (
-            set()
-            if read_only_import
-            else (truncated_periods or set())
-        )
-        self._period_indices = {k: 0 for k in schedules_by_period}
+        self._truncated_periods = set() if read_only_import else (truncated_periods or set())
+        self._period_indices = {k: 0 for k in stored_by_period}
         self._total_by_period = {}
 
-        for key, scheds in schedules_by_period.items():
+        for key, scheds in stored_by_period.items():
             if key not in self._truncated_periods:
                 self._total_by_period[key] = len(scheds)
 
-        all_period_keys = _merge_period_keys(self._controller, schedules_by_period)
+        all_period_keys = _merge_period_keys(self._controller, stored_by_period)
         merged: dict[str, list[Schedule]] = {k: [] for k in all_period_keys}
-        merged.update(schedules_by_period)
+        merged.update(stored_by_period)
 
         self._schedules_by_period = merged
         self._period_indices = {k: 0 for k in merged}
@@ -258,7 +319,6 @@ class _ResultsPanel(QWidget):
         self._rebuild_navigation_cache()
 
         self._period_tabs.clear()
-
         self._cards.clear()
         self._cell_data.clear()
 
@@ -269,9 +329,9 @@ class _ResultsPanel(QWidget):
             )
 
         has_proctor_report = any(
-            bool(getattr(schedule, "classroom_assignments", None))
-            for schedules in merged.values()
-            for schedule in schedules
+            self._has_classroom_feature_results(period_key)
+            for period_key, schedules in merged.items()
+            if schedules
         )
         self._proctor_btn.setVisible(has_proctor_report)
 
@@ -306,37 +366,53 @@ class _ResultsPanel(QWidget):
         if self._is_imported_schedule:
             return
 
-        # Anti-OOM guardrail: never let the in-memory population exceed the hard
-        # cap, no matter how many times the user clicks Load More / Auto Load.
-        # Trim the incoming batch to the remaining headroom; if we are already at
-        # the cap, drop the batch entirely. Load More / Auto Load callers observe
-        # this via is_at_memory_cap() and stop requesting further pages.
-        headroom = ABSOLUTE_MAX_IN_MEMORY_SCHEDULES - self.total_in_memory_schedule_count()
-        if headroom <= 0:
-            logger.warning(
-                "In-memory schedule cap (%s) reached; refusing further load for %s.",
-                ABSOLUTE_MAX_IN_MEMORY_SCHEDULES,
-                period_key,
-            )
-            return
-        if len(extra) > headroom:
-            logger.warning(
-                "In-memory schedule cap (%s) reached; truncating batch for %s "
-                "from %s to %s schedules.",
-                ABSOLUTE_MAX_IN_MEMORY_SCHEDULES,
-                period_key,
-                len(extra),
-                headroom,
-            )
-            extra = extra[:headroom]
+        # Disk-backed result storage: the UI keeps only current objects in RAM.
+        # Still enforce a high disk-cache ceiling so Auto Load cannot fill the
+        # user's drive forever.  If no store exists, fall back to the old RAM cap.
+        if self._schedule_store is not None:
+            headroom = ABSOLUTE_MAX_STORED_SCHEDULES - self._schedule_store.total_count()
+            if headroom <= 0:
+                logger.warning(
+                    "SQLite schedule cache cap (%s) reached; refusing further load for %s.",
+                    ABSOLUTE_MAX_STORED_SCHEDULES,
+                    period_key,
+                )
+                return
+            if len(extra) > headroom:
+                logger.warning(
+                    "SQLite schedule cache cap (%s) reached; truncating batch for %s "
+                    "from %s to %s schedules.",
+                    ABSOLUTE_MAX_STORED_SCHEDULES,
+                    period_key,
+                    len(extra),
+                    headroom,
+                )
+                extra = extra[:headroom]
+        else:
+            headroom = ABSOLUTE_MAX_IN_MEMORY_SCHEDULES - self.total_in_memory_schedule_count()
+            if headroom <= 0:
+                logger.warning(
+                    "In-memory schedule cap (%s) reached; refusing further load for %s.",
+                    ABSOLUTE_MAX_IN_MEMORY_SCHEDULES,
+                    period_key,
+                )
+                return
+            if len(extra) > headroom:
+                logger.warning(
+                    "In-memory schedule cap (%s) reached; truncating batch for %s "
+                    "from %s to %s schedules.",
+                    ABSOLUTE_MAX_IN_MEMORY_SCHEDULES,
+                    period_key,
+                    len(extra),
+                    headroom,
+                )
+                extra = extra[:headroom]
 
         self._schedules_by_period[period_key].extend(extra)
 
-        # Re-sort the full accumulated set after appending the new page.
-        # Sorting only the fresh page is not enough: once Load More / Auto
-        # Variants adds another block, the combined list must still reflect the
-        # active global ranking. cache_generated_results() returns the sorted
-        # full cache, so keep the panel state in sync with it.
+        # Re-rank without materialising SQLite-backed periods.  For StoredScheduleList
+        # this only updates the SQL ORDER BY rule; for plain lists the controller
+        # keeps the previous in-memory behavior.
         self._schedules_by_period = self._controller.cache_generated_results(
             dict(self._schedules_by_period)
         )
@@ -404,15 +480,18 @@ class _ResultsPanel(QWidget):
         return self._schedules_by_period.get(period_key, [])
 
     def total_in_memory_schedule_count(self) -> int:
-        """Return the total number of schedules resident in RAM across periods."""
+        """Return loaded schedule count kept by the active result container.
+
+        With the SQLite-backed store this is a stored-count, not a count of
+        Schedule objects resident in RAM.  The name is kept for compatibility
+        with LoadMoreController/tests.
+        """
         return sum(len(scheds) for scheds in self._schedules_by_period.values())
 
     def is_at_memory_cap(self) -> bool:
-        """Return True once the hard in-memory schedule cap has been reached.
-
-        Load More / Auto Load consult this to stop fetching further pages before
-        the process is OOM-killed. See ABSOLUTE_MAX_IN_MEMORY_SCHEDULES.
-        """
+        """Return True once the active result cache has reached its safety cap."""
+        if self._schedule_store is not None:
+            return self._schedule_store.total_count() >= ABSOLUTE_MAX_STORED_SCHEDULES
         return self.total_in_memory_schedule_count() >= ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
 
     def get_current_index(self, period_key: str) -> int:
@@ -466,6 +545,12 @@ class _ResultsPanel(QWidget):
     ) -> int:
         """Return how many loaded variants share *signature* in *period_key*."""
         return len(self._indices_for_signature(period_key, signature))
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        if self._schedule_store is not None:
+            self._schedule_store.close(delete=True)
+            self._schedule_store = None
+        super().closeEvent(event)
 
     def _setup_ui(self) -> None:
         self.setStyleSheet("background: transparent;")
@@ -567,11 +652,15 @@ class _ResultsPanel(QWidget):
         )
 
     def _has_classroom_feature_results(self, period_key: str) -> bool:
-        """Return True if the loaded period contains classroom-assignment data."""
-        return any(
-            self._schedule_has_classroom_data(schedule)
-            for schedule in self._schedules_by_period.get(period_key, [])
-        )
+        """Return True if the loaded period contains classroom-assignment data.
+
+        For SQLite-backed periods this uses a metadata query instead of scanning
+        and unpickling every stored Schedule.
+        """
+        schedules = self._schedules_by_period.get(period_key, [])
+        if isinstance(schedules, StoredScheduleList):
+            return schedules.has_classroom_data()
+        return any(self._schedule_has_classroom_data(schedule) for schedule in schedules)
 
     def _rebuild_navigation_cache(self, period_key: str | None = None) -> None:
         """Rebuild navigation indexes through NavigationModel."""
@@ -968,7 +1057,12 @@ class _ResultsPanel(QWidget):
         dialog.exec()
 
     def _apply_ranking(self, config: "SortingConfig") -> None:
-        """Re-rank cached schedules in memory and refresh the displayed results."""
+        """Re-rank cached schedules and refresh the displayed cards in place.
+
+        SQLite-backed results only change their ORDER BY metadata.  Rebuilding
+        through load() would close/recreate stores and can invalidate live
+        StoredScheduleList objects after repeated Ranking/Generate flows.
+        """
         try:
             resorted = self._controller.resort(config)
         except ValueError:
@@ -976,13 +1070,25 @@ class _ResultsPanel(QWidget):
             self._controller.apply_sort(config)
             return
 
-        self.load(
-            resorted,
-            self._courses_by_id,
-            self._prog_color_map,
-            truncated_periods=self.get_truncated_periods(),
-            read_only_import=self._is_imported_schedule,
+        for period_key, schedules in resorted.items():
+            self._schedules_by_period[period_key] = schedules
+            # A changed ranking changes what schedule index 0 means; show the new
+            # best-ranked option instead of keeping an arbitrary old ordinal.
+            self._period_indices[period_key] = 0
+
+        self._nav_model.clear()
+        self._rebuild_navigation_cache()
+
+        for period_key in list(self._cards):
+            self._refresh_period_card(period_key)
+
+        has_proctor_report = any(
+            self._has_classroom_feature_results(period_key)
+            for period_key, schedules in self._schedules_by_period.items()
+            if schedules
         )
+        self._proctor_btn.setVisible(has_proctor_report)
+        self._update_summary()
 
     def _on_proctor_report(self) -> None:
         """Build and show the spec 4.6 proctor report for displayed schedules."""
