@@ -223,7 +223,7 @@ def build_period_card(panel, period_key: str) -> QWidget:
     chunk_btn.setVisible(has_more)
     chunk_btn.clicked.connect(lambda _=False, k=period_key: panel._lm.on_load_more(k))
 
-    auto_dates_btn = QPushButton("⚡  Auto Dates")
+    auto_dates_btn = QPushButton("⚡  Auto Load Dates")
     auto_dates_btn.setStyleSheet(
         "color: #047857; border: 2px solid #047857; border-radius: 8px;"
         "padding: 6px 12px; font-size: 11px; font-weight: 700;"
@@ -238,7 +238,7 @@ def build_period_card(panel, period_key: str) -> QWidget:
         lambda _=False, k=period_key: panel._lm.toggle_auto_load_dates(k)
     )
 
-    auto_variants_btn = QPushButton("⚡  Auto Variants")
+    auto_variants_btn = QPushButton("⚡  Auto Load Classes Variants")
     auto_variants_btn.setStyleSheet(
         "color: #7C3AED; border: 2px solid #7C3AED; border-radius: 8px;"
         "padding: 6px 12px; font-size: 11px; font-weight: 700;"

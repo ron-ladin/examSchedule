@@ -181,6 +181,10 @@ class _ResultsPanel(QWidget):
 
         self._has_stale_results: bool = False
 
+        # True once the first streamed period of the current run has built the
+        # tab scaffold. Reset by begin_streaming() at the start of each run.
+        self._streaming_run_active: bool = False
+
         # Per-period Auto Load is user-controlled. It loads one batch, waits
         # AUTO_LOAD_DELAY_MS, then requests the next batch until there is no more
         # data or the user presses Stop Auto Load. Never use a blocking while-loop.
@@ -341,6 +345,114 @@ class _ResultsPanel(QWidget):
 
         # Avoid opacity effects while rebuilding result widgets.
         # QGraphicsOpacityEffect caused QPainter warnings and visual flicker.
+        self._content.setGraphicsEffect(None)
+
+    def begin_streaming(self) -> None:
+        """Arm the panel for a fresh streaming run.
+
+        The first ``append_period`` after this builds the tab scaffold from
+        scratch, so a previous run's cards/state do not linger.
+        """
+        self._streaming_run_active = False
+
+    def append_period(
+        self,
+        schedules_by_period: dict[str, list[Schedule]],
+        courses_by_id: dict[str, Course],
+        prog_color_map: dict[str, str],
+        truncated_periods: set[str] | None = None,
+    ) -> None:
+        """Add one streamed batch of periods without clearing existing tabs.
+
+        The first batch of a run builds the standard tab scaffold (all periods
+        empty); each batch then fills in its own period card(s). This is the
+        incremental counterpart to :meth:`load`, used for streaming generation.
+        """
+        truncated = truncated_periods or set()
+
+        if not self._streaming_run_active:
+            self._init_streaming_scaffold(courses_by_id, prog_color_map, truncated)
+            self._streaming_run_active = True
+
+        # Course metadata can arrive with any batch; keep the union so the
+        # calendar can always resolve course names/colours.
+        self._courses_by_id.update(courses_by_id)
+        self._truncated_periods |= truncated
+
+        for period_key, schedules in schedules_by_period.items():
+            if period_key not in self._schedules_by_period:
+                # A period outside the standard scaffold (e.g. an extra loaded
+                # period): create its tab on the fly.
+                self._schedules_by_period[period_key] = []
+                self._period_indices[period_key] = 0
+                self._period_tabs.addTab(
+                    self._build_period_card(period_key),
+                    _display_period_key(period_key),
+                )
+
+            self._schedules_by_period[period_key] = schedules
+            self._period_indices.setdefault(period_key, 0)
+
+            # Keep the controller's has-more state in sync per batch so the
+            # period's "Load More" control reflects truncation as it streams in.
+            still_more = period_key in truncated
+            self._controller.set_has_more_for_period(period_key, still_more)
+            if not still_more:
+                self._total_by_period[period_key] = len(schedules)
+
+            self._rebuild_navigation_cache(period_key)
+            self._refresh_period_card(period_key)
+
+        has_proctor_report = any(
+            bool(getattr(schedule, "classroom_assignments", None))
+            for schedules in self._schedules_by_period.values()
+            for schedule in schedules
+        )
+        if has_proctor_report:
+            self._proctor_btn.setVisible(True)
+
+        self._update_summary()
+
+    def _init_streaming_scaffold(
+        self,
+        courses_by_id: dict[str, Course],
+        prog_color_map: dict[str, str],
+        truncated_periods: set[str],
+    ) -> None:
+        """Build empty cards for every standard/loaded period on stream start."""
+        self.clear_stale()
+        self._is_imported_schedule = False
+
+        # Stop any in-flight Load More / persistent workers from a previous run
+        # before rebuilding cards (mirrors load()).
+        self._lm.reset()
+        self._controller.shutdown_load_workers()
+
+        self._courses_by_id = dict(courses_by_id)
+        self._prog_color_map = prog_color_map
+        self._truncated_periods = set(truncated_periods)
+
+        all_period_keys = _merge_period_keys(self._controller, {})
+        self._schedules_by_period = {k: [] for k in all_period_keys}
+        self._period_indices = {k: 0 for k in self._schedules_by_period}
+        self._total_by_period = {}
+        self._nav_model.clear()
+        self._rebuild_navigation_cache()
+
+        self._period_tabs.clear()
+        self._cards.clear()
+        self._cell_data.clear()
+
+        for period_key in self._schedules_by_period:
+            self._period_tabs.addTab(
+                self._build_period_card(period_key),
+                _display_period_key(period_key),
+            )
+
+        self._proctor_btn.setVisible(False)
+        self._update_summary()
+        self._placeholder.setVisible(False)
+        self._content.setVisible(True)
         self._content.setGraphicsEffect(None)
 
     def _on_navigation_requested(self, period_key: str, index: int) -> None:

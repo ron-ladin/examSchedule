@@ -51,3 +51,24 @@ class GenerationResult:
     def failure(cls, error: str) -> "GenerationResult":
         """Build a failed result carrying an error message."""
         return cls(success=False, error=error)
+
+
+@dataclass(frozen=True)
+class GenerationDone:
+    """Terminal marker for streaming generation.
+
+    When a worker streams one ``GenerationResult`` per exam period as each
+    period finishes, it puts a single ``GenerationDone`` on the queue afterwards
+    so the consumer knows generation is complete (even when zero periods were
+    produced). It carries the final ``truncated_periods`` set so the consumer can
+    finalise has-more state. Picklable; crosses the multiprocessing boundary
+    safely. Distinct type — not a ``GenerationResult`` — so partial results and
+    the final marker are never confused.
+    """
+
+    truncated_periods: set[str] = field(default_factory=set)
+
+    @classmethod
+    def done(cls, truncated_periods: set[str] | None = None) -> "GenerationDone":
+        """Build the terminal marker carrying the final truncated-period set."""
+        return cls(truncated_periods=set(truncated_periods or set()))
