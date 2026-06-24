@@ -261,7 +261,7 @@ class LoadMoreController(QObject):
                     date_btn, "#B91C1C", "rgba(185, 28, 28, 0.07)", True
                 )
             else:
-                date_btn.setText("⚡  Auto Dates")
+                date_btn.setText("⚡  Auto Load Dates")
                 self._style_auto_button(
                     date_btn,
                     "#047857",
@@ -283,7 +283,7 @@ class LoadMoreController(QObject):
                     variant_btn, "#B91C1C", "rgba(185, 28, 28, 0.07)", True
                 )
             else:
-                variant_btn.setText("⚡  Auto Variants")
+                variant_btn.setText("⚡  Auto Load Classes Variants")
                 self._style_auto_button(
                     variant_btn,
                     "#7C3AED",
