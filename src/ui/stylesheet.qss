@@ -9,6 +9,18 @@ QMainWindow, QDialog, QWidget {
     font-size: 12px;
 }
 
+/* ── TOOLTIPS ─────────────────────────────────────────────── */
+/* A global stylesheet makes Qt paint tooltips as a black box unless we
+ * style QToolTip ourselves, so give it readable colors (SCRUM-399). */
+QToolTip {
+    background-color: #1a1c1e;
+    color: #ffffff;
+    border: 1px solid rgba(194, 198, 214, 0.6);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
 /* ── APP HEADER ───────────────────────────────────────────── */
 QWidget#appHeader {
     background-color: @COLOR_SIDEBAR@;

@@ -75,7 +75,12 @@ class CalendarRenderer:
                 )
 
                 if course_ids:
-                    item.setToolTip("Click to view exam details")
+                    # SCRUM-399: hovering a day shows how many exams it holds.
+                    word = "exam" if len(course_ids) == 1 else "exams"
+                    item.setToolTip(
+                        f"{len(course_ids)} {word} on this day"
+                        " · click to view details"
+                    )
 
                 # §4.5: when exams have slot assignments, render them as
                 # side-by-side per-slot colored columns (with >3 collapse).
