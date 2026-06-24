@@ -51,7 +51,7 @@ from src.domain.threshold_filter import _CHECKERS
 from src.domain.time_slot import TimeSlot
 from src.ui.config_screen import ConfigScreen
 from src.ui.proctor_report_dialog import ProctorReportDialog
-from src.ui.settings_screen import SettingsScreen, _CRITERION_ROLE
+from src.ui.settings_screen import SettingsScreen
 
 
 # ── shared fixtures / helpers ────────────────────────────────────────────────
@@ -111,19 +111,10 @@ def _driven_settings_screen(
         if want:
             spinbox.setValue(enabled_thresholds[criterion])
 
-    # Build the sort list check-states + ordering. The dialog reads priority
-    # from row order, so we reorder rows to match `sort_order`.
-    lst = screen._sort_list
-    # Pull all existing rows out so we can re-add them in priority order.
-    remaining = [lst.takeItem(0) for _ in range(lst.count())]
-    by_crit = {it.data(_CRITERION_ROLE): it for it in remaining}
-    for crit in sort_order:
-        item = by_crit.pop(crit)
-        item.setCheckState(Qt.CheckState.Checked)
-        lst.addItem(item)
-    for item in by_crit.values():
-        item.setCheckState(Qt.CheckState.Unchecked)
-        lst.addItem(item)
+    # Drive the shared ranking widget straight from an ordered criteria list:
+    # priority 1 is first. The widget renders the checked block in this order,
+    # and _build_settings() reads it back via to_config().
+    screen._sort_list.load_config(SortingConfig.from_ordered_criteria(sort_order))
 
     settings = screen._build_settings()
     screen.close()

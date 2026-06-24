@@ -44,6 +44,18 @@ from src.interfaces.i_output_exporter import IOutputExporter
 
 logger = logging.getLogger(__name__)
 
+# Hard upper bound on the TOTAL number of schedules the UI is allowed to hold in
+# RAM across every period and across every "Load More" / "Auto Load" request.
+#
+# This is a deliberate anti-OOM guardrail, not a generation limit. Schedule
+# generation is lazy and can yield effectively unbounded results (a Cartesian
+# product of date options x classroom variants can reach billions). Without a
+# ceiling, a user who repeatedly clicks "Auto Load" would accumulate Schedule
+# objects until the OS OOM-killer terminates the process. Once this many
+# schedules are resident, further loads are refused gracefully and Auto Load is
+# stopped. See README -> "Handling Extreme Scale: Why We Don't Sort Billions".
+ABSOLUTE_MAX_IN_MEMORY_SCHEDULES = 100_000
+
 
 class _MemoryExporter(IOutputExporter):
     """
