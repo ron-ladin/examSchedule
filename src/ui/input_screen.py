@@ -118,6 +118,27 @@ class ResultsScreen(QWidget):
         self._workspace.setCurrentIndex(2)
         self._results_loaded = True
 
+    def prepare_streaming(self) -> None:
+        """Reset the results panel before a new streaming generation run."""
+        self._results_panel.begin_streaming()
+
+    def append_period(
+        self,
+        schedules_by_period: dict[str, list[Schedule]],
+        courses_by_id: dict[str, Course],
+        prog_color_map: dict[str, str],
+        truncated_periods: set[str],
+    ) -> None:
+        """Add one streamed period batch without clearing existing results."""
+        self._results_panel.append_period(
+            schedules_by_period,
+            courses_by_id,
+            prog_color_map,
+            truncated_periods,
+        )
+        self._workspace.setCurrentIndex(2)
+        self._results_loaded = True
+
     def refresh_courses(self, selected_ids: list[str]) -> None:
         self._course_table.setRowCount(0)
 
@@ -389,7 +410,10 @@ class InputScreen(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self._stacked)
 
+        self._streaming_active: bool = False
+
         self._config.generation_started.connect(self._on_generation_started)
+        self._config.period_ready.connect(self._on_period_ready)
         self._config.schedule_generated.connect(self._on_generated)
         self._config.generation_failed.connect(self._on_generation_failed)
         self._config.courses_changed.connect(self._results.refresh_courses)
@@ -400,9 +424,29 @@ class InputScreen(QWidget):
     def _on_generation_started(self, data: tuple) -> None:
         selected, _ = data
 
+        self._streaming_active = False
         self._results.reset_results_state()
+        self._results.prepare_streaming()
         self._results.show_loading()
         self._stacked.setCurrentIndex(1)
+
+    def _on_period_ready(self, data: tuple) -> None:
+        """Display one streamed period batch as soon as it arrives."""
+        _, schedules_by_period, courses_by_id, prog_color_map, truncated = data[:5]
+
+        # The first batch replaces the loading spinner with the (incrementally
+        # filling) results view.
+        if not self._streaming_active:
+            self._streaming_active = True
+            self._results.hide_loading()
+            self._stacked.setCurrentIndex(1)
+
+        self._results.append_period(
+            schedules_by_period,
+            courses_by_id,
+            prog_color_map,
+            truncated,
+        )
 
     def _on_generated(self, data: tuple) -> None:
         _, schedules_by_period, courses_by_id, prog_color_map, truncated = data[:5]

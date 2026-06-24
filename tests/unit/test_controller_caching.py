@@ -80,6 +80,53 @@ def test_cache_generated_results_with_load_more_includes_extra_schedules():
     assert len(resorted["FALL_Aleph"]) == 2
 
 
+# ── SCRUM-393: incremental (streaming) caching ──────────────────────────────
+
+def test_incremental_cache_merges_periods_across_batches():
+    """Each streamed batch must accumulate, not replace, earlier periods."""
+    from src.domain.schedule import Schedule
+    from src.domain.exam_period import ExamPeriod
+    from src.domain.sorting import SortingConfig
+
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(30)]
+
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    fall = [Schedule(period, {"11111": date(2026, 1, 5)})]
+    spring_period = ExamPeriod("SPRI", "Aleph", [(date(2026, 6, 1), date(2026, 6, 5))])
+    spring = [Schedule(spring_period, {"11111": date(2026, 6, 1)})]
+
+    ctrl.begin_streaming_cache()
+    first = ctrl.cache_generated_results_incremental({"FALL - Aleph": fall})
+    second = ctrl.cache_generated_results_incremental({"SPRI - Aleph": spring})
+
+    # Each call returns only its own batch …
+    assert set(first) == {"FALL - Aleph"}
+    assert set(second) == {"SPRI - Aleph"}
+
+    # … but the cache holds every period streamed so far, so resort() sees all.
+    resorted = ctrl.resort(SortingConfig(rules=[]))
+    assert set(resorted) == {"FALL - Aleph", "SPRI - Aleph"}
+
+
+def test_begin_streaming_cache_clears_previous_run():
+    """A new streaming run must not inherit the previous run's results."""
+    from src.domain.schedule import Schedule
+    from src.domain.exam_period import ExamPeriod
+
+    ctrl = DesktopController()
+    ctrl._courses = [_exam_course(30)]
+
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    ctrl.begin_streaming_cache()
+    ctrl.cache_generated_results_incremental(
+        {"FALL - Aleph": [Schedule(period, {"11111": date(2026, 1, 5)})]}
+    )
+
+    ctrl.begin_streaming_cache()
+    assert ctrl._last_results == {}
+
+
 # ── M4: engine-level schedule rejection count ─────────────────────────────────
 
 def test_pipeline_rejects_unassignable_schedules(tmp_path):

@@ -25,7 +25,7 @@ from src.adapters.in_memory_data_provider import InMemoryDataProvider
 from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
-from src.domain.generation_result import GenerationResult
+from src.domain.generation_result import GenerationDone, GenerationResult
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.settings import Settings
@@ -75,12 +75,19 @@ class _MemoryExporter(IOutputExporter):
         only_period_keys: set[str] | None = None,
         settings: Settings | None = None,
         selected_programs: list[str] | None = None,
+        stream_queue=None,
     ) -> None:
         self._cap = cap
         self._offset_by_period = offset_by_period or {}
         self._only_period_keys = only_period_keys
         self._settings = settings
         self._selected_programs = selected_programs or []
+
+        # When set, each period's sorted schedules are put on this queue as soon
+        # as that period finishes (full generation only), so the UI can display
+        # results incrementally instead of waiting for the whole run. Streaming
+        # is opt-in: capped/Load-More paths leave this None and are unaffected.
+        self._stream_queue = stream_queue
 
         self.schedules_by_period: dict[str, list[Schedule]] = {}
         self.courses_by_id: dict[str, Course] = {}
@@ -111,22 +118,35 @@ class _MemoryExporter(IOutputExporter):
                 collected = list(islice(schedule_iter, offset, None))
                 self.schedules_by_period[key] = self._sort(collected, courses_list)
                 self.has_more_by_period[key] = False
-                continue
-
-            batch = list(islice(schedule_iter, offset, offset + self._cap + 1))
-
-            if len(batch) > self._cap:
-                self.schedules_by_period[key] = self._sort(batch[: self._cap], courses_list)
-                self.truncated_periods.add(key)
-                self.has_more_by_period[key] = True
-
-                self.remaining_iterators[key] = chain(
-                    [batch[self._cap]],
-                    schedule_iter,
-                )
             else:
-                self.schedules_by_period[key] = self._sort(batch, courses_list)
-                self.has_more_by_period[key] = False
+                batch = list(islice(schedule_iter, offset, offset + self._cap + 1))
+
+                if len(batch) > self._cap:
+                    self.schedules_by_period[key] = self._sort(
+                        batch[: self._cap], courses_list
+                    )
+                    self.truncated_periods.add(key)
+                    self.has_more_by_period[key] = True
+
+                    self.remaining_iterators[key] = chain(
+                        [batch[self._cap]],
+                        schedule_iter,
+                    )
+                else:
+                    self.schedules_by_period[key] = self._sort(batch, courses_list)
+                    self.has_more_by_period[key] = False
+
+            # Stream this period the moment it is ready (full or capped
+            # generation). The partial carries this period's truncated flag so
+            # the UI can show its "Load More" control as results stream in.
+            if self._stream_queue is not None:
+                self._stream_queue.put(
+                    GenerationResult.ok(
+                        {key: self.schedules_by_period[key]},
+                        self.courses_by_id,
+                        {key} if key in self.truncated_periods else set(),
+                    )
+                )
 
     def _sort(self, schedules: list[Schedule], courses: list[Course]) -> list[Schedule]:
         if self._settings and self._settings.sorting.rules:
@@ -150,12 +170,21 @@ def _run_generation_process(
     proctor_config: "ProctorConfig | None" = None,
     allow_unassigned_classrooms: bool = False,
     classroom_variant_mode: str = CLASSROOM_VARIANT_MODE_FIRST,
+    stream: bool = False,
 ) -> None:
     """
     Entry point for background-worker schedule generation.
 
-    Puts a GenerationResult on the queue: ok(schedules_by_period, courses_by_id,
-    truncated_periods) on success or failure(error_message) on error.
+    Default (stream=False):
+        Puts a single GenerationResult on the queue: ok(schedules_by_period,
+        courses_by_id, truncated_periods) on success or failure(error_message)
+        on error. Used by the Load More / Auto worker and the legacy batched
+        path, so this behaviour is preserved exactly.
+
+    Streaming (stream=True, full generation only):
+        Puts one GenerationResult.ok per exam period as soon as that period
+        finishes, then a single GenerationDone marker carrying the final
+        truncated-period set. A failure still puts one GenerationResult.failure.
 
     Default behavior:
         cap=None -> generate all schedules up front.
@@ -183,6 +212,7 @@ def _run_generation_process(
             only_period_keys={period_key} if period_key else None,
             settings=active_settings,
             selected_programs=selected_programs,
+            stream_queue=result_queue if stream else None,
         )
 
         engine = _EngineController(
@@ -200,13 +230,18 @@ def _run_generation_process(
         )
         engine.run()
 
-        result_queue.put(
-            GenerationResult.ok(
-                memory_exporter.schedules_by_period,
-                memory_exporter.courses_by_id,
-                memory_exporter.truncated_periods,
+        if stream:
+            # Per-period partials were already streamed inside the exporter.
+            # Send only the terminal marker so the consumer knows we are done.
+            result_queue.put(GenerationDone.done(memory_exporter.truncated_periods))
+        else:
+            result_queue.put(
+                GenerationResult.ok(
+                    memory_exporter.schedules_by_period,
+                    memory_exporter.courses_by_id,
+                    memory_exporter.truncated_periods,
+                )
             )
-        )
     except Exception as exc:
         logger.exception("Generation process failed")
         result_queue.put(GenerationResult.failure(str(exc)))

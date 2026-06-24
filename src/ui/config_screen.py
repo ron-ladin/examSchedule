@@ -89,6 +89,7 @@ class ConfigScreen(QWidget):
     """Full-screen configuration (Screen 0)."""
 
     generation_started = pyqtSignal(object)
+    period_ready = pyqtSignal(object)
     schedule_generated = pyqtSignal(object)
     generation_failed = pyqtSignal(str)
     courses_changed = pyqtSignal(list)
@@ -106,8 +107,10 @@ class ConfigScreen(QWidget):
         self._last_courses_by_id: dict = {}
 
         self._poller = GenerationPoller(controller, parent=self)
+        self._poller.period_ready.connect(self._on_period_ready)
         self._poller.generation_succeeded.connect(self._on_generation_succeeded)
         self._poller.generation_failed.connect(self._fail)
+        self._poller.generation_warning.connect(self._on_generation_warning)
         self._poller.progress_reset.connect(self._reset_progress)
 
         self._setup_ui()
@@ -758,13 +761,28 @@ class ConfigScreen(QWidget):
 
         return True
 
+    def _on_period_ready(self, data: object) -> None:
+        """Forward one streamed period batch to the results screen.
+
+        Results are displayed incrementally as each exam period finishes, so the
+        user sees the first batch well before the whole run completes (SCRUM-393).
+        """
+        if isinstance(data, tuple) and len(data) >= 3:
+            self._last_courses_by_id = data[2]
+        self.period_ready.emit(data)
+
+    def _on_generation_warning(self, msg: str) -> None:
+        """Surface a non-blocking slow-generation notice; generation continues."""
+        logger.warning("Generation warning: %s", msg)
+        self._set_status(f"⏳  {msg}")
+
     def _on_generation_succeeded(self, result_tuple: object) -> None:
+        # Terminal event for streaming generation. Results were already shown
+        # incrementally via period_ready, so do NOT rebuild the results panel
+        # here — just restore controls and status.
         self._notify_settings_state(False)
         self._gen_btn.setEnabled(True)
         self._set_status("✓  Schedule generated.", ok=True)
-        if isinstance(result_tuple, tuple) and len(result_tuple) >= 3:
-            self._last_courses_by_id = result_tuple[2]
-        self.schedule_generated.emit(result_tuple)
 
     def _fail(self, msg: str) -> None:
         self._reset_progress()

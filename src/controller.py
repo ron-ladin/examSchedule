@@ -737,6 +737,48 @@ class DesktopController:
         self._last_results = resorted
         return resorted
 
+    def begin_streaming_cache(self) -> None:
+        """Reset the result cache at the start of a streaming generation run.
+
+        Streaming delivers one period at a time via
+        :meth:`cache_generated_results_incremental`. Call this once before the
+        first partial so leftover results from a previous run (or an imported
+        schedule) do not linger and merge into the new run.
+        """
+        self.clear_imported_state()
+        self._last_results = {}
+        self._remaining_schedule_iterators.clear()
+        self._iterator_overflows.clear()
+        self._has_more_schedules.clear()
+
+    def cache_generated_results_incremental(
+        self,
+        partial: dict[str, list[Schedule]],
+    ) -> dict[str, list[Schedule]]:
+        """Sort and merge one streamed batch of periods into the cache.
+
+        Unlike :meth:`cache_generated_results`, which replaces the whole cache,
+        this keeps periods streamed earlier in the same run so a later re-sort or
+        export sees every period. Sorting is re-applied in the parent process
+        because the active sort order may have changed while generation ran.
+        Returns only the sorted periods from *partial* (for incremental display).
+        """
+        courses = list(self._courses)
+        sorting = self._settings.sorting
+
+        sorted_partial = {
+            period_key: SortingEngine.sort(
+                schedules, courses, sorting, self._selected_programs
+            )
+            for period_key, schedules in partial.items()
+        }
+
+        if self._last_results is None:
+            self._last_results = {}
+        self._last_results.update(sorted_partial)
+
+        return sorted_partial
+
     def reset_generation_state(self) -> None:
         """Clear all iterator state after subprocess-based generation completes."""
         self._remaining_schedule_iterators.clear()
