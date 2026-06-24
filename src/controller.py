@@ -191,12 +191,22 @@ class DesktopController:
         logger.info("apply_sort: %d active rules", len(config.rules))
 
     def apply_settings(self, settings: Settings) -> None:
-        """Persist the full settings object (thresholds + sort) from the dialog OK path."""
+        """Persist the full settings object (thresholds + sort) from the dialog OK path.
+
+        A threshold change can invalidate already-generated results (they may no
+        longer satisfy the new rules), so existing results are marked stale and
+        must be regenerated before they can be trusted or exported. A sorting-only
+        change does NOT invalidate results — they are simply re-ranked in place.
+        """
+        previous = self._settings
         self._settings = settings
+        if settings.thresholds != previous.thresholds:
+            self.mark_results_stale()
         logger.info(
-            "apply_settings: thresholds=%d active, sort=%d rules",
+            "apply_settings: thresholds=%d active, sort=%d rules, stale=%s",
             sum(1 for e in settings.thresholds.entries if e.enabled),
             len(settings.sorting.rules),
+            self._results_stale,
         )
 
     def load_settings(self, path: Path) -> None:
