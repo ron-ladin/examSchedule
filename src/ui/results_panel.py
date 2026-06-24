@@ -197,6 +197,17 @@ class _ResultsPanel(QWidget):
         self._save_btn.setEnabled(True)
         self._proctor_btn.setEnabled(True)
 
+    def _is_stale(self) -> bool:
+        """True if displayed results are stale per the panel OR the controller.
+
+        The panel's own flag tracks period-date edits, but threshold changes go
+        straight to the controller (apply_settings -> mark_results_stale) without
+        the panel necessarily being told. Consulting the controller too ensures a
+        threshold change immediately blocks every action that would otherwise act
+        on the now-invalid displayed schedules.
+        """
+        return self._has_stale_results or self._controller.results_stale
+
     def load(
         self,
         schedules_by_period: dict[str, list[Schedule]],
@@ -933,6 +944,15 @@ class _ResultsPanel(QWidget):
         Re-sorts the schedules already held in memory using the new priority
         order — it never re-runs schedule generation (spec performance rule).
         """
+        if self._is_stale():
+            self._show_message(
+                "Stale Schedules",
+                "Settings have changed since the last generation.\n\n"
+                "Please click  ▶  Generate again before re-ranking results.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
         if not any(self._schedules_by_period.values()):
             self._show_message(
                 "No Schedules",
@@ -966,7 +986,7 @@ class _ResultsPanel(QWidget):
 
     def _on_proctor_report(self) -> None:
         """Build and show the spec 4.6 proctor report for displayed schedules."""
-        if self._has_stale_results:
+        if self._is_stale():
             self._show_message(
                 "Stale Schedules",
                 "Exam period dates have changed since the last generation.\n\n"
@@ -1007,7 +1027,7 @@ class _ResultsPanel(QWidget):
         dialog.exec()
 
     def _on_save(self) -> None:
-        if self._has_stale_results:
+        if self._is_stale():
             self._show_message(
                 "Stale Schedules",
                 "Exam period dates have changed since the last generation.\n\n"
