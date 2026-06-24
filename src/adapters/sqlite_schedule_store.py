@@ -1,6 +1,6 @@
 """
 SQLite-backed schedule store
-----------------------------
+-----------------------------
 Disk-backed result cache for very large generated schedule sets.
 
 The generator still works lazily.  This adapter only changes what happens to the
