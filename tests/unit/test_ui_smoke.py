@@ -123,9 +123,9 @@ def test_config_screen_initial_empty_state():
 
     # File-loading controls.
     assert isinstance(screen._files_card.courses_btn, QPushButton)
-    assert screen._files_card.courses_btn.text() == "Load Courses"
+    assert screen._files_card.courses_btn.text() == "Import Courses"
     assert isinstance(screen._files_card.periods_btn, QPushButton)
-    assert screen._files_card.periods_btn.text() == "Load Periods"
+    assert screen._files_card.periods_btn.text() == "Import Periods"
     assert screen._files_card.courses_label.text() == "No file loaded"
     assert screen._files_card.dates_label.text() == "No file loaded"
 

@@ -160,8 +160,9 @@ class FilesCard(QFrame):
         )
 
         specs = [
-            (BookIcon(14, "#004394"), "Courses", "Load Courses", on_load_courses),
-            (CalendarIcon(14, "#004394"), "Exam Periods", "Load Periods",
+            # SCRUM-395: "Import" makes it clear we read a file from disk.
+            (BookIcon(14, "#004394"), "Courses", "Import Courses", on_load_courses),
+            (CalendarIcon(14, "#004394"), "Exam Periods", "Import Periods",
              on_load_periods),
         ]
         labels: list[QLabel] = []
@@ -169,7 +170,8 @@ class FilesCard(QFrame):
 
         for icon, title, btn_text, slot in specs:
             btn = QPushButton(btn_text)
-            btn.setFixedWidth(110)
+            # Wider so the longer "Import ..." text is not cut off.
+            btn.setFixedWidth(120)
             btn.setStyleSheet(file_btn_style)
             btn.clicked.connect(slot)
 
