@@ -26,7 +26,7 @@ from pathlib import Path
 
 from src.adapters.exact_conflict_strategy import ExactConflictStrategy
 from src.adapters.in_memory_data_provider import InMemoryDataProvider
-from src.adapters.sqlite_schedule_store import SQLiteScheduleExporter, StoredScheduleList
+from src.adapters.sqlite_schedule_store import SQLiteScheduleExporter, SQLiteScheduleStore, StoredScheduleList
 from src.adapters.readers.classroom_file_reader import ClassroomFileReader
 from src.adapters.readers.course_file_reader import CourseFileReader
 from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
@@ -122,6 +122,11 @@ class DesktopController:
         # can re-rank in place instead of regenerating from scratch.
         self._last_results: dict[str, list[Schedule]] | None = None
 
+        # Store owned by the legacy in-process generation path. Subprocess UI
+        # generation may still create a panel-owned store and then cache its
+        # StoredScheduleList views here.
+        self._schedule_store: SQLiteScheduleStore | None = None
+
         # Persistent Load More / Auto Load workers — lifecycle managed by pool.
         self._worker_pool = LoadWorkerPool()
 
@@ -142,6 +147,13 @@ class DesktopController:
     def read_only_import(self) -> bool:
         """True while the cached results come from an imported schedule file."""
         return self._read_only_import
+
+    def _reset_owned_schedule_store(self) -> SQLiteScheduleStore:
+        """Replace the controller-owned SQLite store for a new generation run."""
+        if self._schedule_store is not None:
+            self._schedule_store.close(delete=True)
+        self._schedule_store = SQLiteScheduleStore()
+        return self._schedule_store
 
     def import_schedule(self, path: Path) -> ImportedScheduleData:
         """Parse a previously exported schedules.txt file and cache it as
@@ -622,6 +634,7 @@ class DesktopController:
             settings=self._settings,
             selected_programs=self._selected_programs,
             chunk_size=LOAD_BATCH_SIZE,
+            store=self._reset_owned_schedule_store(),
         )
 
         engine = _EngineController(
