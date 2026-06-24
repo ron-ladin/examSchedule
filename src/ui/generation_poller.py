@@ -22,6 +22,27 @@ logger = logging.getLogger(__name__)
 # continues until it finishes on its own (see SCRUM-393).
 _WARN_GEN_SECS = 180
 
+# Hard backstop: the soft warning never kills the worker, but a genuinely hung
+# or runaway process (deadlock, infinite loop) would otherwise keep the UI in
+# the "still working…" state forever. After this much longer ceiling we stop the
+# worker so the UI can recover. Far above the soft warning by design.
+_HARD_KILL_GEN_SECS = 15 * 60
+
+# Cap how many queued messages a single timer tick drains. A fast producer can
+# enqueue many periods between 150 ms ticks; processing them all in one callback
+# (each triggers a sort + card rebuild) can freeze the Qt event loop. Remaining
+# messages are picked up on the next tick.
+_MAX_DRAIN_PER_TICK = 5
+
+# Consecutive ticks with the worker not alive and the queue empty before we
+# declare an unexpected exit.
+_DEAD_TICKS_BEFORE_FAIL = 5
+
+# When the worker has exited but the queue looks empty, block this long for a
+# terminal marker still in transit through the queue's feeder thread before
+# reporting a (false) unexpected exit.
+_FINAL_DRAIN_SECS = 0.5
+
 
 class GenerationPoller(QObject):
     """Manages a single generation subprocess and emits result/failure signals."""
@@ -105,9 +126,24 @@ class GenerationPoller(QObject):
             self._process.kill()
 
     def _poll(self) -> None:
+        elapsed = int(time.monotonic() - self._start_time)
+
+        # Hard backstop: kill a worker that never finishes so the UI is not
+        # stuck forever. This is the safety net under the soft warning below —
+        # not the SCRUM-393 timeout, which only warns.
+        if elapsed > _HARD_KILL_GEN_SECS:
+            if self._timer:
+                self._timer.stop()
+            if self._process and self._process.is_alive():
+                self._process.kill()
+            self._fail(
+                f"Generation timed out after {_HARD_KILL_GEN_SECS // 60} minutes "
+                "and was stopped."
+            )
+            return
+
         # Soft timeout: warn once, but keep generating (SCRUM-393). The process
         # is never killed here.
-        elapsed = int(time.monotonic() - self._start_time)
         if elapsed > _WARN_GEN_SECS and not self._warned:
             self._warned = True
             logger.warning("Generation exceeded %ss; still running.", _WARN_GEN_SECS)
@@ -116,10 +152,11 @@ class GenerationPoller(QObject):
                 "still working…"
             )
 
-        # Drain every message queued since the last tick. Several periods may
-        # arrive between two 150 ms ticks, so a single get_nowait() is not
-        # enough for smooth streaming.
-        while True:
+        # Drain a bounded number of messages per tick. Several periods may arrive
+        # between two 150 ms ticks, but draining them all in one callback (each a
+        # sort + card rebuild) can freeze the event loop, so cap the work per tick
+        # and let the next tick continue.
+        for _ in range(_MAX_DRAIN_PER_TICK):
             try:
                 result = self._queue.get_nowait()
             except (_QueueEmpty, OSError):
@@ -135,13 +172,39 @@ class GenerationPoller(QObject):
         """Detect a worker that died without sending a terminal message."""
         if self._process is not None and not self._process.is_alive():
             self._dead_ticks += 1
-            if self._dead_ticks >= 5:
+            if self._dead_ticks >= _DEAD_TICKS_BEFORE_FAIL:
+                # The queue's feeder thread can still be flushing a terminal
+                # GenerationDone at the instant the process exits, so get_nowait()
+                # transiently raises Empty. Block briefly for it before declaring
+                # failure to avoid a false "exited unexpectedly" on a run that
+                # actually succeeded.
+                if self._drain_after_exit():
+                    return
                 self._dead_ticks = 0
                 if self._timer:
                     self._timer.stop()
                 self._fail("Generation process exited unexpectedly.")
         else:
             self._dead_ticks = 0
+
+    def _drain_after_exit(self) -> bool:
+        """Blocking-drain residual messages after the worker exits.
+
+        Returns True if a terminal message (done/failure) was handled, meaning
+        the run resolved normally and no failure should be reported.
+        """
+        deadline = time.monotonic() + _FINAL_DRAIN_SECS
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                result = self._queue.get(timeout=remaining)
+            except (_QueueEmpty, OSError):
+                return False
+            self._dead_ticks = 0
+            if self._consume(result):
+                return True
 
     def _consume(self, result: object) -> bool:
         """Handle one queue message. Return True if it was terminal."""
