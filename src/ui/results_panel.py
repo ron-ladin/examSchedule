@@ -1,5 +1,5 @@
 """
-Widget: _ResultsPanel — Schedule Results Tab (SRS §3.1–§3.5)
+Widget: _ResultsPanel — Schedule Results Tab
 --------------------------------------------------------------
 Shows one exam-period card per period with independent Prev/Next navigation.
 Each card has a "Load More" button when more schedules exist beyond the initial

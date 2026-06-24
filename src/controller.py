@@ -75,7 +75,7 @@ logger = logging.getLogger(__name__)
 #
 # Increase this value to load more blocks per request.
 # Decrease it if the UI feels slow or freezes during loading.
-LOAD_BATCH_SIZE: int = 15000
+LOAD_BATCH_SIZE: int = 5000
 
 
 class MissingStudentCountError(ValueError):
