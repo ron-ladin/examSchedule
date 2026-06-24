@@ -28,11 +28,13 @@ from src.domain.sorting import SortCriterion, SortingConfig
 # User-facing label for each criterion. Kept here (not in settings_screen) so the
 # widget is the single source of truth for ranking labels across both screens.
 SORT_LABELS: dict[SortCriterion, str] = {
-    SortCriterion.SORT_MIN_DAYS_MANDATORY: "More space between mandatory exams",
-    SortCriterion.SORT_AVG_DAYS_ANY: "More average space between all exams",
-    SortCriterion.SORT_ELECTIVE_COLLISIONS: "More elective collisions",
-    SortCriterion.SORT_EXAM_PERIOD_SPREAD: "Longer exam-period spread",
-    SortCriterion.SORT_MAX_EXAMS_PER_DAY: "More exams on the busiest day",
+    # NOTE: every criterion sorts DESCENDING (see SortingEngine), so each label
+    # spells out that schedules with the highest value of that metric rank first.
+    SortCriterion.SORT_MIN_DAYS_MANDATORY: "Sort by mandatory exam gaps (highest first)",
+    SortCriterion.SORT_AVG_DAYS_ANY: "Sort by average gap between all exams (highest first)",
+    SortCriterion.SORT_ELECTIVE_COLLISIONS: "Sort by elective collisions (highest first)",
+    SortCriterion.SORT_EXAM_PERIOD_SPREAD: "Sort by exam-period spread (longest first)",
+    SortCriterion.SORT_MAX_EXAMS_PER_DAY: "Sort by busiest exam day (highest first)",
 }
 
 _CRITERION_ROLE = Qt.ItemDataRole.UserRole

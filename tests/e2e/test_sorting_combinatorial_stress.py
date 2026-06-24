@@ -140,6 +140,7 @@ def test_there_are_exactly_120_permutations() -> None:
     assert len(ALL_PERMUTATIONS) == 120  # 5! over the five sort criteria
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("ordering", ALL_PERMUTATIONS)
 def test_sort_under_budget_for_every_permutation(
     schedules: list[Schedule],

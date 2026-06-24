@@ -390,10 +390,27 @@ class SettingsScreen(QDialog):
             _log.warning("SettingsScreen validation error: %s", exc)
             QMessageBox.warning(self, "Invalid Settings", str(exc))
             return
+        previous = self._current
         self._current = new_settings
-        self.settings_changed.emit(new_settings)
-        self.sort_order_changed.emit(new_settings.sorting)
+        self._emit_changes(previous, new_settings)
         self.accept()
+
+    def _emit_changes(self, previous: Settings, new_settings: Settings) -> None:
+        """Emit the narrowest signal for what actually changed.
+
+        * Nothing changed       -> emit nothing (avoid a redundant resort).
+        * Non-sorting config     -> emit ``settings_changed`` only. Threshold
+          edits invalidate cached results, so the controller must mark its state
+          stale and regenerate; a plain resort would be wrong.
+        * Only sorting changed   -> emit ``sort_order_changed`` only, so cached
+          results are re-ranked in place without regenerating.
+        """
+        if new_settings == previous:
+            return
+        if new_settings.thresholds != previous.thresholds:
+            self.settings_changed.emit(new_settings)
+        elif new_settings.sorting != previous.sorting:
+            self.sort_order_changed.emit(new_settings.sorting)
 
     def reject(self) -> None:
         """Discard every unsaved edit before hiding the reusable dialog."""

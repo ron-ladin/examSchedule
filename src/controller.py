@@ -646,14 +646,19 @@ class DesktopController:
         self.apply_sort(config)
 
         # Imported read-only schedules may have no courses file loaded, so use
-        # the imported course metadata when present.
+        # the imported course metadata when present. The UI's selected programs
+        # describe the *generation* context, not the imported file, so they must
+        # NOT constrain ranking of imported data — pass None so the engine ranks
+        # across all available imported courses instead of a stale UI selection.
         if self._read_only_import and self._imported_courses_by_id:
             courses = list(self._imported_courses_by_id.values())
+            selected_programs = None
         else:
             courses = list(self._courses)
+            selected_programs = self._selected_programs
 
         resorted = {
-            period_key: SortingEngine.sort(schedules, courses, config, self._selected_programs)
+            period_key: SortingEngine.sort(schedules, courses, config, selected_programs)
             for period_key, schedules in self._last_results.items()
         }
 

@@ -142,3 +142,64 @@ def test_emits_order_changed_on_toggle(qapp):
     widget.order_changed.connect(lambda: fired.append(True))
     widget.item(0).setCheckState(Qt.CheckState.Checked)
     assert fired
+
+
+def test_drag_drop_reorders_priority(qapp):
+    # A real InternalMove drag relocates a row in the model; simulate that move
+    # with takeItem/insertItem and assert to_config() reflects the new priority.
+    widget = SortPriorityList()
+    ordered = [
+        SortCriterion.SORT_MIN_DAYS_MANDATORY,
+        SortCriterion.SORT_AVG_DAYS_ANY,
+        SortCriterion.SORT_ELECTIVE_COLLISIONS,
+    ]
+    widget.load_config(SortingConfig.from_ordered_criteria(ordered))
+
+    # Drag the 3rd checked row (index 2) up to the top (index 0).
+    moved = widget.takeItem(2)
+    widget.insertItem(0, moved)
+    widget._renumber()
+
+    assert list(widget.to_config().enabled_criteria) == [
+        SortCriterion.SORT_ELECTIVE_COLLISIONS,
+        SortCriterion.SORT_MIN_DAYS_MANDATORY,
+        SortCriterion.SORT_AVG_DAYS_ANY,
+    ]
+    # Priority prefixes follow the new order.
+    assert widget.item(0).text().startswith("1.")
+    assert widget.item(1).text().startswith("2.")
+    assert widget.item(2).text().startswith("3.")
+
+
+def test_drag_drop_respects_checked_boundary(qapp):
+    # Simulate a drag that drops a checked row into the unchecked block. The
+    # widget's post-drop normalization must re-anchor it above the unchecked
+    # rows, preserving the checked/unchecked boundary.
+    widget = SortPriorityList()
+    widget.load_config(
+        SortingConfig.from_ordered_criteria(
+            [SortCriterion.SORT_MIN_DAYS_MANDATORY, SortCriterion.SORT_AVG_DAYS_ANY]
+        )
+    )
+    # Move the top checked row to the very bottom (into the unchecked block).
+    moved = widget.takeItem(0)
+    widget.addItem(moved)
+
+    # Mimic what dropEvent runs after Qt performs the model move.
+    widget._updating = True
+    widget._normalize()
+    widget._updating = False
+    widget._renumber()
+
+    checked = _checked_criteria(widget)
+    assert checked == [
+        SortCriterion.SORT_AVG_DAYS_ANY,
+        SortCriterion.SORT_MIN_DAYS_MANDATORY,
+    ]
+    # Every checked row precedes every unchecked row.
+    states = [
+        widget.item(i).checkState() == Qt.CheckState.Checked
+        for i in range(widget.count())
+    ]
+    assert states == sorted(states, reverse=True)
+    assert list(widget.to_config().enabled_criteria) == checked

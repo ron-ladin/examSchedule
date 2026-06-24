@@ -256,8 +256,11 @@ def test_settings_changes_are_committed_only_when_save_is_clicked():
     dialog._on_accept()
     app.processEvents()
 
+    # Both thresholds and sorting changed. A threshold edit invalidates cached
+    # results, so only settings_changed fires (which marks state stale); a plain
+    # sort_order_changed resort would be wrong here.
     assert len(settings_spy) == 1
-    assert len(sort_spy) == 1
+    assert len(sort_spy) == 0
     saved = settings_spy[0][0]
     saved_entry = saved.thresholds.for_criterion(
         Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS
