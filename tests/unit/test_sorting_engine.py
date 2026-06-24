@@ -438,6 +438,86 @@ class TestEdgeCases:
         assert result[0] is sched_better_gap
 
 # ---------------------------------------------------------------------------
+# SortingConfig ordered-criteria API (drag-and-drop round trip)
+# ---------------------------------------------------------------------------
+
+class TestSortingConfigOrderedCriteria:
+    """The UI-facing ordered-criteria view used by the drag-and-drop widget."""
+
+    def test_from_ordered_criteria_assigns_sequential_priorities(self):
+        ordered = [
+            SortCriterion.SORT_MAX_EXAMS_PER_DAY,
+            SortCriterion.SORT_MIN_DAYS_MANDATORY,
+            SortCriterion.SORT_AVG_DAYS_ANY,
+        ]
+        config = SortingConfig.from_ordered_criteria(ordered)
+        assert [r.priority for r in config.rules] == [1, 2, 3]
+        assert config.criteria_in_order() == ordered
+
+    def test_enabled_criteria_returns_priority_order(self):
+        config = SortingConfig(
+            rules=(
+                SortRule(priority=2, criterion=SortCriterion.SORT_AVG_DAYS_ANY),
+                SortRule(priority=1, criterion=SortCriterion.SORT_MIN_DAYS_MANDATORY),
+            )
+        )
+        assert config.enabled_criteria == (
+            SortCriterion.SORT_MIN_DAYS_MANDATORY,
+            SortCriterion.SORT_AVG_DAYS_ANY,
+        )
+
+    def test_round_trip_preserves_order(self):
+        ordered = [
+            SortCriterion.SORT_ELECTIVE_COLLISIONS,
+            SortCriterion.SORT_EXAM_PERIOD_SPREAD,
+        ]
+        config = SortingConfig.from_ordered_criteria(ordered)
+        assert list(config.enabled_criteria) == ordered
+
+    def test_from_ordered_criteria_drops_duplicates(self):
+        config = SortingConfig.from_ordered_criteria(
+            [
+                SortCriterion.SORT_MIN_DAYS_MANDATORY,
+                SortCriterion.SORT_MIN_DAYS_MANDATORY,
+                SortCriterion.SORT_AVG_DAYS_ANY,
+            ]
+        )
+        assert config.enabled_criteria == (
+            SortCriterion.SORT_MIN_DAYS_MANDATORY,
+            SortCriterion.SORT_AVG_DAYS_ANY,
+        )
+        assert [r.priority for r in config.rules] == [1, 2]
+
+    def test_empty_iterable_yields_empty_config(self):
+        config = SortingConfig.from_ordered_criteria([])
+        assert config.rules == ()
+        assert config.enabled_criteria == ()
+
+    def test_reordering_changes_sort_outcome(self):
+        """A config built from a reordered criteria list re-ranks accordingly."""
+        c1, c2, c3 = _mandatory("11111"), _mandatory("22222"), _mandatory("33333")
+        # Equal min-mandatory gap (10) for both; differ on max-exams-per-day.
+        sched_gap = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 15),
+            "33333": date(2026, 1, 25),
+        })  # max exams/day = 1
+        sched_dense = _schedule({
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 15),
+            "33333": date(2026, 1, 5),
+        })  # max exams/day = 2, min gap = 0
+
+        # Priority: max-per-day first → dense wins.
+        config = SortingConfig.from_ordered_criteria([
+            SortCriterion.SORT_MAX_EXAMS_PER_DAY,
+            SortCriterion.SORT_MIN_DAYS_MANDATORY,
+        ])
+        result = SortingEngine.sort([sched_gap, sched_dense], [c1, c2, c3], config)
+        assert result[0] is sched_dense
+
+
+# ---------------------------------------------------------------------------
 # Regression: relevant offering isolation
 # ---------------------------------------------------------------------------
 

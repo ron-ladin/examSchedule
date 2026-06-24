@@ -44,6 +44,8 @@ from src.controller import DesktopController
 from src.domain.course import Course
 from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
+from src.domain.sorting import SortingConfig
+from src.engine.generation_workers import ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
 from src.ui.navigation_model import NavigationModel, DateSignature as _DateSignature
 from src.ui.period_card import PeriodCardWidgets
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
@@ -195,6 +197,17 @@ class _ResultsPanel(QWidget):
         self._save_btn.setEnabled(True)
         self._proctor_btn.setEnabled(True)
 
+    def _is_stale(self) -> bool:
+        """True if displayed results are stale per the panel OR the controller.
+
+        The panel's own flag tracks period-date edits, but threshold changes go
+        straight to the controller (apply_settings -> mark_results_stale) without
+        the panel necessarily being told. Consulting the controller too ensures a
+        threshold change immediately blocks every action that would otherwise act
+        on the now-invalid displayed schedules.
+        """
+        return self._has_stale_results or self._controller.results_stale
+
     def load(
         self,
         schedules_by_period: dict[str, list[Schedule]],
@@ -293,6 +306,30 @@ class _ResultsPanel(QWidget):
         if self._is_imported_schedule:
             return
 
+        # Anti-OOM guardrail: never let the in-memory population exceed the hard
+        # cap, no matter how many times the user clicks Load More / Auto Load.
+        # Trim the incoming batch to the remaining headroom; if we are already at
+        # the cap, drop the batch entirely. Load More / Auto Load callers observe
+        # this via is_at_memory_cap() and stop requesting further pages.
+        headroom = ABSOLUTE_MAX_IN_MEMORY_SCHEDULES - self.total_in_memory_schedule_count()
+        if headroom <= 0:
+            logger.warning(
+                "In-memory schedule cap (%s) reached; refusing further load for %s.",
+                ABSOLUTE_MAX_IN_MEMORY_SCHEDULES,
+                period_key,
+            )
+            return
+        if len(extra) > headroom:
+            logger.warning(
+                "In-memory schedule cap (%s) reached; truncating batch for %s "
+                "from %s to %s schedules.",
+                ABSOLUTE_MAX_IN_MEMORY_SCHEDULES,
+                period_key,
+                len(extra),
+                headroom,
+            )
+            extra = extra[:headroom]
+
         self._schedules_by_period[period_key].extend(extra)
 
         # Re-sort the full accumulated set after appending the new page.
@@ -365,6 +402,18 @@ class _ResultsPanel(QWidget):
     def get_schedules(self, period_key: str) -> list[Schedule]:
         """Return the loaded schedules for *period_key* or an empty list."""
         return self._schedules_by_period.get(period_key, [])
+
+    def total_in_memory_schedule_count(self) -> int:
+        """Return the total number of schedules resident in RAM across periods."""
+        return sum(len(scheds) for scheds in self._schedules_by_period.values())
+
+    def is_at_memory_cap(self) -> bool:
+        """Return True once the hard in-memory schedule cap has been reached.
+
+        Load More / Auto Load consult this to stop fetching further pages before
+        the process is OOM-killed. See ABSOLUTE_MAX_IN_MEMORY_SCHEDULES.
+        """
+        return self.total_in_memory_schedule_count() >= ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
 
     def get_current_index(self, period_key: str) -> int:
         """Return the currently displayed schedule index for *period_key*."""
@@ -446,6 +495,18 @@ class _ResultsPanel(QWidget):
         )
         action_row.addWidget(self._summary_lbl)
         action_row.addStretch()
+
+        # Spec: re-rank the already-generated schedules in memory (no regenerate).
+        self._ranking_btn = QPushButton("⇅  Result Ranking")
+        self._ranking_btn.setStyleSheet(
+            "QPushButton {"
+            " background: #2563EB; color: #FFFFFF; font-weight: 700;"
+            " border: none; border-radius: 8px; padding: 7px 18px; }"
+            "QPushButton:hover { background: #1D4ED8; }"
+            "QPushButton:disabled { background: #C7D2DE; color: #FFFFFF; }"
+        )
+        self._ranking_btn.clicked.connect(self._on_result_ranking)
+        action_row.addWidget(self._ranking_btn)
 
         self._save_btn = QPushButton("⬇  Export Schedule")
         self._save_btn.clicked.connect(self._on_save)
@@ -877,9 +938,55 @@ class _ResultsPanel(QWidget):
 
         return selected
 
+    def _on_result_ranking(self) -> None:
+        """Open the Result Ranking dialog and re-rank cached results in place.
+
+        Re-sorts the schedules already held in memory using the new priority
+        order — it never re-runs schedule generation (spec performance rule).
+        """
+        if self._is_stale():
+            self._show_message(
+                "Stale Schedules",
+                "Settings have changed since the last generation.\n\n"
+                "Please click  ▶  Generate again before re-ranking results.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        if not any(self._schedules_by_period.values()):
+            self._show_message(
+                "No Schedules",
+                "Generate or load schedules before changing the result ranking.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        from src.ui.ranking_dialog import RankingDialog
+
+        dialog = RankingDialog(self._controller.settings.sorting, parent=self)
+        dialog.ranking_applied.connect(self._apply_ranking)
+        dialog.exec()
+
+    def _apply_ranking(self, config: "SortingConfig") -> None:
+        """Re-rank cached schedules in memory and refresh the displayed results."""
+        try:
+            resorted = self._controller.resort(config)
+        except ValueError:
+            # No cached results to re-rank; keep the new order for next generate.
+            self._controller.apply_sort(config)
+            return
+
+        self.load(
+            resorted,
+            self._courses_by_id,
+            self._prog_color_map,
+            truncated_periods=self.get_truncated_periods(),
+            read_only_import=self._is_imported_schedule,
+        )
+
     def _on_proctor_report(self) -> None:
         """Build and show the spec 4.6 proctor report for displayed schedules."""
-        if self._has_stale_results:
+        if self._is_stale():
             self._show_message(
                 "Stale Schedules",
                 "Exam period dates have changed since the last generation.\n\n"
@@ -920,7 +1027,7 @@ class _ResultsPanel(QWidget):
         dialog.exec()
 
     def _on_save(self) -> None:
-        if self._has_stale_results:
+        if self._is_stale():
             self._show_message(
                 "Stale Schedules",
                 "Exam period dates have changed since the last generation.\n\n"

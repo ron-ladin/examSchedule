@@ -12,6 +12,7 @@ Returns a new list; the input is not mutated.
 
 from collections import Counter
 from datetime import date
+from functools import lru_cache
 from itertools import combinations
 from src.domain.course import Course
 from src.domain.schedule import Schedule
@@ -49,21 +50,57 @@ class SortingEngine:
 # Internal helpers (sorting-specific — not shared with ThresholdFilter)
 # ---------------------------------------------------------------------------
 
-def _min_gap(dates: list[date]) -> int:
+# Aggressive memoization layer
+# -----------------------------
+# These three helpers are the hot path: with all 5 criteria enabled and tens of
+# thousands of candidate schedules re-scored across many priority permutations,
+# the same lists of exam dates are reduced to the same gap/collision numbers
+# millions of times. lru_cache turns each repeat into a dict lookup.
+#
+# lists are unhashable, so each public wrapper normalises its input to a SORTED
+# tuple before delegating to the cached core. Sorting is safe — all three
+# metrics are order-independent (they range over unordered pairs) — and it
+# collapses differently-ordered date lists onto the same cache entry, maximising
+# the hit rate.
+#
+# maxsize is BOUNDED (not None): this is a long-running desktop app, so an
+# unbounded cache would grow without limit as users load new files and re-run
+# generation, eventually risking an OOM crash. 8192 entries per helper keeps the
+# RAM footprint to a few MB at most while comfortably covering the working set of
+# distinct date tuples seen when ranking 10,000+ schedules.
+_CACHE_MAXSIZE = 8192
+
+
+@lru_cache(maxsize=_CACHE_MAXSIZE)
+def _min_gap_cached(dates: tuple[date, ...]) -> int:
     if len(dates) < 2:
         return 0
     return min(abs((b - a).days) for a, b in combinations(dates, 2))
 
 
-def _avg_gap(dates: list[date]) -> float:
+@lru_cache(maxsize=_CACHE_MAXSIZE)
+def _avg_gap_cached(dates: tuple[date, ...]) -> float:
     if len(dates) < 2:
         return 0.0
     pairs = list(combinations(dates, 2))
     return sum(abs((b - a).days) for a, b in pairs) / len(pairs)
 
 
-def _count_same_day_pairs(dates: list[date]) -> int:
+@lru_cache(maxsize=_CACHE_MAXSIZE)
+def _count_same_day_pairs_cached(dates: tuple[date, ...]) -> int:
     return sum(1 for a, b in combinations(dates, 2) if a == b)
+
+
+def _min_gap(dates: list[date]) -> int:
+    return _min_gap_cached(tuple(sorted(dates)))
+
+
+def _avg_gap(dates: list[date]) -> float:
+    return _avg_gap_cached(tuple(sorted(dates)))
+
+
+def _count_same_day_pairs(dates: list[date]) -> int:
+    return _count_same_day_pairs_cached(tuple(sorted(dates)))
 
 
 # ---------------------------------------------------------------------------

@@ -149,6 +149,12 @@ class ResultsScreen(QWidget):
         self._courses_placeholder.setVisible(not has_rows)
         self._course_table.setVisible(has_rows)
 
+    def mark_stale(self) -> None:
+        """Show the results panel's stale state immediately (e.g. after a
+        threshold settings change invalidated the cached results)."""
+        if self._results_loaded:
+            self._results_panel.mark_stale()
+
     def refresh_periods(self) -> None:
         self._periods_tabs.clear()
         self._date_editors.clear()
@@ -388,6 +394,7 @@ class InputScreen(QWidget):
         self._config.generation_failed.connect(self._on_generation_failed)
         self._config.courses_changed.connect(self._results.refresh_courses)
         self._config.periods_changed.connect(self._results.refresh_periods)
+        self._config.results_invalidated.connect(self._results.mark_stale)
         self._results.back_requested.connect(lambda: self._stacked.setCurrentIndex(0))
 
     def _on_generation_started(self, data: tuple) -> None:

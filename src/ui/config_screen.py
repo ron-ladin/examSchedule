@@ -93,6 +93,9 @@ class ConfigScreen(QWidget):
     generation_failed = pyqtSignal(str)
     courses_changed = pyqtSignal(list)
     periods_changed = pyqtSignal()
+    # Emitted when a settings change invalidated existing results (threshold
+    # edit), so the results screen can show its stale state immediately.
+    results_invalidated = pyqtSignal()
 
     def __init__(self, controller: DesktopController, parent=None) -> None:
         super().__init__(parent)
@@ -602,6 +605,11 @@ class ConfigScreen(QWidget):
         """Persist the full settings (thresholds + sort) from the dialog OK path."""
         self._controller.apply_settings(new_settings)
         logger.info("Settings updated via SettingsScreen.")
+        # A threshold change invalidates cached results (apply_settings marks
+        # them stale). Tell the results screen so it shows stale state at once,
+        # instead of only when the user next tries to act on the results.
+        if self._controller.results_stale:
+            self.results_invalidated.emit()
 
     def _notify_settings_state(self, is_running: bool) -> None:
         """Propagate generation state to the settings dialog if it is open."""

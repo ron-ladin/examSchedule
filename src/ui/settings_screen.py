@@ -17,8 +17,6 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QSpinBox,
     QStyle,
@@ -29,13 +27,14 @@ from PyQt6.QtWidgets import (
 )
 
 from src.domain.settings import Settings
-from src.domain.sorting import SortCriterion, SortRule, SortingConfig
+from src.domain.sorting import SortingConfig
 from src.domain.threshold import (
     CRITERION_MIN_K,
     Criterion,
     ThresholdEntry,
     ThresholdSettings,
 )
+from src.ui.widgets.sort_priority_list import SortPriorityList
 
 _log = logging.getLogger(__name__)
 
@@ -66,17 +65,6 @@ _THRESHOLD_DETAILS: dict[Criterion, tuple[str, str, str]] = {
         "exams maximum",
     ),
 }
-
-_SORT_LABELS: dict[SortCriterion, str] = {
-    SortCriterion.SORT_MIN_DAYS_MANDATORY: "More space between mandatory exams",
-    SortCriterion.SORT_AVG_DAYS_ANY: "More average space between all exams",
-    SortCriterion.SORT_ELECTIVE_COLLISIONS: "More elective collisions",
-    SortCriterion.SORT_EXAM_PERIOD_SPREAD: "Longer exam-period spread",
-    SortCriterion.SORT_MAX_EXAMS_PER_DAY: "More exams on the busiest day",
-}
-
-_CRITERION_ROLE = Qt.ItemDataRole.UserRole
-
 
 class _AnimatedToggle(QWidget):
     """Compact ON/OFF switch with a smooth red-to-green sliding transition."""
@@ -211,7 +199,7 @@ class SettingsScreen(QDialog):
         self.setMinimumSize(760, 650)
         self._current = current
         self._threshold_widgets: dict[Criterion, tuple[_AnimatedToggle, QSpinBox]] = {}
-        self._sort_list: QListWidget | None = None
+        self._sort_list: SortPriorityList | None = None
         self._build_ui()
         if is_generating:
             self.set_generation_state(True)
@@ -385,26 +373,10 @@ class SettingsScreen(QDialog):
         )
         layout.addWidget(explanation)
 
-        self._sort_list = QListWidget()
-        self._sort_list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
-        self._sort_list.blockSignals(True)
-        seen: set[SortCriterion] = set()
-        for rule in sorted(self._current.sorting.rules, key=lambda r: r.priority):
-            self._add_sort_item(rule.criterion, checked=True)
-            seen.add(rule.criterion)
-        for criterion in SortCriterion:
-            if criterion not in seen:
-                self._add_sort_item(criterion, checked=False)
-        self._sort_list.blockSignals(False)
+        self._sort_list = SortPriorityList()
+        self._sort_list.load_config(self._current.sorting)
         layout.addWidget(self._sort_list)
         return widget
-
-    def _add_sort_item(self, criterion: SortCriterion, *, checked: bool) -> None:
-        item = QListWidgetItem(_SORT_LABELS[criterion])
-        item.setData(_CRITERION_ROLE, criterion)
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
-        self._sort_list.addItem(item)
 
     def set_generation_state(self, is_running: bool) -> None:
         for toggle, spinbox in self._threshold_widgets.values():
@@ -418,10 +390,27 @@ class SettingsScreen(QDialog):
             _log.warning("SettingsScreen validation error: %s", exc)
             QMessageBox.warning(self, "Invalid Settings", str(exc))
             return
+        previous = self._current
         self._current = new_settings
-        self.settings_changed.emit(new_settings)
-        self.sort_order_changed.emit(new_settings.sorting)
+        self._emit_changes(previous, new_settings)
         self.accept()
+
+    def _emit_changes(self, previous: Settings, new_settings: Settings) -> None:
+        """Emit the narrowest signal for what actually changed.
+
+        * Nothing changed       -> emit nothing (avoid a redundant resort).
+        * Non-sorting config     -> emit ``settings_changed`` only. Threshold
+          edits invalidate cached results, so the controller must mark its state
+          stale and regenerate; a plain resort would be wrong.
+        * Only sorting changed   -> emit ``sort_order_changed`` only, so cached
+          results are re-ranked in place without regenerating.
+        """
+        if new_settings == previous:
+            return
+        if new_settings.thresholds != previous.thresholds:
+            self.settings_changed.emit(new_settings)
+        elif new_settings.sorting != previous.sorting:
+            self.sort_order_changed.emit(new_settings.sorting)
 
     def reject(self) -> None:
         """Discard every unsaved edit before hiding the reusable dialog."""
@@ -439,16 +428,7 @@ class SettingsScreen(QDialog):
 
         if self._sort_list is None:
             return
-        self._sort_list.blockSignals(True)
-        self._sort_list.clear()
-        seen: set[SortCriterion] = set()
-        for rule in sorted(self._current.sorting.rules, key=lambda r: r.priority):
-            self._add_sort_item(rule.criterion, checked=True)
-            seen.add(rule.criterion)
-        for criterion in SortCriterion:
-            if criterion not in seen:
-                self._add_sort_item(criterion, checked=False)
-        self._sort_list.blockSignals(False)
+        self._sort_list.load_config(self._current.sorting)
 
     def _build_settings(self) -> Settings:
         return Settings(
@@ -472,12 +452,4 @@ class SettingsScreen(QDialog):
     def _build_sorting_config(self) -> SortingConfig:
         if self._sort_list is None:
             raise RuntimeError("_sort_list was not initialized")
-        rules: list[SortRule] = []
-        priority = 1
-        for i in range(self._sort_list.count()):
-            item = self._sort_list.item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                criterion: SortCriterion = item.data(_CRITERION_ROLE)
-                rules.append(SortRule(priority=priority, criterion=criterion))
-                priority += 1
-        return SortingConfig(rules=tuple(rules))
+        return self._sort_list.to_config()

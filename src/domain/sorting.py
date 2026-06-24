@@ -19,6 +19,7 @@ Notes:
     - Sorting may change at runtime; threshold requirements do not.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -67,3 +68,31 @@ class SortingConfig:
         """Return the sort criteria from primary to least significant."""
         ordered = sorted(self.rules, key=lambda rule: rule.priority)
         return [rule.criterion for rule in ordered]
+
+    @property
+    def enabled_criteria(self) -> tuple[SortCriterion, ...]:
+        """The enabled criteria as an ordered tuple (primary first).
+
+        This is the UI-facing view of the config: a prioritized list where
+        position 0 is priority 1. Mirrors ``criteria_in_order`` but returns an
+        immutable tuple suitable for round-tripping through widgets.
+        """
+        return tuple(self.criteria_in_order())
+
+    @classmethod
+    def from_ordered_criteria(
+        cls, criteria: Iterable[SortCriterion]
+    ) -> "SortingConfig":
+        """Build a config from an ordered list of criteria (priority 1 = first).
+
+        Duplicate criteria are ignored after their first occurrence so the
+        resulting priorities are always a clean 1..N sequence with no repeats.
+        """
+        seen: set[SortCriterion] = set()
+        rules: list[SortRule] = []
+        for criterion in criteria:
+            if criterion in seen:
+                continue
+            seen.add(criterion)
+            rules.append(SortRule(priority=len(rules) + 1, criterion=criterion))
+        return cls(rules=tuple(rules))
