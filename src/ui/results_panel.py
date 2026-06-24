@@ -239,35 +239,69 @@ class _ResultsPanel(QWidget):
         if read_only_import:
             self._controller.reset_generation_state()
 
-        if self._schedule_store is not None:
-            self._schedule_store.close(delete=True)
-
-        self._schedule_store = SQLiteScheduleStore()
         courses_for_scoring = list(courses_by_id.values())
         selected_programs = self._controller.selected_programs
-        stored_by_period: dict[str, StoredScheduleList] = {}
-        for key, scheds in schedules_by_period.items():
-            self._schedule_store.replace_period(
-                key,
-                scheds,
-                courses=courses_for_scoring,
-                selected_programs=selected_programs,
-            )
-            stored_by_period[key] = self._schedule_store.as_sequence(
-                key,
-                courses=courses_for_scoring,
-                selected_programs=selected_programs,
-                sorting=self._controller.settings.sorting,
-            )
+        incoming_stores = {
+            schedules.store
+            for schedules in schedules_by_period.values()
+            if isinstance(schedules, StoredScheduleList)
+        }
+
+        if incoming_stores:
+            # The schedules are already backed by SQLite. Adopt the existing
+            # StoredScheduleList facades directly; never close/recreate the store
+            # that backs them. This keeps Result Ranking and repeated Generate
+            # flows from invalidating live views.
+            if self._schedule_store is not None and self._schedule_store not in incoming_stores:
+                self._schedule_store.close(delete=True)
+
+            self._schedule_store = next(iter(incoming_stores)) if len(incoming_stores) == 1 else None
+            stored_by_period: dict[str, list[Schedule]] = dict(schedules_by_period)
+
+            for schedules in stored_by_period.values():
+                if isinstance(schedules, StoredScheduleList):
+                    schedules.set_scoring_context(courses_for_scoring, selected_programs)
+                    schedules.set_sorting(self._controller.settings.sorting)
+
+        elif read_only_import:
+            # Imported files are small, fixed snapshots and should remain a simple
+            # read-only in-memory view. Do not create a temporary SQLite store just
+            # to display them.
+            if self._schedule_store is not None:
+                self._schedule_store.close(delete=True)
+                self._schedule_store = None
+            stored_by_period = dict(schedules_by_period)
+
+        else:
+            # Fresh subprocess generation returns bounded plain lists. Move them
+            # into one panel-owned SQLite store, then cache those StoredScheduleList
+            # facades in the controller so future Result Ranking does not copy the
+            # data back and forth between RAM and SQLite.
+            if self._schedule_store is not None:
+                self._schedule_store.close(delete=True)
+
+            self._schedule_store = SQLiteScheduleStore()
+            stored_by_period = {}
+            for key, scheds in schedules_by_period.items():
+                self._schedule_store.replace_period(
+                    key,
+                    scheds,
+                    courses=courses_for_scoring,
+                    selected_programs=selected_programs,
+                )
+                stored_by_period[key] = self._schedule_store.as_sequence(
+                    key,
+                    courses=courses_for_scoring,
+                    selected_programs=selected_programs,
+                    sorting=self._controller.settings.sorting,
+                )
+
+            stored_by_period = self._controller.cache_generated_results(stored_by_period)
 
         self._schedules_by_period = stored_by_period
         self._courses_by_id = courses_by_id
         self._prog_color_map = prog_color_map
-        self._truncated_periods = (
-            set()
-            if read_only_import
-            else (truncated_periods or set())
-        )
+        self._truncated_periods = set() if read_only_import else (truncated_periods or set())
         self._period_indices = {k: 0 for k in stored_by_period}
         self._total_by_period = {}
 
@@ -285,7 +319,6 @@ class _ResultsPanel(QWidget):
         self._rebuild_navigation_cache()
 
         self._period_tabs.clear()
-
         self._cards.clear()
         self._cell_data.clear()
 
@@ -296,9 +329,9 @@ class _ResultsPanel(QWidget):
             )
 
         has_proctor_report = any(
-            bool(getattr(schedule, "classroom_assignments", None))
-            for schedules in merged.values()
-            for schedule in schedules
+            self._has_classroom_feature_results(period_key)
+            for period_key, schedules in merged.items()
+            if schedules
         )
         self._proctor_btn.setVisible(has_proctor_report)
 
@@ -619,11 +652,15 @@ class _ResultsPanel(QWidget):
         )
 
     def _has_classroom_feature_results(self, period_key: str) -> bool:
-        """Return True if the loaded period contains classroom-assignment data."""
-        return any(
-            self._schedule_has_classroom_data(schedule)
-            for schedule in self._schedules_by_period.get(period_key, [])
-        )
+        """Return True if the loaded period contains classroom-assignment data.
+
+        For SQLite-backed periods this uses a metadata query instead of scanning
+        and unpickling every stored Schedule.
+        """
+        schedules = self._schedules_by_period.get(period_key, [])
+        if isinstance(schedules, StoredScheduleList):
+            return schedules.has_classroom_data()
+        return any(self._schedule_has_classroom_data(schedule) for schedule in schedules)
 
     def _rebuild_navigation_cache(self, period_key: str | None = None) -> None:
         """Rebuild navigation indexes through NavigationModel."""
@@ -1020,7 +1057,12 @@ class _ResultsPanel(QWidget):
         dialog.exec()
 
     def _apply_ranking(self, config: "SortingConfig") -> None:
-        """Re-rank cached schedules in memory and refresh the displayed results."""
+        """Re-rank cached schedules and refresh the displayed cards in place.
+
+        SQLite-backed results only change their ORDER BY metadata.  Rebuilding
+        through load() would close/recreate stores and can invalidate live
+        StoredScheduleList objects after repeated Ranking/Generate flows.
+        """
         try:
             resorted = self._controller.resort(config)
         except ValueError:
@@ -1028,13 +1070,25 @@ class _ResultsPanel(QWidget):
             self._controller.apply_sort(config)
             return
 
-        self.load(
-            resorted,
-            self._courses_by_id,
-            self._prog_color_map,
-            truncated_periods=self.get_truncated_periods(),
-            read_only_import=self._is_imported_schedule,
+        for period_key, schedules in resorted.items():
+            self._schedules_by_period[period_key] = schedules
+            # A changed ranking changes what schedule index 0 means; show the new
+            # best-ranked option instead of keeping an arbitrary old ordinal.
+            self._period_indices[period_key] = 0
+
+        self._nav_model.clear()
+        self._rebuild_navigation_cache()
+
+        for period_key in list(self._cards):
+            self._refresh_period_card(period_key)
+
+        has_proctor_report = any(
+            self._has_classroom_feature_results(period_key)
+            for period_key, schedules in self._schedules_by_period.items()
+            if schedules
         )
+        self._proctor_btn.setVisible(has_proctor_report)
+        self._update_summary()
 
     def _on_proctor_report(self) -> None:
         """Build and show the spec 4.6 proctor report for displayed schedules."""
