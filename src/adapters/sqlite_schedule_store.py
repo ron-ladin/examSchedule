@@ -22,7 +22,7 @@ import pickle
 import sqlite3
 import tempfile
 from collections import OrderedDict
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import overload
 
@@ -75,6 +75,11 @@ class StoredScheduleList:
     def period_key(self) -> str:
         return self._period_key
 
+    @property
+    def store(self) -> "SQLiteScheduleStore":
+        """Return the backing store without materialising any schedules."""
+        return self._store
+
     def set_sorting(self, sorting: SortingConfig | None) -> None:
         self._sorting = sorting or SortingConfig()
 
@@ -89,7 +94,7 @@ class StoredScheduleList:
     def append(self, schedule: Schedule) -> None:
         self.extend([schedule])
 
-    def extend(self, schedules: Sequence[Schedule]) -> None:
+    def extend(self, schedules: Iterable[Schedule]) -> None:
         self._store.append_many(
             self._period_key,
             schedules,
@@ -129,6 +134,17 @@ class StoredScheduleList:
 
     def __iter__(self) -> Iterator[Schedule]:
         yield from self._store.iter_period(self._period_key, sorting=self._sorting)
+
+    def navigation_entries(self) -> list[tuple[tuple[tuple[str, object], ...], int]]:
+        """Return (date_signature, display_index) rows for navigation caches.
+
+        This reads compact SQLite metadata instead of unpickling every Schedule.
+        """
+        return self._store.navigation_entries(self._period_key, sorting=self._sorting)
+
+    def has_classroom_data(self) -> bool:
+        """True if this period has at least one schedule with Feature-4 data."""
+        return self._store.has_classroom_data(self._period_key)
 
     def __eq__(self, other) -> bool:
         if isinstance(other, StoredScheduleList):
@@ -240,6 +256,8 @@ class SQLiteScheduleStore(IScheduleStore):
                 score_elective_collisions REAL NOT NULL DEFAULT 0,
                 score_exam_period_spread REAL NOT NULL DEFAULT 0,
                 score_max_exams_per_day REAL NOT NULL DEFAULT 0,
+                date_signature_blob BLOB NOT NULL,
+                has_classroom_data INTEGER NOT NULL DEFAULT 0,
                 schedule_blob BLOB NOT NULL,
                 UNIQUE(period_key, position)
             );
@@ -279,44 +297,37 @@ class SQLiteScheduleStore(IScheduleStore):
     def append_many(
         self,
         period_key: str,
-        schedules: Sequence[Schedule],
+        schedules: Iterable[Schedule],
         courses: Sequence[Course] | None = None,
         selected_programs: Sequence[str] | None = None,
+        *,
+        chunk_size: int = 1000,
     ) -> int:
+        """Append schedules to one period without materialising the iterable.
+
+        ``schedules`` may be a generator or another StoredScheduleList.  The old
+        implementation sliced/listed the input before writing, which could pull a
+        large disk-backed list back into RAM.  This version streams rows into
+        SQLite in bounded chunks.
+        """
         self._ensure_open()
-        if not schedules:
-            return 0
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
 
         current_total = self.total_count()
         if current_total >= ABSOLUTE_MAX_STORED_SCHEDULES:
             return 0
 
         headroom = ABSOLUTE_MAX_STORED_SCHEDULES - current_total
-        to_store = list(schedules[:headroom])
-        if not to_store:
-            return 0
-
         next_position = self.count(period_key)
-        rows = []
         course_list = list(courses or [])
         prog_set = set(selected_programs or [])
+        rows: list[tuple] = []
+        stored = 0
 
-        for offset, schedule in enumerate(to_store):
-            scores = self._scores(schedule, course_list, prog_set)
-            rows.append(
-                (
-                    period_key,
-                    next_position + offset,
-                    scores[SortCriterion.SORT_MIN_DAYS_MANDATORY],
-                    scores[SortCriterion.SORT_AVG_DAYS_ANY],
-                    scores[SortCriterion.SORT_ELECTIVE_COLLISIONS],
-                    scores[SortCriterion.SORT_EXAM_PERIOD_SPREAD],
-                    scores[SortCriterion.SORT_MAX_EXAMS_PER_DAY],
-                    sqlite3.Binary(pickle.dumps(schedule, protocol=pickle.HIGHEST_PROTOCOL)),
-                )
-            )
-
-        with self._conn:
+        def flush() -> None:
+            if not rows:
+                return
             self._conn.executemany(
                 """
                 INSERT INTO schedules (
@@ -327,17 +338,47 @@ class SQLiteScheduleStore(IScheduleStore):
                     score_elective_collisions,
                     score_exam_period_spread,
                     score_max_exams_per_day,
+                    date_signature_blob,
+                    has_classroom_data,
                     schedule_blob
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
-        return len(rows)
+            rows.clear()
+
+        with self._conn:
+            for schedule in schedules:
+                if stored >= headroom:
+                    break
+
+                scores = self._scores(schedule, course_list, prog_set)
+                rows.append(
+                    (
+                        period_key,
+                        next_position + stored,
+                        scores[SortCriterion.SORT_MIN_DAYS_MANDATORY],
+                        scores[SortCriterion.SORT_AVG_DAYS_ANY],
+                        scores[SortCriterion.SORT_ELECTIVE_COLLISIONS],
+                        scores[SortCriterion.SORT_EXAM_PERIOD_SPREAD],
+                        scores[SortCriterion.SORT_MAX_EXAMS_PER_DAY],
+                        sqlite3.Binary(self._date_signature_blob(schedule)),
+                        1 if self._has_classroom_data(schedule) else 0,
+                        sqlite3.Binary(pickle.dumps(schedule, protocol=pickle.HIGHEST_PROTOCOL)),
+                    )
+                )
+                stored += 1
+
+                if len(rows) >= chunk_size:
+                    flush()
+            flush()
+
+        return stored
 
     def replace_period(
         self,
         period_key: str,
-        schedules: Sequence[Schedule],
+        schedules: Iterable[Schedule],
         courses: Sequence[Course] | None = None,
         selected_programs: Sequence[str] | None = None,
     ) -> int:
@@ -414,6 +455,48 @@ class SQLiteScheduleStore(IScheduleStore):
         ).fetchall()
         return [row[0] for row in rows]
 
+    def navigation_entries(
+        self,
+        period_key: str,
+        sorting: SortingConfig | None = None,
+    ) -> list[tuple[tuple[tuple[str, object], ...], int]]:
+        """Return date signatures in the current display order.
+
+        Only metadata is read; schedule blobs are not unpickled.  The returned
+        index is the visible index under the supplied sorting config.
+        """
+        self._ensure_open()
+        order_by = self._order_by(sorting)
+        rows = self._conn.execute(
+            f"""
+            SELECT date_signature_blob
+            FROM schedules
+            WHERE period_key = ?
+            ORDER BY {order_by}
+            """,
+            (period_key,),
+        ).fetchall()
+        return [(pickle.loads(row[0]), idx) for idx, row in enumerate(rows)]
+
+    def has_classroom_data(self, period_key: str | None = None) -> bool:
+        """Return True if any stored schedule has Feature-4 classroom data."""
+        self._ensure_open()
+        if period_key is None:
+            row = self._conn.execute(
+                "SELECT 1 FROM schedules WHERE has_classroom_data = 1 LIMIT 1"
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                """
+                SELECT 1
+                FROM schedules
+                WHERE period_key = ? AND has_classroom_data = 1
+                LIMIT 1
+                """,
+                (period_key,),
+            ).fetchone()
+        return row is not None
+
     def clear_period(self, period_key: str) -> None:
         self._ensure_open()
         with self._conn:
@@ -451,6 +534,18 @@ class SQLiteScheduleStore(IScheduleStore):
         if len(self._object_cache) > _OBJECT_CACHE_MAX_SIZE:
             self._object_cache.popitem(last=False)
         return schedule
+
+    @staticmethod
+    def _date_signature_blob(schedule: Schedule) -> bytes:
+        signature = tuple(sorted(schedule.assignments.items()))
+        return pickle.dumps(signature, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @staticmethod
+    def _has_classroom_data(schedule: Schedule) -> bool:
+        return bool(
+            getattr(schedule, "classroom_assignments", None)
+            or getattr(schedule, "unassigned_classroom_exams", None)
+        )
 
     def _ensure_open(self) -> None:
         if self._closed:
