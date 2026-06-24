@@ -27,6 +27,36 @@ from src.domain.sorting import SortCriterion, SortingConfig
 class SortingEngine:
 
     @staticmethod
+    def score(
+        schedule: Schedule,
+        courses: list[Course],
+        criterion: SortCriterion,
+        selected_programs: list[str] | None = None,
+    ) -> float:
+        """Return the numeric score for one schedule and one sort criterion."""
+        prog_set: set = set(selected_programs) if selected_programs else set()
+        return float(_SCORERS[criterion](schedule, courses, prog_set))
+
+    @staticmethod
+    def scores(
+        schedule: Schedule,
+        courses: list[Course],
+        selected_programs: list[str] | None = None,
+    ) -> dict[SortCriterion, float]:
+        """Return all sort scores for one schedule.
+
+        SQLiteScheduleStore uses these values as persisted ORDER BY columns so
+        Result Ranking can re-order cached schedules without materialising the
+        whole result set back into RAM.
+        """
+        return {
+            criterion: SortingEngine.score(
+                schedule, courses, criterion, selected_programs
+            )
+            for criterion in SortCriterion
+        }
+
+    @staticmethod
     def sort(
         schedules: list[Schedule],
         courses: list[Course],

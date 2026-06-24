@@ -26,6 +26,7 @@ from pathlib import Path
 
 from src.adapters.exact_conflict_strategy import ExactConflictStrategy
 from src.adapters.in_memory_data_provider import InMemoryDataProvider
+from src.adapters.sqlite_schedule_store import SQLiteScheduleExporter, StoredScheduleList
 from src.adapters.readers.classroom_file_reader import ClassroomFileReader
 from src.adapters.readers.course_file_reader import CourseFileReader
 from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
@@ -74,7 +75,7 @@ logger = logging.getLogger(__name__)
 #
 # Increase this value to load more blocks per request.
 # Decrease it if the UI feels slow or freezes during loading.
-LOAD_BATCH_SIZE: int = 1000
+LOAD_BATCH_SIZE: int = 15000
 
 
 class MissingStudentCountError(ValueError):
@@ -383,6 +384,11 @@ class DesktopController:
         return list(self._courses)
 
     @property
+    def selected_programs(self) -> list[str]:
+        """Return the currently selected programme IDs."""
+        return list(self._selected_programs)
+
+    @property
     def results_stale(self) -> bool:
         """Return True when generated schedules no longer match current input data."""
         return self._results_stale
@@ -607,15 +613,20 @@ class DesktopController:
         )
         generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
 
-        memory_exporter = _MemoryExporter(
-            cap=None,
+        # Full in-process generation is still supported for tests / legacy callers,
+        # but results are no longer accumulated in one unbounded Python list.
+        # They are streamed into a temporary SQLite store and exposed through
+        # list-like StoredScheduleList facades.  The actual backtracking
+        # algorithm remains lazy and unchanged.
+        sqlite_exporter = SQLiteScheduleExporter(
             settings=self._settings,
             selected_programs=self._selected_programs,
+            chunk_size=LOAD_BATCH_SIZE,
         )
 
         engine = _EngineController(
             data_provider=data_provider,
-            exporter=memory_exporter,
+            exporter=sqlite_exporter,
             generator=generator,
             selected_programs=self._selected_programs,
             threshold_filter=ThresholdFilter(),
@@ -627,7 +638,7 @@ class DesktopController:
         )
         engine.run()
 
-        self._last_results = dict(memory_exporter.schedules_by_period)
+        self._last_results = dict(sqlite_exporter.schedules_by_period)
         self.on_generation_succeeded(set())
 
         self._remaining_schedule_iterators.clear()
@@ -635,18 +646,18 @@ class DesktopController:
         self._iterator_overflows.clear()
 
         return (
-            dict(memory_exporter.schedules_by_period),
-            dict(memory_exporter.courses_by_id),
+            dict(sqlite_exporter.schedules_by_period),
+            dict(sqlite_exporter.courses_by_id),
             set(),
         )
 
     def resort(self, config: SortingConfig) -> dict[str, list[Schedule]]:
         """Re-rank cached threshold-valid results without regenerating schedules.
 
-        Works for imported read-only results too: the read-only flag is NOT
-        cleared here and imported course metadata is used for ranking, so an
-        imported schedule stays sortable in place and never falls back to stale
-        generated results. See import_schedule() / set_imported_state().
+        Plain in-memory results are sorted with SortingEngine.  SQLite-backed
+        results keep the schedules on disk and only update the ORDER BY rule used
+        by their StoredScheduleList facade, so re-ranking does not pull the whole
+        cache into RAM.
         """
         if self._last_results is None:
             raise ValueError(
@@ -667,10 +678,16 @@ class DesktopController:
             courses = list(self._courses)
             selected_programs = self._selected_programs
 
-        resorted = {
-            period_key: SortingEngine.sort(schedules, courses, config, selected_programs)
-            for period_key, schedules in self._last_results.items()
-        }
+        resorted: dict[str, list[Schedule]] = {}
+        for period_key, schedules in self._last_results.items():
+            if isinstance(schedules, StoredScheduleList):
+                schedules.set_scoring_context(courses, selected_programs)
+                schedules.set_sorting(config)
+                resorted[period_key] = schedules
+            else:
+                resorted[period_key] = SortingEngine.sort(
+                    schedules, courses, config, selected_programs
+                )
 
         self._last_results = resorted
         return resorted
@@ -684,16 +701,25 @@ class DesktopController:
         The subprocess already receives a settings snapshot and applies thresholds.
         The parent process re-applies the current sorting config before displaying,
         because sort order may have changed while generation was running.
+
+        If the values are StoredScheduleList objects, the data is already on disk;
+        changing ranking only updates the SQLite ORDER BY rule used on access.
         """
         self.clear_imported_state()
 
         courses = list(self._courses)
         sorting = self._settings.sorting
 
-        resorted = {
-            period_key: SortingEngine.sort(schedules, courses, sorting, self._selected_programs)
-            for period_key, schedules in schedules_by_period.items()
-        }
+        resorted: dict[str, list[Schedule]] = {}
+        for period_key, schedules in schedules_by_period.items():
+            if isinstance(schedules, StoredScheduleList):
+                schedules.set_scoring_context(courses, self._selected_programs)
+                schedules.set_sorting(sorting)
+                resorted[period_key] = schedules
+            else:
+                resorted[period_key] = SortingEngine.sort(
+                    schedules, courses, sorting, self._selected_programs
+                )
 
         self._last_results = resorted
         return resorted
