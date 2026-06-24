@@ -61,6 +61,10 @@ def _make_data_table(headers: list[str]) -> QTableWidget:
     table.horizontalHeader().setMinimumHeight(36)
     table.verticalHeader().setVisible(False)
     table.setAlternatingRowColors(True)
+    # Track the mouse on both the widget and its viewport so hover-move events
+    # reach mouseMoveEvent without requiring a button press (SCRUM-420).
+    table.setMouseTracking(True)
+    table.viewport().setMouseTracking(True)
     return table
 
 
