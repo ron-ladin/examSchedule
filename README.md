@@ -5,7 +5,7 @@
 ### *Turning an NP-Hard scheduling nightmare into ranked, conflict-free timetables.*
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![Tests](https://img.shields.io/badge/Tests-691%20passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#-testing)
+[![Tests](https://img.shields.io/badge/Tests-727%20passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#-testing)
 [![UI](https://img.shields.io/badge/UI-PyQt6-41CD52?style=for-the-badge&logo=qt&logoColor=white)](https://pypi.org/project/PyQt6/)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](#-license)
 
@@ -221,13 +221,20 @@ python main.py \
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                                   # full suite
-pytest --cov=src --cov-report=term-missing  # with coverage
+
+# Regular validation (PR / local) — skips slow performance tests
+pytest tests/ -m "not slow"
+
+# With coverage
+pytest tests/ -m "not slow" --cov=src --cov-report=term-missing
+
+# Slow / performance tests — run separately (also executed in the slow-tests CI workflow)
+pytest tests/ -m slow
 ```
 
-The suite currently runs **691 tests** across unit, integration, and end-to-end layers, including the new `tests/e2e/test_sorting_combinatorial_stress.py` (10,000 schedules × 120 permutations, each under 1 second).
+The suite currently runs **727 tests** across unit, integration, and end-to-end layers (excluding slow/performance tests marked `@pytest.mark.slow`, which run in a separate CI workflow).
 
-> The PyQt6 GUI test modules self-skip via `pytest.importorskip` when the native GUI libraries are unavailable, so the exact collected count is lower in a headless environment than in a full GUI/CI run.
+> **UI tests** run headless in CI via `QT_QPA_PLATFORM=offscreen` and system Qt libraries (CI is pinned to Python 3.11 for PyQt6 stability). Locally, `pytest.importorskip` skips those tests automatically when PyQt6 is not installed — no `QT_QPA_PLATFORM` override is needed.
 
 ---
 

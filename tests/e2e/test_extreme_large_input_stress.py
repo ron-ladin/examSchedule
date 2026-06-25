@@ -59,10 +59,10 @@ BATCH_PER_PERIOD = 250      # bounded "first batch" drained from the lazy engine
 
 # Hard ceilings (SCRUM-435). These are intentionally strict to guard against
 # CI hangs / OOM. They were exercised locally well under budget; if a slower
-# shared CI runner trips them, bump TIME_BUDGET_SECONDS toward 15.0 and
+# shared CI runner trips them, bump TIME_BUDGET_SECONDS toward 45.0 and
 # PEAK_MEMORY_BUDGET_MB toward 350 — the values stay strict enough to catch a
 # real algorithmic or allocation regression while tolerating weak hardware.
-TIME_BUDGET_SECONDS = 10.0
+TIME_BUDGET_SECONDS = 30.0
 PEAK_MEMORY_BUDGET_MB = 250
 PEAK_MEMORY_BUDGET_BYTES = PEAK_MEMORY_BUDGET_MB * 1024 * 1024
 

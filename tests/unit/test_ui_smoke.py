@@ -15,6 +15,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# CI installs system Qt libraries and runs these tests headless via
+# QT_QPA_PLATFORM=offscreen (Python pinned to 3.11 for PyQt6 stability).
+# The importorskip below only skips locally when PyQt6 is not installed.
 QtWidgets = pytest.importorskip(
     "PyQt6.QtWidgets",
     reason="PyQt6 native GUI libraries are not available in this environment.",
