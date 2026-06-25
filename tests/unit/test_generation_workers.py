@@ -10,13 +10,25 @@ Tests cover:
   and skip-free across consecutive pages.
 """
 
+import multiprocessing
+import pickle
 import queue
 import threading
+from datetime import date, time as dt_time
 
 import pytest
 
+from src.domain.exam_period import ExamPeriod
+from src.domain.generation_result import GenerationDone, GenerationResult
+from src.domain.classroom import Classroom
+from src.domain.course import Course
+from src.domain.course_offering import CourseOffering
+from src.domain.proctor import ProctorConfig
+from src.domain.time_slot import TimeSlot
+from src.engine.app_controller import CLASSROOM_VARIANT_MODE_FIRST
 from src.engine.generation_workers import (
     _KindTaggedQueue,
+    _run_generation_process,
     _run_load_more_worker,
     _take_variant_page,
 )
@@ -207,3 +219,213 @@ class TestRunClassroomVariantsProcessMissingConfig:
 
         result = result_q.get()
         assert not result.success
+
+
+class TestRunGenerationProcessStreaming:
+    def test_single_period_done_marker_carries_period_key(self):
+        result_q = _SimpleQueue()
+        period = ExamPeriod(
+            semester="FALL",
+            moed="Aleph",
+            date_ranges=[(date(2026, 1, 5), date(2026, 1, 5))],
+        )
+
+        _run_generation_process(
+            result_q,
+            courses=[],
+            exam_periods=[period],
+            selected_programs=[],
+            cap=1,
+            stream=True,
+        )
+
+        result = result_q.get()
+
+        assert isinstance(result, GenerationDone)
+        assert result.period_key == "FALL - Aleph"
+
+
+class TestMultiprocessingSerialization:
+    def test_generation_dtos_round_trip_through_pickle(self):
+        ok = GenerationResult.ok({"FALL - Aleph": []}, {}, {"FALL - Aleph"})
+        failure = GenerationResult.failure("boom")
+        done = GenerationDone.done({"FALL - Aleph"}, period_key="FALL - Aleph")
+
+        assert pickle.loads(pickle.dumps(ok)) == ok
+        assert pickle.loads(pickle.dumps(failure)) == failure
+        assert pickle.loads(pickle.dumps(done)) == done
+
+    def test_representative_worker_arguments_are_picklable(self):
+        period = ExamPeriod(
+            semester="FALL",
+            moed="Aleph",
+            date_ranges=[(date(2026, 1, 5), date(2026, 1, 5))],
+        )
+        courses = [
+            Course(
+                id="C1",
+                name="Algorithms",
+                instructor="Dr. Ada",
+                evaluation_type="Exam",
+                offerings=[
+                    CourseOffering(
+                        "83101",
+                        1,
+                        "FALL",
+                        "Obligatory",
+                        student_count=20,
+                    )
+                ],
+            )
+        ]
+        kwargs = {
+            "settings": None,
+            "cap": 1,
+            "classrooms": [Classroom("R1", 40)],
+            "time_slots": [TimeSlot(dt_time(9, 0))],
+            "proctor_config": ProctorConfig(20),
+            "allow_unassigned_classrooms": False,
+            "classroom_variant_mode": CLASSROOM_VARIANT_MODE_FIRST,
+            "stream": True,
+        }
+
+        payload = (courses, [period], ["83101"], kwargs)
+
+        assert pickle.loads(pickle.dumps(payload))[2] == ["83101"]
+
+    def test_real_spawn_generation_smoke_reaps_own_child_pid(self):
+        if "spawn" not in multiprocessing.get_all_start_methods():
+            pytest.skip("spawn multiprocessing context is unavailable")
+
+        ctx = multiprocessing.get_context("spawn")
+        result_q = ctx.Queue()
+        period = ExamPeriod(
+            semester="FALL",
+            moed="Aleph",
+            date_ranges=[(date(2026, 1, 5), date(2026, 1, 5))],
+        )
+        proc = ctx.Process(
+            target=_run_generation_process,
+            args=(result_q, [], [period], []),
+            kwargs={"cap": 1, "stream": True},
+            daemon=True,
+        )
+
+        proc.start()
+        pid = proc.pid
+        try:
+            result = result_q.get(timeout=10)
+            proc.join(timeout=10)
+        finally:
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=2)
+            result_q.cancel_join_thread()
+            result_q.close()
+
+        assert pid is not None
+        assert not proc.is_alive()
+        assert proc.exitcode == 0
+        assert isinstance(result, GenerationDone)
+        assert result.period_key == "FALL - Aleph"
+
+
+def _feature4_courses() -> list[Course]:
+    return [
+        Course(
+            id="C1",
+            name="Algorithms",
+            instructor="Dr. Ada",
+            evaluation_type="Exam",
+            offerings=[
+                CourseOffering(
+                    "83101",
+                    1,
+                    "FALL",
+                    "Obligatory",
+                    student_count=30,
+                ),
+                CourseOffering(
+                    "83101",
+                    1,
+                    "SPRI",
+                    "Obligatory",
+                    student_count=30,
+                ),
+            ],
+        )
+    ]
+
+
+def _semantic_signature(result: GenerationResult) -> tuple:
+    by_period = []
+    for period_key, schedules in sorted(result.schedules_by_period.items()):
+        schedule_sigs = []
+        for schedule in schedules:
+            assignments = tuple(
+                sorted((cid, exam_date.isoformat()) for cid, exam_date in schedule.assignments.items())
+            )
+            rooms = []
+            for cid, assignments_for_course in sorted(schedule.classroom_assignments.items()):
+                room_sig = tuple(
+                    (
+                        item.room.room_id,
+                        item.slot.time.isoformat(timespec="minutes"),
+                        item.date.isoformat(),
+                        item.students_assigned,
+                        item.proctor_count,
+                    )
+                    for item in assignments_for_course
+                )
+                rooms.append((cid, room_sig))
+            schedule_sigs.append((assignments, tuple(rooms)))
+        by_period.append((period_key, tuple(schedule_sigs)))
+    return tuple(by_period), tuple(sorted(result.truncated_periods))
+
+
+class TestSequentialVsPerPeriodGeneration:
+    def test_parallel_period_split_preserves_feature4_semantics(self):
+        courses = _feature4_courses()
+        periods = [
+            ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 5))]),
+            ExamPeriod("SPRI", "Aleph", [(date(2026, 6, 1), date(2026, 6, 1))]),
+        ]
+        common_kwargs = {
+            "cap": 10,
+            "classrooms": [Classroom("R1", 100)],
+            "time_slots": [TimeSlot(dt_time(9, 0))],
+            "proctor_config": ProctorConfig(20),
+            "allow_unassigned_classrooms": False,
+            "classroom_variant_mode": CLASSROOM_VARIANT_MODE_FIRST,
+        }
+
+        sequential_q = _SimpleQueue()
+        _run_generation_process(
+            sequential_q,
+            courses,
+            periods,
+            ["83101"],
+            **common_kwargs,
+        )
+        sequential = sequential_q.get()
+
+        merged_by_period = {}
+        courses_by_id = {}
+        truncated = set()
+        for period in periods:
+            period_q = _SimpleQueue()
+            _run_generation_process(
+                period_q,
+                courses,
+                [period],
+                ["83101"],
+                **common_kwargs,
+            )
+            partial = period_q.get()
+            merged_by_period.update(partial.schedules_by_period)
+            courses_by_id.update(partial.courses_by_id)
+            truncated.update(partial.truncated_periods)
+
+        split = GenerationResult.ok(merged_by_period, courses_by_id, truncated)
+
+        assert _semantic_signature(split) == _semantic_signature(sequential)
