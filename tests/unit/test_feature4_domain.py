@@ -156,7 +156,7 @@ def test_validate_sequence_allows_empty_and_single():
 # An assignment carries the exam, room, slot, date, students, and proctor count.
 def test_classroom_assignment_holds_fields():
     offering = CourseOffering("83101", 1, "FALL", "Obligatory", student_count=80)
-    room = Classroom(room_id="A-101", capacity=100)
+    room = Classroom(room_id="A-101", capacity=120)
     slot = TimeSlot(time(9, 0))
     assignment = ClassroomAssignment(
         exam=offering,
@@ -175,19 +175,19 @@ def test_classroom_assignment_holds_fields():
     assert assignment.proctor_count == 4
 
 
-# students_assigned may equal capacity (boundary) but not exceed it (spec 6.2.4).
-def test_classroom_assignment_allows_full_room():
+# students_assigned may equal usable capacity (boundary) but not exceed it.
+def test_classroom_assignment_allows_full_usable_room():
     ClassroomAssignment(
         exam=CourseOffering("83101", 1, "FALL", "Obligatory"),
-        room=Classroom(room_id="A-101", capacity=50),
+        room=Classroom(room_id="A-101", capacity=100),
         slot=TimeSlot(time(9, 0)),
         date=date(2026, 6, 1),
-        students_assigned=50,
-        proctor_count=3,
+        students_assigned=75,
+        proctor_count=4,
     )
 
 
-def test_classroom_assignment_rejects_overfilled_room():
+def test_classroom_assignment_rejects_overfilled_usable_room():
     with pytest.raises(ValueError):
         ClassroomAssignment(
             exam=CourseOffering("83101", 1, "FALL", "Obligatory"),

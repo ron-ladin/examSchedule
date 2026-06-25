@@ -32,7 +32,7 @@ def _courses() -> dict[str, Course]:
 
 def test_report_follows_spec_structure():
     # Arrange
-    room = Classroom("Room 201", 40)
+    room = Classroom("Room 201", 50)
     assignment = ClassroomAssignment(
         exam=_offering(),
         room=room,
@@ -54,13 +54,13 @@ def test_report_follows_spec_structure():
     assert "05-01-2026" in report
     assert "  09:00" in report
     assert "    Physics 1 (11111)" in report
-    assert "      Room 201: 35/40 | Proctors: 2" in report
+    assert "      Room 201: 35/50 | Proctors: 2" in report
 
 
 def test_report_orders_dates_and_slots_chronologically():
     early = ClassroomAssignment(
         exam=_offering(),
-        room=Classroom("Room 201", 40),
+        room=Classroom("Room 201", 50),
         slot=TimeSlot(time(9, 0)),
         date=date(2026, 1, 5),
         students_assigned=35,

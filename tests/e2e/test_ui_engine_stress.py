@@ -284,7 +284,7 @@ def test_capacity_shortfall_warns_before_generation(tmp_path, monkeypatch):
     shortfall = controller.feature4_capacity_shortfall()
     assert shortfall is not None
     total_cap, largest = shortfall
-    assert total_cap == 20 and largest == 80
+    assert total_cap == 15 and largest == 80
 
     screen = ConfigScreen(controller)
     started = []

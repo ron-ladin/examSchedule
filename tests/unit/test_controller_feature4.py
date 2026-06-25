@@ -17,9 +17,9 @@ from tests.unit._controller_helpers import _active_feature4_controller, _exam_co
 @pytest.mark.parametrize(
     "capacity, mutate, expected",
     [
-        # Capacity below the largest exam -> warn with (capacity, largest).
-        (40, None, (40, 75)),
-        # Sufficient capacity -> no warning.
+        # Capacity below the largest exam -> warn with (usable capacity, largest).
+        (40, None, (30, 75)),
+        # Sufficient usable capacity -> no warning.
         (100, None, None),
         # Feature 4 inactive (no proctor config) -> no warning regardless of capacity.
         (40, "clear_proctor_config", None),
@@ -40,7 +40,7 @@ def test_feature4_capacity_shortfall_branches(capacity, mutate, expected):
 
 def test_feature4_capacity_compares_largest_single_exam_not_sum():
     """Spec 4.4: warn when capacity < ANY single exam, not the sum of exams."""
-    ctrl = _active_feature4_controller(total_capacity=120, student_count=80)
+    ctrl = _active_feature4_controller(total_capacity=140, student_count=80)
     # Second exam: 100 students across two program lines (60 + 40).
     ctrl._courses.append(
         Course(
@@ -54,8 +54,8 @@ def test_feature4_capacity_compares_largest_single_exam_not_sum():
             ],
         )
     )
-    # Sum of all students = 180 > 120, but the largest single exam is 100 < 120,
-    # so per spec 4.4 no warning should fire.
+    # Sum of all students = 180 > usable capacity 105, but the largest single
+    # exam is 100 <= 105, so per spec 4.4 no warning should fire.
     assert ctrl.feature4_capacity_shortfall() is None
 
 
@@ -181,7 +181,7 @@ def test_capacity_warning_ignores_unselected_programme():
 def test_capacity_warning_fires_for_large_selected_exam():
     ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
     ctrl._selected_programs = ["83101"]
-    assert ctrl.feature4_capacity_shortfall() == (40, 75)
+    assert ctrl.feature4_capacity_shortfall() == (30, 75)
 
 
 # ── §7: changing programmes marks results stale and blocks export ─────────────
