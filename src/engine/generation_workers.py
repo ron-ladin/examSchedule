@@ -17,6 +17,7 @@ DesktopController re-exports these names for backwards compatibility.
 """
 
 import logging
+import pickle
 from collections.abc import Iterator
 from itertools import chain, islice
 
@@ -55,6 +56,19 @@ logger = logging.getLogger(__name__)
 # schedules are resident, further loads are refused gracefully and Auto Load is
 # stopped. See README -> "Handling Extreme Scale: Why We Don't Sort Billions".
 ABSOLUTE_MAX_IN_MEMORY_SCHEDULES = 100_000
+
+
+def _put_generation_message(result_queue, message) -> None:
+    """Put a worker message after proving it can cross a spawn queue.
+
+    ``multiprocessing.Queue.put`` can return before its feeder thread has
+    finished serialising the payload.  Pickling here makes serialization errors
+    synchronous inside the worker, so the normal failure path can report them
+    instead of making the parent wait for a terminal marker that will never
+    arrive.
+    """
+    pickle.dumps(message)
+    result_queue.put(message)
 
 
 class _MemoryExporter(IOutputExporter):
@@ -140,7 +154,8 @@ class _MemoryExporter(IOutputExporter):
             # generation). The partial carries this period's truncated flag so
             # the UI can show its "Load More" control as results stream in.
             if self._stream_queue is not None:
-                self._stream_queue.put(
+                _put_generation_message(
+                    self._stream_queue,
                     GenerationResult.ok(
                         {key: self.schedules_by_period[key]},
                         self.courses_by_id,
@@ -233,9 +248,21 @@ def _run_generation_process(
         if stream:
             # Per-period partials were already streamed inside the exporter.
             # Send only the terminal marker so the consumer knows we are done.
-            result_queue.put(GenerationDone.done(memory_exporter.truncated_periods))
+            done_period_key = (
+                exam_periods[0].get_key()
+                if len(exam_periods) == 1
+                else None
+            )
+            _put_generation_message(
+                result_queue,
+                GenerationDone.done(
+                    memory_exporter.truncated_periods,
+                    period_key=done_period_key,
+                )
+            )
         else:
-            result_queue.put(
+            _put_generation_message(
+                result_queue,
                 GenerationResult.ok(
                     memory_exporter.schedules_by_period,
                     memory_exporter.courses_by_id,
@@ -244,7 +271,10 @@ def _run_generation_process(
             )
     except Exception as exc:
         logger.exception("Generation process failed")
-        result_queue.put(GenerationResult.failure(str(exc)))
+        try:
+            _put_generation_message(result_queue, GenerationResult.failure(str(exc)))
+        except Exception:
+            logger.exception("Could not send generation failure to parent")
 
 
 def _run_classroom_variants_process(
@@ -278,7 +308,7 @@ def _run_classroom_variants_process(
                 "time-slot, or proctor configuration."
             )
             logger.warning(message)
-            result_queue.put(GenerationResult.failure(message))
+            _put_generation_message(result_queue, GenerationResult.failure(message))
             return
 
         # Important for Auto Variants:
@@ -325,7 +355,8 @@ def _run_classroom_variants_process(
                 selected_programs,
             )
 
-        result_queue.put(
+        _put_generation_message(
+            result_queue,
             GenerationResult.ok(
                 {period_key: batch},
                 courses_by_id,
@@ -334,7 +365,10 @@ def _run_classroom_variants_process(
         )
     except Exception as exc:
         logger.exception("Classroom variant process failed")
-        result_queue.put(GenerationResult.failure(str(exc)))
+        try:
+            _put_generation_message(result_queue, GenerationResult.failure(str(exc)))
+        except Exception:
+            logger.exception("Could not send classroom variant failure to parent")
 
 
 class _KindTaggedQueue:
@@ -556,7 +590,8 @@ def _run_classroom_variants_from_state(
 
             if skipped < offset:
                 courses_by_id = {course.id: course for course in courses}
-                result_queue.put(
+                _put_generation_message(
+                    result_queue,
                     GenerationResult.ok({period_key: []}, courses_by_id, set())
                 )
                 return
@@ -572,7 +607,8 @@ def _run_classroom_variants_from_state(
                 selected_programs,
             )
 
-        result_queue.put(
+        _put_generation_message(
+            result_queue,
             GenerationResult.ok(
                 {period_key: batch},
                 courses_by_id,
@@ -581,7 +617,10 @@ def _run_classroom_variants_from_state(
         )
     except Exception as exc:
         logger.exception("Stateful classroom variant process failed")
-        result_queue.put(GenerationResult.failure(str(exc)))
+        try:
+            _put_generation_message(result_queue, GenerationResult.failure(str(exc)))
+        except Exception:
+            logger.exception("Could not send stateful variant failure to parent")
 
 
 def _run_load_more_worker(task_queue, result_queue) -> None:
