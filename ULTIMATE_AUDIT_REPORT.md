@@ -122,7 +122,7 @@ Both `threshold_filter.py` and `sorting_engine.py` now import from `schedule_met
 - `test_schedule_generator.py` covers empty course list, single course, full conflict graph. ✅
 - `test_classroom_assigner.py` covers zero students, missing rooms, split-room allocation. ✅
 - `test_sorting_engine.py` covers empty schedule list, single criterion, multiple criteria. ✅
-- `test_threshold_filter.py` covers all 5 criteria, disabled entries, empty programs. ✅
+- `test_threshold_filter_interface.py` covers all 5 criteria, disabled entries, empty programs, and the `IThresholdFilter` interface contract. (`test_threshold_filter.py` was removed — superseded by this file.) ✅
 - `tests/e2e/` covers full pipeline with real-like data and failure modes. ✅
 
 ### Tautological tests

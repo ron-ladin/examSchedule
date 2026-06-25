@@ -173,33 +173,14 @@ End-to-end controller integration tests:
 
 ## 4. Total Test Count
 
-| Test file | Tests | Feature |
-|-----------|-------|---------|
-| `test_threshold_filter_interface.py` | 37 | Feature 3 |
-| `test_sorting_engine.py` | 18 | Feature 3 |
-| `test_schedule_validator.py` | 4 | Feature 3 |
-| `test_settings_file_reader.py` | 18 | Feature 3 |
-| `test_controller_sprint3_integration.py` | 6 | Feature 3 (pipeline) |
-| `test_app_controller.py` | 6 | Engine pipeline |
-| `test_desktop_controller.py` | 37 | Desktop controller |
-| `test_feature4_domain.py` | 16 | Feature 4 |
-| `test_classroom_file_reader.py` | 14 | Feature 4 |
-| `test_proctor_config_reader.py` | 16 | Feature 4 |
-| **Total (parts 3+4, measured)** | **172** | |
-| **Project total (364 unit + 20 e2e)** | **384** | All features |
+The project collects **727 tests** (excluding `@pytest.mark.slow` tests, which run in a separate CI workflow).
 
-_Counts verified by `python3.11 -m pytest tests/unit/ tests/e2e/ -q` on 2026-06-14._
+Run the regular suite with:
 
-**Pending (PR #80 — SCRUM-261):** 5 additional tests in `test_app_controller.py`
-(threshold filter wiring) and 2 in `test_desktop_controller.py` (filter+sort end-to-end)
-will be added when PR #80 merges.
+```bash
+pytest tests/ -m "not slow"
+```
 
----
+_Counts verified by `python3.11 -m pytest --collect-only -q` on 2026-06-25._
 
-## 5. Pending Tests (SCRUM-266, SCRUM-267, SCRUM-269)
-
-The following test modules are planned but not yet written (blocked on ClassroomAssigner implementation):
-
-- `tests/unit/test_classroom_assigner.py` — basic assignment, splitting across rooms, cross-slot reuse, capacity boundary, hard rejection when unassignable
-- `tests/unit/test_proctor_report_exporter.py` — report format, proctor count calculation, file output
-- Additional `test_desktop_controller.py` cases for the feature-toggle path (SCRUM-267)
+> **ThresholdFilter** — the single source of truth is `test_threshold_filter_interface.py`. The older `test_threshold_filter.py` has been removed.
