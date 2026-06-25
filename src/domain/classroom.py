@@ -13,9 +13,15 @@ Notes:
     - The capacity invariant is enforced here so a Classroom can never hold an
       illegal value; the ClassroomFileReader additionally checks for duplicate
       room IDs across the file (a collection-level concern).
+    - During exam scheduling, only 75% of the physical room capacity is usable.
+      This keeps spare seats available and prevents assigning exams up to the
+      absolute physical limit of the room.
 """
 
 from dataclasses import dataclass
+
+
+EXAM_ROOM_CAPACITY_RATIO = 0.75
 
 
 @dataclass(frozen=True)
@@ -27,7 +33,16 @@ class Classroom:
         if not isinstance(self.room_id, str) or not self.room_id.strip():
             raise ValueError(f"Classroom room_id must be a non-empty string: {self.room_id!r}")
 
-        # Capacity is the number of seats, so it must be a positive integer (spec 2.2.4).
-        # bool is a subclass of int, so reject it explicitly (True would pass as 1).
-        if isinstance(self.capacity, bool) or self.capacity <= 0:
-            raise ValueError(f"Classroom capacity must be a positive integer: {self.capacity}")
+        # Capacity is the physical number of seats, so it must be a positive integer.
+        # bool is a subclass of int, so reject it explicitly.
+        if (
+            isinstance(self.capacity, bool)
+            or not isinstance(self.capacity, int)
+            or self.capacity <= 0
+        ):
+            raise ValueError(f"Classroom capacity must be a positive integer: {self.capacity!r}")
+
+    @property
+    def usable_capacity(self) -> int:
+        """Maximum students allowed under the configured exam room occupancy policy."""
+        return int(self.capacity * EXAM_ROOM_CAPACITY_RATIO)
