@@ -33,5 +33,14 @@ class ExamSchedulerApp(QMainWindow):
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets" / "logo.png")))
         self.setMinimumSize(1100, 720)
         self.setStyleSheet(QSS())
-        controller = DesktopController()
-        self.setCentralWidget(InputScreen(controller))
+        self._controller = DesktopController()
+        self._input_screen = InputScreen(self._controller)
+        self.setCentralWidget(self._input_screen)
+
+    def shutdown_background_workers(self) -> None:
+        """Stop generation and load-more workers before Qt tears widgets down."""
+        self._input_screen.shutdown_background_workers()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        self.shutdown_background_workers()
+        super().closeEvent(event)

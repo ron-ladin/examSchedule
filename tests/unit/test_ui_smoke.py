@@ -288,10 +288,13 @@ def test_results_panel_includes_standard_period_tabs_even_when_empty():
     assert labels == [
         "FALL — Aleph",
         "FALL — Bet",
+        "FALL — Gimel",
         "SPRING — Aleph",
         "SPRING — Bet",
+        "SPRING — Gimel",
         "SUMMER — Aleph",
         "SUMMER — Bet",
+        "SUMMER — Gimel",
     ]
 
     panel.close()
@@ -692,10 +695,13 @@ def test_edit_exam_periods_dialog_does_not_add_missing_periods_to_controller_unt
     assert labels == [
         "FALL — Aleph",
         "FALL — Bet",
+        "FALL — Gimel",
         "SPRING — Aleph",
         "SPRING — Bet",
+        "SPRING — Gimel",
         "SUMMER — Aleph",
         "SUMMER — Bet",
+        "SUMMER — Gimel",
     ]
 
     # Important logic assertion:
