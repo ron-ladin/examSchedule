@@ -221,13 +221,20 @@ python main.py \
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                                   # full suite
-pytest --cov=src --cov-report=term-missing  # with coverage
+
+# Regular validation (PR / local) — skips slow performance tests
+pytest tests/ -m "not slow"
+
+# With coverage
+pytest tests/ -m "not slow" --cov=src --cov-report=term-missing
+
+# Slow / performance tests — run separately (also executed in the slow-tests CI workflow)
+pytest tests/ -m slow
 ```
 
 The suite currently runs **691 tests** across unit, integration, and end-to-end layers, including the new `tests/e2e/test_sorting_combinatorial_stress.py` (10,000 schedules × 120 permutations, each under 1 second).
 
-> UI tests run headless in CI via `QT_QPA_PLATFORM=offscreen` and system Qt libraries. (CI is pinned to Python 3.11 for PyQt6 stability.)
+> **UI tests** run headless in CI via `QT_QPA_PLATFORM=offscreen` and system Qt libraries (CI is pinned to Python 3.11 for PyQt6 stability). Locally, `pytest.importorskip` skips those tests automatically when PyQt6 is not installed — no `QT_QPA_PLATFORM` override is needed.
 
 ---
 

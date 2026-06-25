@@ -27,9 +27,9 @@ tracked in the backlog.
 
 ## 2. Feature 3 Test Coverage
 
-### 2.1 ThresholdFilter — `tests/unit/test_threshold_filter.py` (35 tests)
+### 2.1 ThresholdFilter — `tests/unit/test_threshold_filter_interface.py`
 
-Tests five threshold criteria (spec §2.1–2.5):
+Single source of truth for all `ThresholdFilter` and `IThresholdFilter` tests. Tests five threshold criteria (spec §2.1–2.5) and the interface contract:
 
 | Class | Tests | What is verified |
 |-------|-------|-----------------|
@@ -39,17 +39,16 @@ Tests five threshold criteria (spec §2.1–2.5):
 | `TestMinDaysExamPeriodSpread` | 5 | Spread exactly k; single mandatory exam (spread = 0) fails k ≥ 1; electives not counted |
 | `TestMaxExamsPerDay` | 5 | Day count = k passes; day count > k fails; mixed mandatory/elective counted together |
 | `TestMultipleCriteriaActive` | 4 | All criteria pass; one failing criterion invalidates; empty settings always passes; unassigned courses neutral |
+| Interface contract | 3 | `ThresholdFilter` satisfies `IThresholdFilter`; `is_valid` callable as static method; parametrized reader variants |
 
 **Key design decisions tested:**
 - Disabled criteria are transparent (pass-through).
 - Cross-programme and cross-year pairs are never compared (spec §2.1–2.2).
 - Elective-to-mandatory pairs are not counted as elective collisions (spec §2.3).
 
----
+### 2.2 `IThresholdFilter` Interface
 
-### 2.2 `IThresholdFilter` Interface — `tests/unit/test_threshold_filter_interface.py` (2 tests)
-
-Verifies that `ThresholdFilter` satisfies the `IThresholdFilter` contract and that `is_valid` is callable as a static method.
+Covered by `tests/unit/test_threshold_filter_interface.py` (see §2.1 above).
 
 ---
 
@@ -176,8 +175,7 @@ End-to-end controller integration tests:
 
 | Test file | Tests | Feature |
 |-----------|-------|---------|
-| `test_threshold_filter.py` | 35 | Feature 3 |
-| `test_threshold_filter_interface.py` | 2 | Feature 3 |
+| `test_threshold_filter_interface.py` | 37 | Feature 3 |
 | `test_sorting_engine.py` | 18 | Feature 3 |
 | `test_schedule_validator.py` | 4 | Feature 3 |
 | `test_settings_file_reader.py` | 18 | Feature 3 |
