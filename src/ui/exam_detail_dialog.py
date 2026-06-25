@@ -728,7 +728,7 @@ class ExamDetailDialog(QDialog):
                             (
                                 "FULL"
                                 if assignment.students_assigned
-                                == assignment.room.capacity
+                                == assignment.room.usable_capacity
                                 else "AVAILABLE"
                             ),
                             req_str,

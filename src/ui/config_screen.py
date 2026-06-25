@@ -18,6 +18,7 @@ schedule_generated(object)  → full result tuple  when async subprocess finishe
 generation_failed(str)      → error message
 courses_changed(list[str])  → after courses or programme selection changes
 periods_changed()           → after exam periods are (re)loaded
+results_invalidated()       → threshold settings changed; cached results are stale
 """
 
 import logging
@@ -94,8 +95,6 @@ class ConfigScreen(QWidget):
     generation_failed = pyqtSignal(str)
     courses_changed = pyqtSignal(list)
     periods_changed = pyqtSignal()
-    # Emitted when a settings change invalidated existing results (threshold
-    # edit), so the results screen can show its stale state immediately.
     results_invalidated = pyqtSignal()
 
     def __init__(self, controller: DesktopController, parent=None) -> None:
@@ -605,14 +604,16 @@ class ConfigScreen(QWidget):
         )
 
     def _on_settings_changed(self, new_settings: Settings) -> None:
-        """Persist the full settings (thresholds + sort) from the dialog OK path."""
+        """Persist settings and invalidate generated results only for threshold changes."""
+        old_thresholds = self._controller.settings.thresholds
+
         self._controller.apply_settings(new_settings)
-        logger.info("Settings updated via SettingsScreen.")
-        # A threshold change invalidates cached results (apply_settings marks
-        # them stale). Tell the results screen so it shows stale state at once,
-        # instead of only when the user next tries to act on the results.
-        if self._controller.results_stale:
+
+        if new_settings.thresholds != old_thresholds:
+            self._controller.mark_results_stale()
             self.results_invalidated.emit()
+
+        logger.info("Settings updated via SettingsScreen.")
 
     def _notify_settings_state(self, is_running: bool) -> None:
         """Propagate generation state to the settings dialog if it is open."""
@@ -658,9 +659,9 @@ class ConfigScreen(QWidget):
         response = QMessageBox.warning(
             self,
             "Insufficient Classroom Capacity",
-            "The total classroom capacity is lower than the number of students "
-            "in at least one exam.\n\n"
-            f"Total classroom capacity: {total_capacity:,}\n"
+            "The total usable classroom capacity under the configured occupancy policy is lower "
+            "than the number of students in at least one exam.\n\n"
+            f"Total usable classroom capacity: {total_capacity:,}\n"
             f"Largest exam: {largest_exam_students:,} students\n"
             f"Shortfall: {largest_exam_students - total_capacity:,}\n\n"
             "Generation may reject schedules that cannot be assigned to rooms. "
@@ -670,7 +671,6 @@ class ConfigScreen(QWidget):
         )
         self._allow_unassigned_generation = response == QMessageBox.StandardButton.Yes
         return self._allow_unassigned_generation
-
 
     def _import_schedule(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
