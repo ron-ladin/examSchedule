@@ -32,7 +32,7 @@ def _balanced_distribution(
     rooms: list[Classroom],
     student_count: int,
 ) -> list[tuple[Classroom, int]] | None:
-    """Split students as evenly as possible without exceeding room capacities.
+    """Split students as evenly as possible without exceeding each room's usable capacity.
 
     The previous implementation placed students one-by-one through a heap. That
     was correct, but with large classroom files and many generated variants it
@@ -45,7 +45,7 @@ def _balanced_distribution(
 
     for room in rooms:
         selected.append(room)
-        total_capacity += room.capacity
+        total_capacity += room.usable_capacity
         if total_capacity >= student_count:
             break
 
@@ -59,7 +59,7 @@ def _balanced_distribution_for_selected_rooms(
     rooms: list[Classroom],
     student_count: int,
 ) -> list[tuple[Classroom, int]] | None:
-    """Split students across the given rooms without exceeding capacity.
+    """Split students across the given rooms without exceeding each room's usable capacity.
 
     Rooms that receive zero students are omitted. This avoids producing duplicate
     variants such as ``[Room A: 30]`` and ``[Room A: 30, Room B: 0]``.
@@ -70,7 +70,7 @@ def _balanced_distribution_for_selected_rooms(
     if student_count == 0:
         return []
 
-    if sum(room.capacity for room in rooms) < student_count:
+    if sum(room.usable_capacity for room in rooms) < student_count:
         return None
 
     counts = [0] * len(rooms)
@@ -83,7 +83,7 @@ def _balanced_distribution_for_selected_rooms(
         next_active: list[int] = []
 
         for pos, index in enumerate(active):
-            free_capacity = rooms[index].capacity - counts[index]
+            free_capacity = rooms[index].usable_capacity - counts[index]
             if free_capacity <= 0:
                 continue
 
@@ -98,7 +98,7 @@ def _balanced_distribution_for_selected_rooms(
             remaining -= placed
             assigned_this_round += placed
 
-            if counts[index] < rooms[index].capacity:
+            if counts[index] < rooms[index].usable_capacity:
                 next_active.append(index)
 
             if remaining == 0:
@@ -133,7 +133,7 @@ def _minimum_room_count(
     """Return the fewest largest rooms that can contain ``student_count``."""
     total = 0
     for index, room in enumerate(available_rooms, start=1):
-        total += room.capacity
+        total += room.usable_capacity
         if total >= student_count:
             return index
     return None
@@ -158,12 +158,12 @@ def _room_combinations_by_capacity(
     """
     available_rooms = sorted(
         available_rooms,
-        key=lambda room: room.capacity,
+        key=lambda room: (room.usable_capacity, room.capacity),
         reverse=True,
     )
 
     room_count = len(available_rooms)
-    capacities = [room.capacity for room in available_rooms]
+    capacities = [room.usable_capacity for room in available_rooms]
     prefix_capacity = [0]
     for capacity in capacities:
         prefix_capacity.append(prefix_capacity[-1] + capacity)
@@ -417,7 +417,7 @@ class ClassroomAssigner:
         """
         classrooms = sorted(
             classrooms,
-            key=lambda classroom: classroom.capacity,
+            key=lambda classroom: (classroom.usable_capacity, classroom.capacity),
             reverse=True,
         )
 
@@ -598,7 +598,7 @@ class ClassroomAssigner:
                     if room.room_id not in used_for_slot
                 ]
 
-                if sum(room.capacity for room in available) < student_count:
+                if sum(room.usable_capacity for room in available) < student_count:
                     continue
 
                 remaining_budget = (

@@ -446,9 +446,9 @@ def test_capacity_warning_proceed_returns_true(monkeypatch):
 
     assert screen._confirm_capacity_warning() is True
     assert shown
-    assert "Total classroom capacity: 20" in shown[0][1]
+    assert "Total usable classroom capacity: 15" in shown[0][1]
     assert "Largest exam: 50 students" in shown[0][1]
-    assert "Shortfall: 30" in shown[0][1]
+    assert "Shortfall: 35" in shown[0][1]
     app.processEvents()
     screen.close()
 

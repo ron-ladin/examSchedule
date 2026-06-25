@@ -5,8 +5,10 @@ from queue import Queue
 
 import pytest
 
+import src.domain.classroom as classroom_module
 from src.controller import _run_generation_process
 from src.domain.classroom import Classroom
+from src.domain.classroom_assignment import ClassroomAssignment
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
 from src.domain.exam_period import ExamPeriod
@@ -34,6 +36,124 @@ def _course(course_id: str, students: int) -> Course:
     )
 
 
+def _set_occupancy(monkeypatch: pytest.MonkeyPatch, ratio: float) -> None:
+    """Set the exam-room occupancy ratio for the duration of one test.
+
+    Supports both implementations used in this branch: the newer float ratio
+    constant and the older numerator/denominator constants.
+    """
+    if hasattr(classroom_module, "EXAM_ROOM_CAPACITY_RATIO"):
+        monkeypatch.setattr(classroom_module, "EXAM_ROOM_CAPACITY_RATIO", ratio)
+        return
+
+    monkeypatch.setattr(
+        classroom_module,
+        "EXAM_ROOM_CAPACITY_NUMERATOR",
+        int(ratio * 100),
+    )
+    monkeypatch.setattr(classroom_module, "EXAM_ROOM_CAPACITY_DENOMINATOR", 100)
+
+
+@pytest.mark.parametrize(
+    ("ratio", "expected_capacity"),
+    [
+        (1.0, 100),
+        (0.75, 75),
+        (0.50, 50),
+    ],
+)
+def test_classroom_usable_capacity_follows_configured_occupancy(
+    monkeypatch: pytest.MonkeyPatch,
+    ratio: float,
+    expected_capacity: int,
+):
+    """Effective capacity is floor(capacity * occupancy_ratio)."""
+    _set_occupancy(monkeypatch, ratio)
+
+    assert Classroom("Room 1", 100).usable_capacity == expected_capacity
+
+
+@pytest.mark.parametrize(
+    ("ratio", "student_count"),
+    [
+        (1.0, 100),
+        (0.75, 75),
+        (0.50, 50),
+    ],
+)
+def test_assigner_allows_students_up_to_configured_usable_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+    ratio: float,
+    student_count: int,
+):
+    """A room may be filled up to, but not beyond, its usable capacity."""
+    _set_occupancy(monkeypatch, ratio)
+    course = _course("11111", student_count)
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [course],
+        ["83101"],
+        [Classroom("Room 1", 100)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    assert assigned is not None
+    rooms = assigned.classroom_assignments["11111"]
+    assert len(rooms) == 1
+    assert rooms[0].students_assigned == student_count
+    assert rooms[0].students_assigned <= rooms[0].room.usable_capacity
+
+
+@pytest.mark.parametrize(
+    ("ratio", "student_count"),
+    [
+        (1.0, 101),
+        (0.75, 76),
+        (0.50, 51),
+    ],
+)
+def test_assigner_rejects_students_above_configured_usable_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+    ratio: float,
+    student_count: int,
+):
+    """One room with capacity 100 rejects one student above its usable capacity."""
+    _set_occupancy(monkeypatch, ratio)
+    course = _course("11111", student_count)
+    schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
+
+    assigned = ClassroomAssigner.assign(
+        schedule,
+        [course],
+        ["83101"],
+        [Classroom("Room 1", 100)],
+        [TimeSlot(time(9, 0))],
+        ProctorConfig(20),
+    )
+
+    assert assigned is None
+
+
+def test_classroom_assignment_rejects_students_above_usable_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The domain object also enforces the effective-capacity invariant."""
+    _set_occupancy(monkeypatch, 0.75)
+
+    with pytest.raises(ValueError, match="usable capacity"):
+        ClassroomAssignment(
+            exam=CourseOffering("83101", 1, "FALL", "Obligatory", 76),
+            room=Classroom("Room 1", 100),
+            slot=TimeSlot(time(9, 0)),
+            date=date(2026, 1, 5),
+            students_assigned=76,
+            proctor_count=4,
+        )
+
+
 def test_assigner_splits_exam_across_rooms_and_adds_proctor_counts():
     course = _course("11111", 70)
     schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
@@ -54,7 +174,7 @@ def test_assigner_splits_exam_across_rooms_and_adds_proctor_counts():
     ]
     assert [item.proctor_count for item in rooms] == [2, 2]
     assert all(
-        item.students_assigned <= item.room.capacity
+        item.students_assigned <= item.room.usable_capacity
         for item in rooms
     )
 
@@ -324,9 +444,9 @@ def test_assigner_skips_room_assignment_for_zero_student_count():
 
 # ── §7: heap-exhaustion path of the balanced distribution (spec 4.4) ──────────
 
-def test_assigner_rejects_when_capacity_is_exactly_one_short():
-    """Total capacity below the student count rejects the whole schedule."""
-    course = _course("11111", 101)
+def test_assigner_rejects_when_usable_capacity_is_exactly_one_short():
+    """Total usable capacity below the student count rejects the whole schedule."""
+    course = _course("11111", 75)
     schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
 
     assigned = ClassroomAssigner.assign(
@@ -341,9 +461,9 @@ def test_assigner_rejects_when_capacity_is_exactly_one_short():
     assert assigned is None
 
 
-def test_assigner_fills_rooms_to_exact_capacity():
-    """When the student count equals total capacity every seat is used once."""
-    course = _course("11111", 100)
+def test_assigner_fills_rooms_to_exact_usable_capacity():
+    """When the student count equals total usable capacity every allowed seat is used."""
+    course = _course("11111", 74)
     schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
 
     assigned = ClassroomAssigner.assign(
@@ -356,8 +476,8 @@ def test_assigner_fills_rooms_to_exact_capacity():
     )
 
     rooms = assigned.classroom_assignments["11111"]
-    assert sum(item.students_assigned for item in rooms) == 100
-    assert all(item.students_assigned == item.room.capacity for item in rooms)
+    assert sum(item.students_assigned for item in rooms) == 74
+    assert all(item.students_assigned == item.room.usable_capacity for item in rooms)
 
 
 # ── §8: unknown course id in the schedule (spec 4.4 rejection) ────────────────
@@ -399,7 +519,7 @@ def test_assigner_marks_unknown_course_unassigned_when_allowed():
 # ── §9: balanced-distribution contract and heap-exhaustion guard ──────────────
 
 def test_balanced_distribution_splits_imbalanced_rooms_within_capacity():
-    """Uneven room sizes still split evenly without exceeding any capacity."""
+    """Uneven room sizes still split evenly without exceeding usable capacity."""
     rooms = [Classroom("Big", 50), Classroom("Small", 10)]
 
     distribution = _balanced_distribution(rooms, 40)
@@ -407,7 +527,7 @@ def test_balanced_distribution_splits_imbalanced_rooms_within_capacity():
     assert distribution is not None
     placed = dict((room.room_id, count) for room, count in distribution)
     assert sum(placed.values()) == 40
-    assert all(count <= room.capacity for room, count in distribution)
+    assert all(count <= room.usable_capacity for room, count in distribution)
 
 
 def test_balanced_distribution_returns_none_when_capacity_insufficient():
@@ -505,8 +625,9 @@ def _variant_signature(schedule: Schedule) -> tuple:
     )
 
 
-def test_assign_variants_samples_large_classroom_file_lazily():
+def test_assign_variants_samples_large_classroom_file_lazily(monkeypatch):
     """Regression: many rooms must not force all classroom combinations up front."""
+    _set_occupancy(monkeypatch, 1.0)
     course = _course("11111", 2)
     schedule = Schedule(_period(), {"11111": date(2026, 1, 5)})
     rooms = [Classroom(f"Room {index:04d}", 1) for index in range(1000)]
@@ -538,6 +659,7 @@ def test_assign_variants_samples_large_classroom_file_lazily():
 
 def test_stateful_variant_worker_continues_next_block_without_rebuild(monkeypatch):
     """Auto Variants block 2 should continue from block 1, not restart + skip."""
+    _set_occupancy(monkeypatch, 1.0)
     import src.engine.generation_workers as generation_workers
 
     course = _course("11111", 2)
@@ -604,8 +726,9 @@ def test_stateful_variant_worker_continues_next_block_without_rebuild(monkeypatc
     }.isdisjoint({_variant_signature(variant) for variant in second_batch})
 
 
-def test_large_exam_that_requires_many_rooms_does_not_recurse_forever():
+def test_large_exam_that_requires_many_rooms_does_not_recurse_forever(monkeypatch):
     """Regression: 1,000 tiny rooms must not crash variant generation."""
+    _set_occupancy(monkeypatch, 1.0)
     rooms = [Classroom(f"Room {index:04d}", 1) for index in range(1000)]
     course = _course("99999", 999)
     schedule = Schedule(_period(), {"99999": date(2026, 1, 5)})
@@ -626,8 +749,9 @@ def test_large_exam_that_requires_many_rooms_does_not_recurse_forever():
     assert len(variants[0].classroom_assignments["99999"]) == 999
 
 
-def test_room_combinations_sort_rooms_defensively_for_capacity_pruning():
+def test_room_combinations_sort_rooms_defensively_for_capacity_pruning(monkeypatch):
     """Unsorted rooms must not break capacity-pruned combination generation."""
+    _set_occupancy(monkeypatch, 1.0)
     rooms = [
         Classroom("Small", 10),
         Classroom("Large", 90),
@@ -649,8 +773,9 @@ def test_room_combinations_sort_rooms_defensively_for_capacity_pruning():
     )
 
 
-def test_stateful_variant_worker_logs_and_self_heals_stale_offset(caplog):
+def test_stateful_variant_worker_logs_and_self_heals_stale_offset(caplog, monkeypatch):
     """A stale pagination offset must rebuild safely instead of crashing."""
+    _set_occupancy(monkeypatch, 1.0)
     import logging
     import src.engine.generation_workers as generation_workers
 

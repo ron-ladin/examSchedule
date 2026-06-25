@@ -50,9 +50,9 @@ class ClassroomAssignment:
                 f"proctor_count must be a non-negative integer: {self.proctor_count}"
             )
 
-        # A room cannot hold more students than its capacity (spec 6.2.4).
-        if self.students_assigned > self.room.capacity:
+        # A room cannot hold more than its usable capacity for exams.
+        if self.students_assigned > self.room.usable_capacity:
             raise ValueError(
-                f"students_assigned ({self.students_assigned}) exceeds room capacity "
-                f"({self.room.capacity})"
+                f"students_assigned ({self.students_assigned}) exceeds room usable capacity "
+                f"({self.room.usable_capacity}; physical capacity {self.room.capacity})"
             )

@@ -567,7 +567,7 @@ def test_feature4_room_and_slot_are_visible_in_calendar_and_detail_dialog():
     assert table.item(0, 4).text() == "Room 101"
     assert table.item(0, 5).text() == "30"
     assert table.item(0, 6).text() == "40"
-    assert table.item(0, 7).text() == "AVAILABLE"
+    assert table.item(0, 7).text() == "FULL"
     assert table.item(0, 9).text().startswith("83101 -")
     assert table.item(0, 10).text() == "2"
     assert dialog.windowFlags() & QtCore.Qt.WindowType.WindowMinMaxButtonsHint

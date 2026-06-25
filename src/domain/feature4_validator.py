@@ -125,10 +125,12 @@ class Feature4Validator:
         """
         Pre-generation capacity warning (spec 4.4).
 
-        Returns (total classroom capacity, largest single-exam student count)
-        when total capacity of ALL rooms is less than the StudentCount of ANY
-        single exam — the binding constraint is the largest single exam, not the
-        sum. Returns None when Feature 4 is inactive or capacity suffices.
+        Returns (total usable classroom capacity, largest single-exam student count)
+        when the combined usable capacity of all available rooms is smaller than the
+        largest single exam's StudentCount.
+
+        The binding constraint is the largest single exam, not the sum of all students
+        across all exams. Returns None when Feature 4 is inactive or capacity suffices.
         """
         if not is_active:
             return None
@@ -137,7 +139,7 @@ class Feature4Validator:
         if not exam_totals:
             return None
 
-        total_capacity = sum(room.capacity for room in classrooms)
+        total_capacity = sum(room.usable_capacity for room in classrooms)
         largest_exam = max(exam_totals.values())
 
         if total_capacity < largest_exam:
