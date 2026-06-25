@@ -227,7 +227,7 @@ pytest --cov=src --cov-report=term-missing  # with coverage
 
 The suite currently runs **691 tests** across unit, integration, and end-to-end layers, including the new `tests/e2e/test_sorting_combinatorial_stress.py` (10,000 schedules × 120 permutations, each under 1 second).
 
-> The PyQt6 GUI test modules self-skip via `pytest.importorskip` when the native GUI libraries are unavailable, so the exact collected count is lower in a headless environment than in a full GUI/CI run.
+> UI tests run headless in CI via `QT_QPA_PLATFORM=offscreen` and system Qt libraries. (CI is pinned to Python 3.11 for PyQt6 stability.)
 
 ---
 

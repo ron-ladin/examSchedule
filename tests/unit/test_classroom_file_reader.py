@@ -51,40 +51,21 @@ def test_whitespace_tolerated(tmp_path):
 
 # --- Negative checks -------------------------------------------------------
 
-# Capacity 0 is rejected (must be positive, §2.2.4).
-def test_rejects_zero_capacity(tmp_path):
-    with pytest.raises(ValueError):
-        ClassroomFileReader(_write(tmp_path, "$$$$\nA-101\n0\n$$$$")).read()
-
-
-# A negative capacity is rejected.
-def test_rejects_negative_capacity(tmp_path):
-    with pytest.raises(ValueError):
-        ClassroomFileReader(_write(tmp_path, "$$$$\nA-101\n-5\n$$$$")).read()
-
-
-# A non-integer capacity is rejected.
-def test_rejects_non_integer_capacity(tmp_path):
-    with pytest.raises(ValueError, match="positive integer"):
-        ClassroomFileReader(_write(tmp_path, "$$$$\nA-101\nfifty\n$$$$")).read()
-
-
-# A record missing the capacity line is rejected.
-def test_rejects_record_missing_capacity(tmp_path):
-    with pytest.raises(ValueError):
-        ClassroomFileReader(_write(tmp_path, "$$$$\nA-101\n$$$$")).read()
-
-
-# A record with an extra line is rejected.
-def test_rejects_record_with_extra_line(tmp_path):
-    with pytest.raises(ValueError):
-        ClassroomFileReader(_write(tmp_path, "$$$$\nA-101\n50\nextra\n$$$$")).read()
-
-
-# Duplicate room ids across records are rejected.
-def test_rejects_duplicate_room_ids(tmp_path):
-    content = "$$$$\nA-101\n50\n$$$$\nA-101\n30\n$$$$"
-    with pytest.raises(ValueError, match="Duplicate"):
+# Each malformed record must be rejected with a ValueError. Where the error
+# message is part of the contract, the expected substring is asserted too.
+@pytest.mark.parametrize(
+    "content, match",
+    [
+        pytest.param("$$$$\nA-101\n0\n$$$$", None, id="zero_capacity"),
+        pytest.param("$$$$\nA-101\n-5\n$$$$", None, id="negative_capacity"),
+        pytest.param("$$$$\nA-101\nfifty\n$$$$", "positive integer", id="non_integer_capacity"),
+        pytest.param("$$$$\nA-101\n$$$$", None, id="record_missing_capacity"),
+        pytest.param("$$$$\nA-101\n50\nextra\n$$$$", None, id="record_with_extra_line"),
+        pytest.param("$$$$\nA-101\n50\n$$$$\nA-101\n30\n$$$$", "Duplicate", id="duplicate_room_ids"),
+    ],
+)
+def test_rejects_malformed_record(tmp_path, content, match):
+    with pytest.raises(ValueError, match=match):
         ClassroomFileReader(_write(tmp_path, content)).read()
 
 

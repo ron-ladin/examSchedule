@@ -19,7 +19,6 @@ All criteria are applied only when their ThresholdEntry.enabled is True.
 
 import pytest
 from datetime import date
-from typing import List
 
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
@@ -92,35 +91,25 @@ class TestMinDaysBetweenMandatoryExams:
 
     CRITERION = Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS
 
-    def test_passes_when_gap_equals_k(self):
+    @pytest.mark.parametrize(
+        "second_date, k, expected",
+        [
+            (date(2026, 1, 8), 3, True),   # gap == k
+            (date(2026, 1, 12), 3, True),  # gap > k
+            (date(2026, 1, 7), 3, False),  # gap < k
+        ],
+    )
+    def test_gap_against_threshold(self, second_date, k, expected):
         courses = [_mandatory("11111"), _mandatory("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 8)})
-        settings = _settings_only(self.CRITERION, k=3)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
-
-    def test_passes_when_gap_exceeds_k(self):
-        courses = [_mandatory("11111"), _mandatory("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 12)})
-        settings = _settings_only(self.CRITERION, k=3)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
-
-    def test_fails_when_gap_below_k(self):
-        courses = [_mandatory("11111"), _mandatory("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 7)})
-        settings = _settings_only(self.CRITERION, k=3)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is False
+        schedule = _schedule({"11111": date(2026, 1, 5), "22222": second_date})
+        settings = _settings_only(self.CRITERION, k=k)
+        assert ThresholdFilter.is_valid(schedule, courses, settings) is expected
 
     def test_same_day_fails_when_k_is_1(self):
         courses = [_mandatory("11111"), _mandatory("22222")]
         schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
         settings = _settings_only(self.CRITERION, k=1)
         assert ThresholdFilter.is_valid(schedule, courses, settings) is False
-
-    def test_disabled_criterion_always_passes(self):
-        courses = [_mandatory("11111"), _mandatory("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
-        settings = _settings_only(self.CRITERION, k=5, enabled=False)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
 
     def test_different_programs_not_compared(self):
         """Courses from different programs are not compared against each other."""
@@ -162,14 +151,21 @@ class TestMinDaysBetweenAnyExams:
         settings = _settings_only(self.CRITERION, k=3)
         assert ThresholdFilter.is_valid(schedule, courses, settings) is True
 
-    def test_fails_when_elective_too_close_to_mandatory(self):
-        courses = [_mandatory("11111"), _elective("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 6)})
-        settings = _settings_only(self.CRITERION, k=3)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is False
-
-    def test_fails_when_two_electives_too_close(self):
-        courses = [_elective("11111"), _elective("22222")]
+    @pytest.mark.parametrize(
+        "courses_factory",
+        [
+            pytest.param(
+                lambda: [_mandatory("11111"), _elective("22222")],
+                id="elective_too_close_to_mandatory",
+            ),
+            pytest.param(
+                lambda: [_elective("11111"), _elective("22222")],
+                id="two_electives_too_close",
+            ),
+        ],
+    )
+    def test_fails_when_any_pair_too_close(self, courses_factory):
+        courses = courses_factory()
         schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 6)})
         settings = _settings_only(self.CRITERION, k=3)
         assert ThresholdFilter.is_valid(schedule, courses, settings) is False
@@ -180,12 +176,6 @@ class TestMinDaysBetweenAnyExams:
         schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
         settings = _settings_only(self.CRITERION, k=7)
         assert ThresholdFilter.is_valid(schedule, [c1, c2], settings) is True
-
-    def test_disabled_criterion_always_passes(self):
-        courses = [_mandatory("11111"), _elective("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 6)})
-        settings = _settings_only(self.CRITERION, k=5, enabled=False)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
 
 
 # ---------------------------------------------------------------------------
@@ -242,12 +232,6 @@ class TestMaxElectiveCollisions:
         settings = _settings_only(self.CRITERION, k=0)
         assert ThresholdFilter.is_valid(schedule, [c1, c2], settings) is True
 
-    def test_disabled_criterion_always_passes(self):
-        courses = [_elective("11111"), _elective("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
-        settings = _settings_only(self.CRITERION, k=0, enabled=False)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
-
 
 # ---------------------------------------------------------------------------
 # 2.4  MIN_DAYS_EXAM_PERIOD_SPREAD
@@ -299,15 +283,6 @@ class TestMinDaysExamPeriodSpread:
         settings = _settings_only(self.CRITERION, k=3)
         assert ThresholdFilter.is_valid(schedule, [mandatory, elective], settings) is False
 
-    def test_disabled_criterion_always_passes(self):
-        courses = [_mandatory("11111"), _mandatory("22222")]
-        schedule = _schedule({
-            "11111": date(2026, 1, 5),
-            "22222": date(2026, 1, 6),
-        })
-        settings = _settings_only(self.CRITERION, k=30, enabled=False)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
-
 
 # ---------------------------------------------------------------------------
 # 2.5  MAX_EXAMS_PER_DAY
@@ -347,16 +322,6 @@ class TestMaxExamsPerDay:
         settings = _settings_only(self.CRITERION, k=1)
         assert ThresholdFilter.is_valid(schedule, courses, settings) is True
 
-    def test_disabled_criterion_always_passes(self):
-        courses = [_mandatory("11111"), _mandatory("22222"), _mandatory("33333")]
-        schedule = _schedule({
-            "11111": date(2026, 1, 5),
-            "22222": date(2026, 1, 5),
-            "33333": date(2026, 1, 5),
-        })
-        settings = _settings_only(self.CRITERION, k=1, enabled=False)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
-
     def test_electives_and_mandatories_counted_together(self):
         """Criterion 2.5 is global — all exams on the same day count."""
         courses = [_mandatory("11111"), _elective("22222")]
@@ -366,6 +331,56 @@ class TestMaxExamsPerDay:
         })
         settings = _settings_only(self.CRITERION, k=1)
         assert ThresholdFilter.is_valid(schedule, courses, settings) is False
+
+
+# ---------------------------------------------------------------------------
+# Disabled criteria never affect validation (was repeated per-criterion class)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "criterion, k, courses, assignments",
+    [
+        pytest.param(
+            Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS, 5,
+            [_mandatory("11111"), _mandatory("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)},
+            id="min_days_between_mandatory",
+        ),
+        pytest.param(
+            Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS, 5,
+            [_mandatory("11111"), _elective("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 6)},
+            id="min_days_between_any",
+        ),
+        pytest.param(
+            Criterion.MAX_ELECTIVE_COLLISIONS, 0,
+            [_elective("11111"), _elective("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)},
+            id="max_elective_collisions",
+        ),
+        pytest.param(
+            Criterion.MIN_DAYS_EXAM_PERIOD_SPREAD, 30,
+            [_mandatory("11111"), _mandatory("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 6)},
+            id="min_days_exam_period_spread",
+        ),
+        pytest.param(
+            Criterion.MAX_EXAMS_PER_DAY, 1,
+            [_mandatory("11111"), _mandatory("22222"), _mandatory("33333")],
+            {
+                "11111": date(2026, 1, 5),
+                "22222": date(2026, 1, 5),
+                "33333": date(2026, 1, 5),
+            },
+            id="max_exams_per_day",
+        ),
+    ],
+)
+def test_disabled_criterion_always_passes(criterion, k, courses, assignments):
+    """A disabled entry must pass even on data that would violate it when enabled."""
+    schedule = _schedule(assignments)
+    settings = _settings_only(criterion, k=k, enabled=False)
+    assert ThresholdFilter.is_valid(schedule, courses, settings) is True
 
 
 # ---------------------------------------------------------------------------
@@ -457,36 +472,27 @@ class TestSelectedProgramsIsolation:
         c.add_offering(_offering(other_prog, 1, "Obligatory"))
         return c
 
-    def test_unselected_offering_does_not_inflate_groups_on_passing_schedule(self):
-        """Unselected PROGRAM_B offering must not create extra groups that affect pass/fail."""
+    @pytest.mark.parametrize(
+        "second_date, expected",
+        [
+            (date(2026, 1, 8), True),   # gap=3 → pass; unselected offering must not inflate groups
+            (date(2026, 1, 6), False),  # gap=1 → fail; unselected offering must not hide failure
+        ],
+    )
+    def test_unselected_offering_does_not_change_outcome(self, second_date, expected):
         course_a = self._cross_listed("11111", PROGRAM_A, PROGRAM_B)
         course_b = _mandatory("22222", program=PROGRAM_A, year=1)
 
         schedule = _schedule({
             "11111": date(2026, 1, 5),
-            "22222": date(2026, 1, 8),
-        })
-        settings = _settings_only(Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS, k=3)
-
-        # With filtering: only (PROGRAM_A, 1) group; gap=3 → pass.
-        assert ThresholdFilter.is_valid(
-            schedule, [course_a, course_b], settings, selected_programs=[PROGRAM_A]
-        ) is True
-
-    def test_unselected_offering_does_not_hide_failure(self):
-        """A failing schedule must still fail when an unselected offering exists."""
-        course_a = self._cross_listed("11111", PROGRAM_A, PROGRAM_B)
-        course_b = _mandatory("22222", program=PROGRAM_A, year=1)
-
-        schedule = _schedule({
-            "11111": date(2026, 1, 5),
-            "22222": date(2026, 1, 6),  # only 1 day apart → fail k=3
+            "22222": second_date,
         })
         settings = _settings_only(Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS, k=3)
 
         assert ThresholdFilter.is_valid(
             schedule, [course_a, course_b], settings, selected_programs=[PROGRAM_A]
-        ) is False
+        ) is expected
+
 
 # ---------------------------------------------------------------------------
 # Regression: schedule-period semester isolation
