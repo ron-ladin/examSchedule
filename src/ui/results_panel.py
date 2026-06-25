@@ -47,6 +47,7 @@ from src.adapters.sqlite_schedule_store import (
     StoredScheduleList,
 )
 from src.domain.course import Course
+from src.domain.period_order import canonical_period_key
 from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
 from src.domain.sorting import SortingConfig
@@ -90,12 +91,15 @@ def _merge_period_keys(
         if key not in keys:
             keys.append(key)
 
-    for period in controller.get_exam_periods():
+    for period in sorted(
+        controller.get_exam_periods(),
+        key=lambda period: canonical_period_key(period.get_key()),
+    ):
         key = period.get_key()
         if key not in keys:
             keys.append(key)
 
-    for key in schedules_by_period:
+    for key in sorted(schedules_by_period, key=canonical_period_key):
         if key not in keys:
             keys.append(key)
 

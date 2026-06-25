@@ -5,17 +5,13 @@ Centralises the standard period ordering and the display-period-list builder so
 the three screens share one implementation and cannot drift.
 """
 
-from src.controller import DesktopController
 from src.domain.exam_period import ExamPeriod
-
-STANDARD_PERIOD_ORDER: tuple[tuple[str, str], ...] = (
-    ("FALL", "Aleph"),
-    ("FALL", "Bet"),
-    ("SPRI", "Aleph"),
-    ("SPRI", "Bet"),
-    ("SUMM", "Aleph"),
-    ("SUMM", "Bet"),
+from src.domain.period_order import (
+    STANDARD_PERIOD_ORDER,
+    sort_periods_canonically,
 )
+
+from src.controller import DesktopController
 
 
 def build_display_periods(controller: DesktopController) -> list[ExamPeriod]:
@@ -52,7 +48,7 @@ def build_display_periods(controller: DesktopController) -> list[ExamPeriod]:
 
     display_keys = {period.get_key() for period in display_periods}
 
-    for period in existing_periods:
+    for period in sort_periods_canonically(existing_periods):
         if period.get_key() not in display_keys:
             display_periods.append(period)
 
