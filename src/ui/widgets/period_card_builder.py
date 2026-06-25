@@ -6,7 +6,7 @@ controller, registers the resulting widget bundle in ``panel._cards`` and
 returns the card widget.
 """
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIntValidator
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -26,6 +26,18 @@ from src.ui.period_card import PeriodCardWidgets
 
 _NAV_REPEAT_DELAY_MS = 450
 _NAV_REPEAT_INTERVAL_MS = 120
+_HOVER_HINT_DELAY_MS = 110
+
+AUTO_DATES_TOOLTIP = (
+    "<b style='color:#047857;'>Auto Dates</b><br>"
+    "Loads more date schedules.<br>"
+    "Uses the first classroom/time-slot option for each schedule."
+)
+AUTO_VARIANTS_TOOLTIP = (
+    "<b style='color:#7C3AED;'>Auto Variants</b><br>"
+    "Loads more classroom/time-slot options<br>"
+    "for the dates currently shown."
+)
 
 
 class _CalendarTable(QTableWidget):
@@ -42,6 +54,85 @@ class _CalendarTable(QTableWidget):
                 event.position().toPoint(),
             )
         super().mouseReleaseEvent(event)
+
+
+class _ButtonHoverHint(QObject):
+    """Stable, non-native hover hint for the Auto buttons."""
+
+    def __init__(self, button: QPushButton, parent: QWidget, text: str) -> None:
+        super().__init__(button)
+        self._button = button
+        self._parent = parent
+        self._label = QLabel(parent)
+        self._label.setText(text)
+        self._label.setTextFormat(Qt.TextFormat.RichText)
+        self._label.setWordWrap(True)
+        self._label.setMaximumWidth(340)
+        self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._label.setStyleSheet(
+            """
+            QLabel {
+                background-color: #FFFFFF;
+                color: #111827;
+                border: 1px solid #CBD5E1;
+                border-radius: 8px;
+                padding: 8px 10px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            """
+        )
+        self._label.hide()
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_HOVER_HINT_DELAY_MS)
+        self._timer.timeout.connect(self._show)
+
+        # Avoid the native Qt tooltip entirely; it can flicker over styled buttons.
+        button.setToolTip("")
+        button.installEventFilter(self)
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self._button:
+            event_type = event.type()
+            if event_type == QEvent.Type.Enter:
+                self._timer.start()
+            elif event_type in (
+                QEvent.Type.Leave,
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.Hide,
+                QEvent.Type.EnabledChange,
+            ):
+                self._hide()
+        return super().eventFilter(watched, event)
+
+    def _show(self) -> None:
+        if not self._button.isVisible() or not self._button.isEnabled():
+            return
+        if not self._button.underMouse():
+            return
+
+        self._label.adjustSize()
+        button_pos = self._button.mapTo(self._parent, QPoint(0, 0))
+        x = button_pos.x() + (self._button.width() - self._label.width()) // 2
+        y = button_pos.y() + self._button.height() + 8
+
+        x = max(8, min(x, self._parent.width() - self._label.width() - 8))
+        if y + self._label.height() > self._parent.height() - 8:
+            y = button_pos.y() - self._label.height() - 8
+
+        self._label.move(x, max(8, y))
+        self._label.raise_()
+        self._label.show()
+
+    def _hide(self) -> None:
+        self._timer.stop()
+        self._label.hide()
+
+
+def _install_hover_hint(button: QPushButton, parent: QWidget, text: str) -> None:
+    button._hover_hint = _ButtonHoverHint(button, parent, text)  # type: ignore[attr-defined]
 
 
 def _enable_press_and_hold(button: QPushButton) -> None:
@@ -230,10 +321,7 @@ def build_period_card(panel, period_key: str) -> QWidget:
         "background: rgba(4, 120, 87, 0.07);"
     )
     auto_dates_btn.setVisible(has_more)
-    auto_dates_btn.setToolTip(
-        "Automatically load more date options. Each date option uses only "
-        "the first classroom/time-slot variant."
-    )
+    _install_hover_hint(auto_dates_btn, card, AUTO_DATES_TOOLTIP)
     auto_dates_btn.clicked.connect(
         lambda _=False, k=period_key: panel._lm.toggle_auto_load_dates(k)
     )
@@ -245,10 +333,7 @@ def build_period_card(panel, period_key: str) -> QWidget:
         "background: rgba(124, 58, 237, 0.07);"
     )
     auto_variants_btn.setVisible(True)
-    auto_variants_btn.setToolTip(
-        "Automatically load more classroom/time-slot variants for the "
-        "currently displayed dates only."
-    )
+    _install_hover_hint(auto_variants_btn, card, AUTO_VARIANTS_TOOLTIP)
     auto_variants_btn.clicked.connect(
         lambda _=False, k=period_key: panel._lm.toggle_auto_load_variants(k)
     )

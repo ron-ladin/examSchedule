@@ -28,14 +28,23 @@ QtGui = pytest.importorskip("PyQt6.QtGui", exc_type=ImportError)
 
 QApplication = QtWidgets.QApplication
 
-from src.ui.widgets.period_card_builder import _make_data_table
+from src.ui.widgets.period_card_builder import (
+    AUTO_VARIANTS_TOOLTIP,
+    _install_hover_hint,
+    _make_data_table,
+)
+
+_APP: QApplication | None = None
 
 
 def _get_qapp() -> QApplication:
     """Return an existing QApplication or create one for the GUI test."""
+    global _APP
+
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
+    _APP = app
     return app
 
 
@@ -46,3 +55,14 @@ def test_calendar_table_tracks_mouse_for_hover():
 
     assert table.hasMouseTracking() is True
     assert table.viewport().hasMouseTracking() is True
+
+
+def test_auto_buttons_use_custom_hover_hint_without_native_tooltip():
+    _get_qapp()
+    parent = QtWidgets.QWidget()
+    button = QtWidgets.QPushButton("Auto Variants", parent)
+
+    _install_hover_hint(button, parent, AUTO_VARIANTS_TOOLTIP)
+
+    assert button.toolTip() == ""
+    assert hasattr(button, "_hover_hint")
