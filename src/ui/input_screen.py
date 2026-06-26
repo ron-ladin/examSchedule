@@ -398,6 +398,7 @@ class InputScreen(QWidget):
     def __init__(self, controller: DesktopController, parent=None) -> None:
         super().__init__(parent)
 
+        self._controller = controller
         self._config = ConfigScreen(controller)
         self._results = ResultsScreen(controller)
 
@@ -468,3 +469,12 @@ class InputScreen(QWidget):
         self._results.hide_loading()
         self._stacked.setCurrentIndex(0)
         QMessageBox.critical(self, "Generation Error", error_msg)
+
+    def shutdown_background_workers(self) -> None:
+        """Stop all background workers owned by the UI tree."""
+        self._config.shutdown_background_workers()
+        self._controller.shutdown_load_workers()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        self.shutdown_background_workers()
+        super().closeEvent(event)

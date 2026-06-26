@@ -161,6 +161,40 @@ def test_export_writes_output_file(tmp_path):
     assert out.stat().st_size > 0
 
 
+def test_export_uses_canonical_period_order(monkeypatch, tmp_path):
+    captured: dict[str, list[str]] = {}
+
+    class _FakeTextFileExporter:
+        def __init__(self, output_path, max_combinations=None):
+            self.output_path = output_path
+            self.max_combinations = max_combinations
+
+        def export_schedules(self, schedules_by_period, courses_by_id):
+            captured["keys"] = list(schedules_by_period)
+
+    monkeypatch.setattr(
+        "src.controller.TextFileExporter",
+        _FakeTextFileExporter,
+    )
+
+    ctrl = DesktopController()
+    ctrl.export(
+        {
+            "SUMM - Bet": [],
+            "FALL - Gimel": [],
+            "FALL - Aleph": [],
+        },
+        tmp_path / "out.txt",
+        courses_by_id={},
+    )
+
+    assert captured["keys"] == [
+        "FALL - Aleph",
+        "FALL - Gimel",
+        "SUMM - Bet",
+    ]
+
+
 # ── duplicate-key warning ─────────────────────────────────────────────────────
 
 def test_merge_by_key_update_warns_on_duplicate_key(caplog):

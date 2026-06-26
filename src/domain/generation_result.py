@@ -63,12 +63,22 @@ class GenerationDone:
     produced). It carries the final ``truncated_periods`` set so the consumer can
     finalise has-more state. Picklable; crosses the multiprocessing boundary
     safely. Distinct type — not a ``GenerationResult`` — so partial results and
-    the final marker are never confused.
+    the final marker are never confused. ``period_key`` is set by per-period
+    generation workers so the UI poller can aggregate several terminal markers
+    into one final user-facing completion event.
     """
 
     truncated_periods: set[str] = field(default_factory=set)
+    period_key: str | None = None
 
     @classmethod
-    def done(cls, truncated_periods: set[str] | None = None) -> "GenerationDone":
+    def done(
+        cls,
+        truncated_periods: set[str] | None = None,
+        period_key: str | None = None,
+    ) -> "GenerationDone":
         """Build the terminal marker carrying the final truncated-period set."""
-        return cls(truncated_periods=set(truncated_periods or set()))
+        return cls(
+            truncated_periods=set(truncated_periods or set()),
+            period_key=period_key,
+        )

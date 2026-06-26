@@ -824,3 +824,11 @@ class ConfigScreen(QWidget):
             and self._count_checked() >= 1
             and feature4_ok
         )
+
+    def shutdown_background_workers(self) -> None:
+        """Stop generation workers owned by this screen."""
+        self._poller.stop()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        self.shutdown_background_workers()
+        super().closeEvent(event)

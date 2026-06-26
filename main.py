@@ -97,6 +97,7 @@ def _run_gui() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("Syncademic")
     window = ExamSchedulerApp()
+    app.aboutToQuit.connect(window.shutdown_background_workers)
     window.show()
     sys.exit(app.exec())
 
@@ -113,6 +114,7 @@ def _run_cli(argv: list[str] | None = None) -> None:
     from src.adapters.readers.slots_file_reader import SlotsFileReader
     from src.adapters.text_file_exporter import TextFileExporter
     from src.domain.feature4_validator import Feature4Validator
+    from src.domain.period_order import sort_period_mapping_canonically
     from src.domain.threshold_filter import ThresholdFilter
     from src.engine.app_controller import (
         AppController,
@@ -228,11 +230,15 @@ def _run_cli(argv: list[str] | None = None) -> None:
         classroom_variant_mode=CLASSROOM_VARIANT_MODE_FIRST,
     ).run()
 
+    ordered_schedules_by_period = sort_period_mapping_canonically(
+        exporter.schedules_by_period
+    )
+
     # Write the schedules file from the captured in-memory results.
     TextFileExporter(
         output_path=args.output,
         max_combinations=_CLI_MAX_COMBINATIONS,
-    ).export_schedules(exporter.schedules_by_period, exporter.courses_by_id)
+    ).export_schedules(ordered_schedules_by_period, exporter.courses_by_id)
 
     logging.info(
         "CLI generation completed successfully. Schedules written to %s "
@@ -244,7 +250,7 @@ def _run_cli(argv: list[str] | None = None) -> None:
     if feature4_requested:
         _write_cli_proctor_report(
             args.output,
-            exporter.schedules_by_period,
+            ordered_schedules_by_period,
             exporter.courses_by_id,
         )
 
@@ -263,6 +269,10 @@ def _run_cli_safely(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+
     argv = sys.argv[1:]
 
     if argv and argv[0] == "--cli":

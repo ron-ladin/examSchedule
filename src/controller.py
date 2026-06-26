@@ -44,6 +44,7 @@ from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
 from src.domain.feature4_validator import Feature4Validator
+from src.domain.period_order import sort_period_mapping_canonically
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.settings import Settings
@@ -188,7 +189,9 @@ class DesktopController:
         self.clear_results_stale()
         self.set_imported_state(courses_by_id)
         self._read_only_import = True
-        self._last_results = dict(imported.schedules_by_period)
+        self._last_results = sort_period_mapping_canonically(
+            imported.schedules_by_period
+        )
 
         return ImportedScheduleData(
             schedules_by_period=imported.schedules_by_period,
@@ -651,7 +654,10 @@ class DesktopController:
         )
         engine.run()
 
-        self._last_results = dict(sqlite_exporter.schedules_by_period)
+        ordered_results = sort_period_mapping_canonically(
+            sqlite_exporter.schedules_by_period
+        )
+        self._last_results = ordered_results
         self.on_generation_succeeded(set())
 
         self._remaining_schedule_iterators.clear()
@@ -659,7 +665,7 @@ class DesktopController:
         self._iterator_overflows.clear()
 
         return (
-            dict(sqlite_exporter.schedules_by_period),
+            dict(ordered_results),
             dict(sqlite_exporter.courses_by_id),
             set(),
         )
@@ -702,8 +708,8 @@ class DesktopController:
                     schedules, courses, config, selected_programs
                 )
 
-        self._last_results = resorted
-        return resorted
+        self._last_results = sort_period_mapping_canonically(resorted)
+        return self._last_results
 
     def cache_generated_results(
         self,
@@ -734,8 +740,8 @@ class DesktopController:
                     schedules, courses, sorting, self._selected_programs
                 )
 
-        self._last_results = resorted
-        return resorted
+        self._last_results = sort_period_mapping_canonically(resorted)
+        return self._last_results
 
     def begin_streaming_cache(self) -> None:
         """Reset the result cache at the start of a streaming generation run.
@@ -776,6 +782,7 @@ class DesktopController:
         if self._last_results is None:
             self._last_results = {}
         self._last_results.update(sorted_partial)
+        self._last_results = sort_period_mapping_canonically(self._last_results)
 
         return sorted_partial
 
@@ -794,7 +801,9 @@ class DesktopController:
         """
         self._remaining_schedule_iterators.clear()
         self._iterator_overflows.clear()
-        self._has_more_schedules = {key: True for key in truncated_periods}
+        self._has_more_schedules = sort_period_mapping_canonically(
+            {key: True for key in truncated_periods}
+        )
 
     def _get_or_start_load_worker(
         self,
@@ -973,7 +982,10 @@ class DesktopController:
             output_path=Path(output_path),
             max_combinations=None,
         )
-        exporter.export_schedules(schedules_by_period, export_courses_by_id)
+        exporter.export_schedules(
+            sort_period_mapping_canonically(schedules_by_period),
+            export_courses_by_id,
+        )
 
         logger.info("Exported schedules to %s", output_path)
 
