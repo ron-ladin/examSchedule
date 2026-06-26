@@ -189,7 +189,11 @@ def _run_cli(argv: list[str] | None = None) -> None:
     )
 
     conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
-    generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
+    generator = ScheduleGenerator(
+        conflict_strategy=conflict_strategy,
+        threshold_settings=settings.thresholds if settings is not None else None,
+        selected_programs=selected_programs,
+    )
 
     classrooms = []
     time_slots = []

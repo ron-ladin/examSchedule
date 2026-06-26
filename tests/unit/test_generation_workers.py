@@ -24,10 +24,15 @@ from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
 from src.domain.proctor import ProctorConfig
+from src.domain.settings import Settings
+from src.domain.sorting import SortCriterion, SortingConfig, SortRule
+from src.domain.threshold import Criterion, ThresholdEntry, ThresholdSettings
 from src.domain.time_slot import TimeSlot
 from src.engine.app_controller import CLASSROOM_VARIANT_MODE_FIRST
+import src.engine.generation_workers as gw
 from src.engine.generation_workers import (
     _KindTaggedQueue,
+    _run_date_options_from_state,
     _run_generation_process,
     _run_load_more_worker,
     _take_variant_page,
@@ -67,6 +72,146 @@ def _start_worker():
     )
     t.start()
     return task_q, result_q, t
+
+
+def _date_option_courses() -> list[Course]:
+    return [
+        Course(
+            id="C1",
+            name="Algorithms",
+            instructor="Dr. Ada",
+            evaluation_type="Exam",
+            offerings=[CourseOffering("83101", 1, "FALL", "Obligatory")],
+        ),
+        Course(
+            id="C2",
+            name="Databases",
+            instructor="Dr. Turing",
+            evaluation_type="Exam",
+            offerings=[CourseOffering("83101", 1, "FALL", "Obligatory")],
+        ),
+    ]
+
+
+def _date_option_period(
+    start: date = date(2026, 1, 5),
+    end: date = date(2026, 1, 7),
+    moed: str = "Aleph",
+) -> ExamPeriod:
+    return ExamPeriod("FALL", moed, [(start, end)])
+
+
+def _schedule_signature(schedule) -> tuple:
+    assignments = tuple(
+        sorted(
+            (course_id, exam_date.isoformat())
+            for course_id, exam_date in schedule.assignments.items()
+        )
+    )
+    rooms = []
+    for course_id, assignments_for_course in sorted(
+        schedule.classroom_assignments.items()
+    ):
+        room_sig = tuple(
+            (
+                item.room.room_id,
+                item.slot.time.isoformat(timespec="minutes"),
+                item.date.isoformat(),
+                item.students_assigned,
+                item.proctor_count,
+            )
+            for item in assignments_for_course
+        )
+        rooms.append((course_id, room_sig))
+    unassigned = tuple(sorted(schedule.unassigned_classroom_exams.items()))
+    return assignments, tuple(rooms), unassigned
+
+
+def _date_signature(
+    result: GenerationResult,
+    period_key: str = "FALL - Aleph",
+) -> list[tuple]:
+    schedules = result.schedules_by_period.get(period_key, [])
+    return [
+        _schedule_signature(schedule)
+        for schedule in schedules
+    ]
+
+
+def _settings(
+    thresholds: ThresholdSettings | None = None,
+    sorting: SortingConfig | None = None,
+) -> Settings:
+    return Settings(
+        thresholds=thresholds or ThresholdSettings(),
+        sorting=sorting or SortingConfig(),
+    )
+
+
+def _direct_generation_result(
+    *,
+    courses: list[Course],
+    periods: list[ExamPeriod],
+    selected_programs: list[str],
+    settings: Settings,
+    period_key: str,
+    **kwargs,
+) -> GenerationResult:
+    direct_q = _SimpleQueue()
+    _run_generation_process(
+        direct_q,
+        courses,
+        periods,
+        selected_programs,
+        settings=settings,
+        cap=None,
+        period_key=period_key,
+        **kwargs,
+    )
+    return direct_q.get()
+
+
+def _collect_stateful_date_signatures(
+    *,
+    courses: list[Course],
+    periods: list[ExamPeriod],
+    selected_programs: list[str],
+    settings: Settings,
+    period_key: str,
+    cap: int = 2,
+    states: dict | None = None,
+    **kwargs,
+) -> tuple[list[tuple], dict]:
+    state_map = {} if states is None else states
+    result_q = _SimpleQueue()
+    seen: list[tuple] = []
+    offset = 0
+    more = True
+    guard = 0
+
+    while more:
+        guard += 1
+        assert guard < 20, "stateful date pagination did not terminate"
+        _run_date_options_from_state(
+            result_q,
+            state_map,
+            courses=courses,
+            exam_periods=periods,
+            selected_programs=selected_programs,
+            settings=settings,
+            cap=cap,
+            period_key=period_key,
+            offset=offset,
+            **kwargs,
+        )
+        result = result_q.get()
+        assert result.success, result.error
+        batch = _date_signature(result, period_key)
+        seen.extend(batch)
+        offset += len(batch)
+        more = period_key in result.truncated_periods
+
+    return seen, state_map
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +388,474 @@ class TestRunGenerationProcessStreaming:
 
         assert isinstance(result, GenerationDone)
         assert result.period_key == "FALL - Aleph"
+
+
+class TestStatefulDateOptions:
+    def test_second_batch_reuses_existing_iterator(self, monkeypatch):
+        states = {}
+        result_q = _SimpleQueue()
+        created = {"count": 0}
+        real_generator = gw.ScheduleGenerator
+
+        class _CountingGenerator(real_generator):
+            def __init__(self, *args, **kwargs):
+                created["count"] += 1
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(gw, "ScheduleGenerator", _CountingGenerator)
+
+        kwargs = {
+            "courses": _date_option_courses(),
+            "exam_periods": [_date_option_period()],
+            "selected_programs": ["83101"],
+            "settings": _settings(),
+            "cap": 2,
+            "period_key": "FALL - Aleph",
+            "offset": 0,
+        }
+
+        _run_date_options_from_state(result_q, states, **kwargs)
+        first = result_q.get()
+
+        kwargs["offset"] = len(first.schedules_by_period["FALL - Aleph"])
+        _run_date_options_from_state(result_q, states, **kwargs)
+        second = result_q.get()
+
+        assert created["count"] == 1
+        assert first.truncated_periods == {"FALL - Aleph"}
+        assert _date_signature(first)
+        assert _date_signature(second)
+
+    def test_sequential_batches_have_no_duplicates_or_missing_schedules(self):
+        states = {}
+        result_q = _SimpleQueue()
+        courses = _date_option_courses()
+        period = _date_option_period()
+        settings = _settings()
+
+        seen: list[tuple] = []
+        offset = 0
+        more = True
+        while more:
+            _run_date_options_from_state(
+                result_q,
+                states,
+                courses=courses,
+                exam_periods=[period],
+                selected_programs=["83101"],
+                settings=settings,
+                cap=2,
+                period_key="FALL - Aleph",
+                offset=offset,
+            )
+            result = result_q.get()
+            batch = _date_signature(result)
+            seen.extend(batch)
+            offset += len(batch)
+            more = "FALL - Aleph" in result.truncated_periods
+
+        direct_q = _SimpleQueue()
+        _run_generation_process(
+            direct_q,
+            courses,
+            [period],
+            ["83101"],
+            settings=settings,
+            cap=None,
+            period_key="FALL - Aleph",
+        )
+        direct = direct_q.get()
+
+        assert seen == _date_signature(direct)
+        assert len(seen) == len(set(seen))
+        assert states == {}
+
+    def test_stateful_batches_match_direct_generation_without_thresholds(self):
+        courses = _date_option_courses()
+        period = _date_option_period()
+        settings = _settings()
+
+        seen, states = _collect_stateful_date_signatures(
+            courses=courses,
+            periods=[period],
+            selected_programs=["83101"],
+            settings=settings,
+            period_key="FALL - Aleph",
+            cap=2,
+        )
+        direct = _direct_generation_result(
+            courses=courses,
+            periods=[period],
+            selected_programs=["83101"],
+            settings=settings,
+            period_key="FALL - Aleph",
+        )
+
+        assert seen == _date_signature(direct)
+        assert len(seen) == len(set(seen))
+        assert states == {}
+
+    def test_stateful_batches_match_direct_generation_with_thresholds_and_sorting(self):
+        courses = _date_option_courses()
+        period = _date_option_period(date(2026, 1, 5), date(2026, 1, 8))
+        settings = _settings(
+            thresholds=ThresholdSettings(
+                entries=(ThresholdEntry(Criterion.MAX_EXAMS_PER_DAY, True, 1),)
+            ),
+            sorting=SortingConfig(
+                rules=(SortRule(1, SortCriterion.SORT_MIN_DAYS_MANDATORY),)
+            ),
+        )
+
+        seen, _states = _collect_stateful_date_signatures(
+            courses=courses,
+            periods=[period],
+            selected_programs=["83101"],
+            settings=settings,
+            period_key="FALL - Aleph",
+            cap=2,
+        )
+        direct = _direct_generation_result(
+            courses=courses,
+            periods=[period],
+            selected_programs=["83101"],
+            settings=settings,
+            period_key="FALL - Aleph",
+        )
+
+        assert set(seen) == set(_date_signature(direct))
+        assert len(seen) == len(set(seen))
+
+    def test_stateful_batches_match_direct_generation_with_feature4_assigned_rooms(self):
+        courses = _feature4_courses()
+        period = _date_option_period()
+        settings = _settings()
+        feature4_kwargs = {
+            "classrooms": [Classroom("R1", 100)],
+            "time_slots": [TimeSlot(dt_time(9, 0))],
+            "proctor_config": ProctorConfig(20),
+            "allow_unassigned_classrooms": False,
+            "classroom_variant_mode": CLASSROOM_VARIANT_MODE_FIRST,
+        }
+
+        seen, _states = _collect_stateful_date_signatures(
+            courses=courses,
+            periods=[period],
+            selected_programs=["83101"],
+            settings=settings,
+            period_key="FALL - Aleph",
+            cap=2,
+            **feature4_kwargs,
+        )
+        direct = _direct_generation_result(
+            courses=courses,
+            periods=[period],
+            selected_programs=["83101"],
+            settings=settings,
+            period_key="FALL - Aleph",
+            **feature4_kwargs,
+        )
+
+        assert seen == _date_signature(direct)
+        assert all(signature[1] for signature in seen)
+
+    def test_stateful_batches_match_direct_generation_with_feature4_unassigned_allowed(self):
+        courses = _feature4_courses()
+        period = _date_option_period()
+        settings = _settings()
+        feature4_kwargs = {
+            "classrooms": [Classroom("Tiny", 1)],
+            "time_slots": [TimeSlot(dt_time(9, 0))],
+            "proctor_config": ProctorConfig(20),
+            "allow_unassigned_classrooms": True,
+            "classroom_variant_mode": CLASSROOM_VARIANT_MODE_FIRST,
+        }
+
+        seen, _states = _collect_stateful_date_signatures(
+            courses=courses,
+            periods=[period],
+            selected_programs=["83101"],
+            settings=settings,
+            period_key="FALL - Aleph",
+            cap=2,
+            **feature4_kwargs,
+        )
+        direct = _direct_generation_result(
+            courses=courses,
+            periods=[period],
+            selected_programs=["83101"],
+            settings=settings,
+            period_key="FALL - Aleph",
+            **feature4_kwargs,
+        )
+
+        assert seen == _date_signature(direct)
+        assert all(signature[2] for signature in seen)
+
+    def test_stateful_date_batches_are_deterministic_across_repeated_runs(self):
+        kwargs = {
+            "courses": _date_option_courses(),
+            "periods": [_date_option_period()],
+            "selected_programs": ["83101"],
+            "settings": _settings(),
+            "period_key": "FALL - Aleph",
+            "cap": 2,
+        }
+
+        first, _states = _collect_stateful_date_signatures(**kwargs)
+        second, _states = _collect_stateful_date_signatures(**kwargs)
+
+        assert first == second
+
+    def test_mismatched_offset_returns_failure(self):
+        states = {}
+        result_q = _SimpleQueue()
+        kwargs = {
+            "courses": _date_option_courses(),
+            "exam_periods": [_date_option_period()],
+            "selected_programs": ["83101"],
+            "settings": _settings(),
+            "cap": 2,
+            "period_key": "FALL - Aleph",
+            "offset": 0,
+        }
+
+        _run_date_options_from_state(result_q, states, **kwargs)
+        result_q.get()
+
+        kwargs["offset"] = 99
+        _run_date_options_from_state(result_q, states, **kwargs)
+        failure = result_q.get()
+
+        assert not failure.success
+        assert "Stale date-options pagination state" in failure.error
+
+    def test_changed_settings_create_new_cursor(self, monkeypatch):
+        states = {}
+        result_q = _SimpleQueue()
+        created = {"count": 0}
+        real_generator = gw.ScheduleGenerator
+
+        class _CountingGenerator(real_generator):
+            def __init__(self, *args, **kwargs):
+                created["count"] += 1
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(gw, "ScheduleGenerator", _CountingGenerator)
+        courses = _date_option_courses()
+        period = _date_option_period()
+
+        _run_date_options_from_state(
+            result_q,
+            states,
+            courses=courses,
+            exam_periods=[period],
+            selected_programs=["83101"],
+            settings=_settings(),
+            cap=1,
+            period_key="FALL - Aleph",
+            offset=0,
+        )
+        result_q.get()
+
+        changed_settings = _settings(
+            ThresholdSettings(
+                entries=(ThresholdEntry(Criterion.MAX_EXAMS_PER_DAY, True, 1),)
+            )
+        )
+        _run_date_options_from_state(
+            result_q,
+            states,
+            courses=courses,
+            exam_periods=[period],
+            selected_programs=["83101"],
+            settings=changed_settings,
+            cap=1,
+            period_key="FALL - Aleph",
+            offset=0,
+        )
+        result_q.get()
+
+        assert created["count"] == 2
+
+    def test_independent_periods_keep_independent_cursors(self):
+        states = {}
+        result_q = _SimpleQueue()
+        courses = _date_option_courses()
+        periods = [
+            _date_option_period(moed="Aleph"),
+            _date_option_period(date(2026, 2, 2), date(2026, 2, 4), moed="Bet"),
+        ]
+
+        _run_date_options_from_state(
+            result_q,
+            states,
+            courses=courses,
+            exam_periods=periods,
+            selected_programs=["83101"],
+            settings=_settings(),
+            cap=1,
+            period_key="FALL - Aleph",
+            offset=0,
+        )
+        result_q.get()
+        _run_date_options_from_state(
+            result_q,
+            states,
+            courses=courses,
+            exam_periods=periods,
+            selected_programs=["83101"],
+            settings=_settings(),
+            cap=1,
+            period_key="FALL - Bet",
+            offset=0,
+        )
+        result_q.get()
+
+        assert len(states) == 2
+
+    def test_multiple_period_stateful_batches_match_direct_generation(self):
+        states = {}
+        courses = _date_option_courses()
+        periods = [
+            _date_option_period(moed="Aleph"),
+            _date_option_period(date(2026, 2, 2), date(2026, 2, 4), moed="Bet"),
+        ]
+        settings = _settings()
+
+        for period_key in ("FALL - Aleph", "FALL - Bet"):
+            seen, states = _collect_stateful_date_signatures(
+                courses=courses,
+                periods=periods,
+                selected_programs=["83101"],
+                settings=settings,
+                period_key=period_key,
+                cap=2,
+                states=states,
+            )
+            direct = _direct_generation_result(
+                courses=courses,
+                periods=periods,
+                selected_programs=["83101"],
+                settings=settings,
+                period_key=period_key,
+            )
+
+            assert seen == _date_signature(direct, period_key)
+            assert len(seen) == len(set(seen))
+
+    def test_changed_period_data_replaces_old_cursor_for_same_period_key(self):
+        states = {}
+        result_q = _SimpleQueue()
+        courses = _date_option_courses()
+
+        _run_date_options_from_state(
+            result_q,
+            states,
+            courses=courses,
+            exam_periods=[_date_option_period()],
+            selected_programs=["83101"],
+            settings=_settings(),
+            cap=1,
+            period_key="FALL - Aleph",
+            offset=0,
+        )
+        result_q.get()
+
+        _run_date_options_from_state(
+            result_q,
+            states,
+            courses=courses,
+            exam_periods=[_date_option_period(date(2026, 3, 2), date(2026, 3, 4))],
+            selected_programs=["83101"],
+            settings=_settings(),
+            cap=1,
+            period_key="FALL - Aleph",
+            offset=0,
+        )
+        result_q.get()
+
+        assert len(states) == 1
+
+    def test_changed_course_metadata_replaces_old_cursor(self, monkeypatch):
+        states = {}
+        result_q = _SimpleQueue()
+        created = {"count": 0}
+        real_generator = gw.ScheduleGenerator
+
+        class _CountingGenerator(real_generator):
+            def __init__(self, *args, **kwargs):
+                created["count"] += 1
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(gw, "ScheduleGenerator", _CountingGenerator)
+        courses = _date_option_courses()
+
+        _run_date_options_from_state(
+            result_q,
+            states,
+            courses=courses,
+            exam_periods=[_date_option_period()],
+            selected_programs=["83101"],
+            settings=_settings(),
+            cap=1,
+            period_key="FALL - Aleph",
+            offset=0,
+        )
+        result_q.get()
+
+        renamed_courses = _date_option_courses()
+        renamed_courses[0].name = "Algorithms Renamed"
+        _run_date_options_from_state(
+            result_q,
+            states,
+            courses=renamed_courses,
+            exam_periods=[_date_option_period()],
+            selected_programs=["83101"],
+            settings=_settings(),
+            cap=1,
+            period_key="FALL - Aleph",
+            offset=0,
+        )
+        result_q.get()
+
+        assert created["count"] == 2
+
+    def test_changed_feature4_inputs_replace_old_cursor(self):
+        states = {}
+        result_q = _SimpleQueue()
+        courses = _date_option_courses()
+        period = _date_option_period()
+
+        common = {
+            "courses": courses,
+            "exam_periods": [period],
+            "selected_programs": ["83101"],
+            "settings": _settings(),
+            "cap": 1,
+            "period_key": "FALL - Aleph",
+            "offset": 0,
+            "time_slots": [TimeSlot(dt_time(9, 0))],
+            "proctor_config": ProctorConfig(20),
+            "classroom_variant_mode": CLASSROOM_VARIANT_MODE_FIRST,
+        }
+
+        _run_date_options_from_state(
+            result_q,
+            states,
+            classrooms=[Classroom("R1", 100)],
+            **common,
+        )
+        result_q.get()
+        _run_date_options_from_state(
+            result_q,
+            states,
+            classrooms=[Classroom("R2", 100)],
+            **common,
+        )
+        result_q.get()
+
+        assert len(states) == 1
 
 
 class TestMultiprocessingSerialization:

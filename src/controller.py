@@ -626,13 +626,18 @@ class DesktopController:
         conflict_strategy = ExactConflictStrategy(
             selected_programs=self._selected_programs
         )
-        generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
+        generator = ScheduleGenerator(
+            conflict_strategy=conflict_strategy,
+            threshold_settings=self._settings.thresholds,
+            selected_programs=self._selected_programs,
+        )
 
         # Full in-process generation is still supported for tests / legacy callers,
         # but results are no longer accumulated in one unbounded Python list.
         # They are streamed into a temporary SQLite store and exposed through
         # list-like StoredScheduleList facades.  The actual backtracking
-        # algorithm remains lazy and unchanged.
+        # algorithm remains lazy; ScheduleGenerator may prune internally with
+        # MRV/forward-checking/threshold metrics without materialising results.
         sqlite_exporter = SQLiteScheduleExporter(
             settings=self._settings,
             selected_programs=self._selected_programs,

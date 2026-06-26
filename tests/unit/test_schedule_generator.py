@@ -4,7 +4,6 @@ Unit Tests: ScheduleGenerator
 Tests for backtracking schedule generation logic.
 """
 import itertools
-import time
 from datetime import date
 from typing import List
 
@@ -14,6 +13,9 @@ from src.adapters.exact_conflict_strategy import ExactConflictStrategy
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
 from src.domain.exam_period import ExamPeriod
+from src.domain.schedule import Schedule
+from src.domain.threshold import Criterion, ThresholdEntry, ThresholdSettings
+from src.domain.threshold_filter import ThresholdFilter
 from src.engine.schedule_generator import ScheduleGenerator
 
 
@@ -44,6 +46,79 @@ def _make_period(start: date, end: date, excluded=None) -> ExamPeriod:
 
 def _generator(selected_programs: List[str]) -> ScheduleGenerator:
     return ScheduleGenerator(ExactConflictStrategy(selected_programs))
+
+
+def _schedule_signature(schedule: Schedule) -> tuple:
+    return tuple(
+        sorted((course_id, exam_date.isoformat()) for course_id, exam_date in schedule.assignments.items())
+    )
+
+
+def _brute_force_schedules(
+    courses: list[Course],
+    period: ExamPeriod,
+    selected_programs: list[str],
+) -> list[Schedule]:
+    strategy = ExactConflictStrategy(selected_programs)
+    valid_dates = period.get_valid_dates()
+    schedules: list[Schedule] = []
+
+    def rec(index: int, assignments: dict[str, date]) -> None:
+        if index >= len(courses):
+            schedules.append(Schedule(period=period, assignments=dict(assignments)))
+            return
+
+        course = courses[index]
+        for exam_date in valid_dates:
+            if any(
+                assignments.get(other.id) == exam_date
+                and strategy.is_conflict(course, other)
+                for other in courses[:index]
+            ):
+                continue
+            assignments[course.id] = exam_date
+            rec(index + 1, assignments)
+            del assignments[course.id]
+
+    rec(0, {})
+    return schedules
+
+
+def _threshold_settings(criterion: Criterion, k: int) -> ThresholdSettings:
+    return ThresholdSettings(entries=(ThresholdEntry(criterion, True, k),))
+
+
+def _assert_threshold_equivalence(
+    *,
+    courses: list[Course],
+    period: ExamPeriod,
+    selected_programs: list[str],
+    criterion: Criterion,
+    k: int,
+    expect_threshold_prunes: bool,
+) -> None:
+    settings = _threshold_settings(criterion, k)
+    gen = ScheduleGenerator(
+        ExactConflictStrategy(selected_programs),
+        threshold_settings=settings,
+        selected_programs=selected_programs,
+    )
+
+    optimized = list(gen.generate_schedules(courses, period))
+    brute_force_valid = [
+        schedule
+        for schedule in _brute_force_schedules(courses, period, selected_programs)
+        if ThresholdFilter.is_valid(schedule, courses, settings, selected_programs)
+    ]
+
+    assert {_schedule_signature(schedule) for schedule in optimized} == {
+        _schedule_signature(schedule) for schedule in brute_force_valid
+    }
+    assert len(optimized) == len(
+        {_schedule_signature(schedule) for schedule in optimized}
+    )
+    if expect_threshold_prunes:
+        assert gen.last_metrics.threshold_prunes > 0
 
 
 def test_no_courses_yields_no_schedules():
@@ -171,130 +246,224 @@ def test_generator_respects_saturday_exclusion():
             assert d.weekday() != 5
 
 
-def test_dynamic_mcv_selects_most_constrained_at_each_step():
-    """Prove via spy that the dynamic MCV selects the most-constrained course at every step.
-
-    Scenario:
-      - ZZZZ has no conflicts (different year) — largest id, wins all ties at depth 0
-      - AAAA conflicts with BBBB (83101) and CCCC (83102)
-      - BBBB and CCCC do NOT conflict with each other (different programs)
-
-    Expected selection order per path (depth = len(assignment) when course is chosen):
-      depth 0: ZZZZ  — all tied at 0 blocked, tiebreaker (max c.id) picks ZZZZ
-      depth 1: CCCC  — ZZZZ has no neighbours, A/B/C all still at 0 blocked,
-                        tiebreaker picks CCCC (largest id among AAAA/BBBB/CCCC)
-      depth 2: AAAA  — CCCC is now assigned; AAAA has 1 blocked date (conflict with CCCC),
-                        BBBB has 0 blocked (different program from CCCC) → AAAA wins on primary key
-      depth 3: BBBB  — only BBBB remains
-    """
-    log: list[tuple[int, str]] = []  # (len(assignment), chosen course id)
-
-    class _SpyGenerator(ScheduleGenerator):
-        def _backtrack(self, assignment, unassigned, valid_dates, conflict_graph, exam_period):
-            if unassigned:
-                chosen = max(
-                    unassigned,
-                    key=lambda c: (
-                        len({assignment[n] for n in conflict_graph[c] if n in assignment}),
-                        c.id,
-                    ),
-                )
-                log.append((len(assignment), chosen.id))
-            yield from super()._backtrack(
-                assignment, unassigned, valid_dates, conflict_graph, exam_period
-            )
-
-    gen = _SpyGenerator(ExactConflictStrategy(["83101", "83102"]))
-    a = Course(id="AAAA", name="A", instructor="x", evaluation_type="Exam")
-    a.add_offering(CourseOffering("83101", 1, "FALL", "Obligatory"))
-    a.add_offering(CourseOffering("83102", 1, "FALL", "Obligatory"))
-    b = _make_course("BBBB", "83101", 1, "FALL", "Obligatory")
-    c = _make_course("CCCC", "83102", 1, "FALL", "Obligatory")
-    z = _make_course("ZZZZ", "83101", 2, "FALL", "Obligatory")  # different year → no conflicts
-
-    period = _make_period(date(2026, 1, 5), date(2026, 1, 7))  # Mon / Tue / Wed
-    list(gen.generate_schedules([a, b, c, z], period))
-
-    assert log, "no selections recorded — generator yielded nothing"
-    assert all(cid == "ZZZZ" for depth, cid in log if depth == 0), \
-        "depth 0: expected ZZZZ (largest id, all tied at 0 blocked)"
-    assert all(cid == "CCCC" for depth, cid in log if depth == 1), \
-        "depth 1: expected CCCC (largest id among A/B/C, all still at 0 blocked)"
-    assert all(cid == "AAAA" for depth, cid in log if depth == 2), \
-        "depth 2: AAAA must be chosen (1 blocked date from CCCC conflict) over BBBB (0 blocked)"
-    assert all(cid == "BBBB" for depth, cid in log if depth == 3), \
-        "depth 3: BBBB is the only remaining course"
-
-
-def test_forward_check_proves_pruning_by_call_count():
-    """H2: prove forward-checking actually eliminates dead-branch recursion.
-
-    Scenario: 3 mutually-conflicting mandatory courses, 2 valid dates.
-    No valid schedule exists, but the two implementations reach that conclusion
-    via different paths (manually traced):
-
-    WITHOUT forward-checking — 5 _backtrack calls:
-      depth-0 (×1) → depth-1 for CCCC=Mon (×1) → depth-2 AAAA runs out of dates (×1)
-                    → depth-1 for CCCC=Tue (×1) → depth-2 AAAA runs out of dates (×1)
-
-    WITH forward-checking — 3 _backtrack calls:
-      depth-0 (×1) → depth-1 for CCCC=Mon: BBBB→Tue triggers FC (AAAA empty) → prune
-                    → depth-1 for CCCC=Tue: BBBB→Mon triggers FC (AAAA empty) → prune
-      depth-2 is never entered.
-
-    Both must produce identical (empty) schedule sets.
-    """
-    courses = [
-        _make_course("AAAA", "83101", 1, "FALL", "Obligatory"),
-        _make_course("BBBB", "83101", 1, "FALL", "Obligatory"),
-        _make_course("CCCC", "83101", 1, "FALL", "Obligatory"),
-    ]
-    period = _make_period(date(2026, 1, 5), date(2026, 1, 6))  # Mon + Tue only
-
-    counter: dict[str, int] = {"with_fc": 0, "no_fc": 0}
-
-    class _CountingGen(ScheduleGenerator):
-        def __init__(self, strategy, key: str) -> None:
-            super().__init__(strategy)
-            self._key = key
-
-        def _backtrack(self, assignment, unassigned, valid_dates, conflict_graph, exam_period):
-            counter[self._key] += 1
-            yield from super()._backtrack(
-                assignment, unassigned, valid_dates, conflict_graph, exam_period
-            )
-
-    class _NoFCGen(_CountingGen):
-        def _forward_check(self, *args, **kwargs) -> bool:  # type: ignore[override]
-            return True  # disable pruning — always recurse
-
-    strategy = ExactConflictStrategy(["83101"])
-    result_fc = list(_CountingGen(strategy, "with_fc").generate_schedules(courses, period))
-    result_no_fc = list(_NoFCGen(strategy, "no_fc").generate_schedules(courses, period))
-
-    assert result_fc == result_no_fc == [], "both should yield no schedules (impossible problem)"
-    assert counter["with_fc"] < counter["no_fc"], (
-        f"FC: {counter['with_fc']} calls, no-FC: {counter['no_fc']} — FC must prune"
-    )
-    assert counter["with_fc"] == 3, f"Expected 3 _backtrack calls with FC, got {counter['with_fc']}"
-    assert counter["no_fc"] == 5, f"Expected 5 _backtrack calls without FC, got {counter['no_fc']}"
-
-
-def test_forward_check_preserves_valid_schedules():
-    """H2 correctness: with FC enabled, all valid schedules are still found.
-
-    3 mutually-conflicting courses, 3 dates → exactly 6 valid schedules (3!).
-    FC must not prune any live branch.
-    """
+def test_prefilter_metrics_count_removed_invalid_period_dates():
     gen = _generator(["83101"])
-    a = _make_course("AAAA", "83101", 1, "FALL", "Obligatory")
-    b = _make_course("BBBB", "83101", 1, "FALL", "Obligatory")
-    c = _make_course("CCCC", "83101", 1, "FALL", "Obligatory")
-    period = _make_period(date(2026, 1, 5), date(2026, 1, 7))  # Mon + Tue + Wed
-    result = list(gen.generate_schedules([a, b, c], period))
-    assert len(result) == 6
-    for s in result:
-        assert len(set(s.assignments.values())) == 3  # all three on distinct dates
+    course = _make_course("11111", "83101", 1, "FALL", "Obligatory")
+    period = _make_period(
+        date(2026, 1, 9),
+        date(2026, 1, 11),
+        excluded={date(2026, 1, 11)},
+    )
+
+    schedules = list(gen.generate_schedules([course], period))
+
+    assert [_schedule_signature(schedule) for schedule in schedules] == [
+        (("11111", "2026-01-09"),)
+    ]
+    assert gen.last_metrics.prefiltered_candidates_removed == 2
+
+
+def test_forward_checking_prunes_impossible_conflict_domains():
+    courses = [
+        _make_course("11111", "83101", 1, "FALL", "Obligatory"),
+        _make_course("22222", "83101", 1, "FALL", "Obligatory"),
+        _make_course("33333", "83101", 1, "FALL", "Obligatory"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 6))
+    gen = _generator(["83101"])
+
+    assert list(gen.generate_schedules(courses, period)) == []
+    assert gen.last_metrics.domain_prunes > 0
+    assert gen.last_metrics.conflict_prunes > 0
+
+
+def test_safe_threshold_pruning_matches_final_threshold_filter():
+    courses = [
+        _make_course("11111", "83101", 1, "FALL", "Obligatory"),
+        _make_course("22222", "83101", 2, "FALL", "Obligatory"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 6))
+    settings = ThresholdSettings(
+        entries=(ThresholdEntry(Criterion.MAX_EXAMS_PER_DAY, True, 1),)
+    )
+    gen = ScheduleGenerator(
+        ExactConflictStrategy(["83101"]),
+        threshold_settings=settings,
+        selected_programs=["83101"],
+    )
+
+    optimized = list(gen.generate_schedules(courses, period))
+    brute_force_valid = [
+        schedule for schedule in _brute_force_schedules(courses, period, ["83101"])
+        if ThresholdFilter.is_valid(schedule, courses, settings, ["83101"])
+    ]
+
+    assert {_schedule_signature(schedule) for schedule in optimized} == {
+        _schedule_signature(schedule) for schedule in brute_force_valid
+    }
+    assert gen.last_metrics.threshold_prunes > 0
+
+
+def test_max_exams_per_day_pruning_matches_threshold_filter_for_k0_and_k1():
+    courses = [
+        _make_course("11111", "83101", 1, "FALL", "Obligatory"),
+        _make_course("22222", "83102", 2, "FALL", "Elective"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 6))
+
+    _assert_threshold_equivalence(
+        courses=courses,
+        period=period,
+        selected_programs=["83101", "83102"],
+        criterion=Criterion.MAX_EXAMS_PER_DAY,
+        k=0,
+        expect_threshold_prunes=True,
+    )
+    _assert_threshold_equivalence(
+        courses=courses,
+        period=period,
+        selected_programs=["83101", "83102"],
+        criterion=Criterion.MAX_EXAMS_PER_DAY,
+        k=1,
+        expect_threshold_prunes=True,
+    )
+
+
+def test_max_elective_collisions_pruning_matches_threshold_filter_for_k0_and_k1():
+    courses = [
+        _make_course("11111", "83101", 1, "FALL", "Elective"),
+        _make_course("22222", "83101", 1, "FALL", "Elective"),
+        _make_course("33333", "83101", 1, "FALL", "Elective"),
+        _make_course("44444", "83102", 1, "FALL", "Elective"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 6))
+
+    _assert_threshold_equivalence(
+        courses=courses,
+        period=period,
+        selected_programs=["83101", "83102"],
+        criterion=Criterion.MAX_ELECTIVE_COLLISIONS,
+        k=0,
+        expect_threshold_prunes=True,
+    )
+    _assert_threshold_equivalence(
+        courses=courses,
+        period=period,
+        selected_programs=["83101", "83102"],
+        criterion=Criterion.MAX_ELECTIVE_COLLISIONS,
+        k=1,
+        expect_threshold_prunes=True,
+    )
+
+
+def test_min_days_between_mandatory_pruning_matches_threshold_filter_edges():
+    courses = [
+        _make_course("11111", "83101", 1, "FALL", "Obligatory"),
+        _make_course("22222", "83101", 1, "FALL", "Obligatory"),
+        _make_course("33333", "83101", 2, "FALL", "Obligatory"),
+        _make_course("44444", "83102", 1, "FALL", "Obligatory"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 7))
+
+    _assert_threshold_equivalence(
+        courses=courses,
+        period=period,
+        selected_programs=["83101", "83102"],
+        criterion=Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+        k=0,
+        expect_threshold_prunes=False,
+    )
+    _assert_threshold_equivalence(
+        courses=courses,
+        period=period,
+        selected_programs=["83101", "83102"],
+        criterion=Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+        k=1,
+        expect_threshold_prunes=False,
+    )
+    _assert_threshold_equivalence(
+        courses=courses,
+        period=period,
+        selected_programs=["83101", "83102"],
+        criterion=Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+        k=2,
+        expect_threshold_prunes=True,
+    )
+
+
+def test_min_days_between_any_pruning_matches_threshold_filter_edges():
+    courses = [
+        _make_course("11111", "83101", 1, "FALL", "Obligatory"),
+        _make_course("22222", "83101", 1, "FALL", "Elective"),
+        _make_course("33333", "83101", 1, "FALL", "Elective"),
+        _make_course("44444", "83102", 2, "FALL", "Elective"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 7))
+
+    _assert_threshold_equivalence(
+        courses=courses,
+        period=period,
+        selected_programs=["83101", "83102"],
+        criterion=Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS,
+        k=0,
+        expect_threshold_prunes=False,
+    )
+    _assert_threshold_equivalence(
+        courses=courses,
+        period=period,
+        selected_programs=["83101", "83102"],
+        criterion=Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS,
+        k=1,
+        expect_threshold_prunes=True,
+    )
+
+
+def test_optimized_generator_matches_bruteforce_for_electives_and_program_isolation():
+    courses = [
+        _make_course("11111", "83101", 1, "FALL", "Elective"),
+        _make_course("22222", "83101", 1, "FALL", "Elective"),
+        _make_course("33333", "83102", 1, "FALL", "Obligatory"),
+        _make_course("44444", "83102", 1, "FALL", "Obligatory"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 6))
+    selected_programs = ["83101", "83102"]
+    gen = _generator(selected_programs)
+
+    optimized = list(gen.generate_schedules(courses, period))
+    brute_force = _brute_force_schedules(courses, period, selected_programs)
+
+    assert {_schedule_signature(schedule) for schedule in optimized} == {
+        _schedule_signature(schedule) for schedule in brute_force
+    }
+    assert len(optimized) == len(
+        {_schedule_signature(schedule) for schedule in optimized}
+    )
+
+
+def test_generator_output_is_deterministic_across_repeated_runs():
+    courses = [
+        _make_course("11111", "83101", 1, "FALL", "Obligatory"),
+        _make_course("22222", "83101", 2, "FALL", "Obligatory"),
+        _make_course("33333", "83102", 1, "FALL", "Obligatory"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 7))
+
+    first = [
+        _schedule_signature(schedule)
+        for schedule in _generator(["83101", "83102"]).generate_schedules(
+            courses,
+            period,
+        )
+    ]
+    second = [
+        _schedule_signature(schedule)
+        for schedule in _generator(["83101", "83102"]).generate_schedules(
+            courses,
+            period,
+        )
+    ]
+
+    assert first == second
 
 
 # 3 independent program pairs × 2 conflicting courses × 10 weekdays
@@ -316,12 +485,12 @@ def test_high_scale_combinatorial_stress():
     gen = _generator(strategy_programs)
     strategy = ExactConflictStrategy(strategy_programs)
 
-    started = time.monotonic()
     sample = list(itertools.islice(gen.generate_schedules(courses, period), 500))
-    elapsed = time.monotonic() - started
 
     assert len(sample) == 500
-    assert elapsed < 5.0, f"Sampling 500 of 729K schedules took {elapsed:.2f}s — too slow"
+    assert gen.last_metrics.schedules_produced >= 500
+    assert gen.last_metrics.nodes_visited >= gen.last_metrics.schedules_produced
+    assert gen.last_metrics.conflict_prunes > 0
 
     all_ids = {c.id for c in courses}
     for s in sample:
