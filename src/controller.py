@@ -63,6 +63,7 @@ from src.engine.generation_workers import _MemoryExporter
 from src.engine.generation_workers import _run_generation_process  # noqa: F401
 from src.engine.load_worker_pool import LoadWorkerPool
 from src.engine.proctor_report import build_proctor_report
+from src.engine.ranking_worker import RankingJob
 from src.engine.schedule_generator import ScheduleGenerator
 from src.utils.merge_utils import merge_by_key, update_merge_courses
 
@@ -712,6 +713,69 @@ class DesktopController:
                 resorted[period_key] = SortingEngine.sort(
                     schedules, courses, config, selected_programs
                 )
+
+        self._last_results = sort_period_mapping_canonically(resorted)
+        return self._last_results
+
+    def _ranking_context(self) -> tuple[list[Course], list[str] | None]:
+        """Return the course/program context used for Result Ranking."""
+        if self._read_only_import and self._imported_courses_by_id:
+            return list(self._imported_courses_by_id.values()), None
+        return list(self._courses), list(self._selected_programs)
+
+    def build_ranking_job(self, config: SortingConfig) -> RankingJob:
+        """Build a background-ranking payload without regenerating schedules."""
+        if self._last_results is None:
+            raise ValueError(
+                "No results to re-sort. Generate schedules before changing sort order."
+            )
+
+        courses, selected_programs = self._ranking_context()
+        memory_periods: dict[str, list[Schedule]] = {}
+        sqlite_specs: dict[str, list[str]] = {}
+
+        for period_key, schedules in self._last_results.items():
+            if isinstance(schedules, StoredScheduleList):
+                sqlite_specs.setdefault(str(schedules.store.path), []).append(period_key)
+            else:
+                # Large generated result sets are SQLite-backed before they reach
+                # Result Ranking. This in-memory payload path is retained for
+                # small/imported snapshots and unit-test fixtures.
+                memory_periods[period_key] = list(schedules)
+
+        return RankingJob(
+            sorting=config,
+            courses=courses,
+            selected_programs=selected_programs,
+            schedules_by_period=memory_periods,
+            sqlite_store_specs=tuple(
+                (path, tuple(period_keys))
+                for path, period_keys in sqlite_specs.items()
+            ),
+        )
+
+    def apply_ranked_results(
+        self,
+        config: SortingConfig,
+        ranked_schedules_by_period: dict[str, list[Schedule]],
+    ) -> dict[str, list[Schedule]]:
+        """Commit a completed background ranking result to the cached results."""
+        if self._last_results is None:
+            raise ValueError(
+                "No results to re-sort. Generate schedules before changing sort order."
+            )
+
+        self.apply_sort(config)
+        courses, selected_programs = self._ranking_context()
+
+        resorted: dict[str, list[Schedule]] = {}
+        for period_key, schedules in self._last_results.items():
+            if isinstance(schedules, StoredScheduleList):
+                schedules.set_scoring_context(courses, selected_programs)
+                schedules.set_sorting(config)
+                resorted[period_key] = schedules
+            else:
+                resorted[period_key] = ranked_schedules_by_period[period_key]
 
         self._last_results = sort_period_mapping_canonically(resorted)
         return self._last_results

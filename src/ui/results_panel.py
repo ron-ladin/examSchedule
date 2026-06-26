@@ -16,10 +16,14 @@ Public API:
     )
 """
 
-import logging
-from pathlib import Path
+from __future__ import annotations
 
-from PyQt6.QtCore import QPoint
+import logging
+import multiprocessing
+from pathlib import Path
+from queue import Empty as _QueueEmpty
+
+from PyQt6.QtCore import QPoint, QTimer
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -52,6 +56,7 @@ from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
 from src.domain.sorting import SortingConfig
 from src.engine.generation_workers import ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
+from src.engine.ranking_worker import RankingWorkerResult, run_ranking_worker
 from src.ui.navigation_model import NavigationModel, DateSignature as _DateSignature
 from src.ui.period_card import PeriodCardWidgets
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
@@ -64,6 +69,7 @@ from src.ui.widgets.period_card_builder import (
 )
 
 logger = logging.getLogger(__name__)
+_RANKING_EXIT_QUEUE_GRACE_TICKS = 3
 
 
 def _standard_period_keys() -> list[str]:
@@ -162,6 +168,13 @@ class _ResultsPanel(QWidget):
         self._lm.messageRequested.connect(self._show_message)
         self._lm.cardRefreshRequested.connect(self._refresh_period_card)
 
+        self._ranking_proc: multiprocessing.Process | None = None
+        self._ranking_queue: multiprocessing.Queue | None = None
+        self._ranking_timer: QTimer | None = None
+        self._ranking_config: SortingConfig | None = None
+        self._ranking_button_text: str | None = None
+        self._ranking_empty_after_exit_ticks = 0
+
         self._navigator = PeriodNavigator(
             self._nav_model,
             self._cards,
@@ -237,6 +250,8 @@ class _ResultsPanel(QWidget):
         # A QTimer timeout may already be queued while a new generation/load starts,
         # so cleanup must happen before old cards/widgets are removed.
         self._lm.reset()
+        self._cleanup_ranking_worker(terminate=True)
+        self._set_ranking_busy(False)
 
         # Stop idle persistent load-more workers from the previous result set.
         # They will be recreated lazily if the user clicks Load More / Auto again.
@@ -357,6 +372,8 @@ class _ResultsPanel(QWidget):
         The first ``append_period`` after this builds the tab scaffold from
         scratch, so a previous run's cards/state do not linger.
         """
+        self._cleanup_ranking_worker(terminate=True)
+        self._set_ranking_busy(False)
         self._streaming_run_active = False
 
     def append_period(
@@ -646,6 +663,7 @@ class _ResultsPanel(QWidget):
         return len(self._indices_for_signature(period_key, signature))
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        self._cleanup_ranking_worker(terminate=True)
         if self._schedule_store is not None:
             self._schedule_store.close(delete=True)
             self._schedule_store = None
@@ -730,6 +748,7 @@ class _ResultsPanel(QWidget):
 
         self._period_tabs = QTabWidget()
         self._period_tabs.setStyleSheet(PERIOD_TAB_STYLE)
+        self._period_tabs.currentChanged.connect(self._on_period_tab_changed)
         cl.addWidget(self._period_tabs)
 
         root.addWidget(self._content)
@@ -771,6 +790,23 @@ class _ResultsPanel(QWidget):
     ) -> list[tuple[_DateSignature, list[int]]]:
         """Return cached date options through NavigationModel."""
         return self._nav_model.date_options(period_key)
+
+    def _period_key_at_tab_index(self, index: int) -> str | None:
+        """Return the period key displayed by tab *index*, if any."""
+        period_keys = list(self._schedules_by_period)
+        if 0 <= index < len(period_keys):
+            return period_keys[index]
+        return None
+
+    def _current_period_key(self) -> str | None:
+        """Return the period key for the currently visible tab."""
+        return self._period_key_at_tab_index(self._period_tabs.currentIndex())
+
+    def _on_period_tab_changed(self, index: int) -> None:
+        """Refresh a period lazily when it becomes visible."""
+        period_key = self._period_key_at_tab_index(index)
+        if period_key is not None and period_key in self._cards:
+            self._refresh_period_card(period_key)
 
     def _nav_position_for_index(
         self,
@@ -1156,19 +1192,134 @@ class _ResultsPanel(QWidget):
         dialog.exec()
 
     def _apply_ranking(self, config: "SortingConfig") -> None:
-        """Re-rank cached schedules and refresh the displayed cards in place.
+        """Start asynchronous re-ranking of cached schedules."""
+        if self._ranking_proc is not None:
+            self._show_message(
+                "Ranking In Progress",
+                "Result Ranking is already running. Please wait for it to finish.",
+                QMessageBox.Icon.Information,
+            )
+            return
 
-        SQLite-backed results only change their ORDER BY metadata.  Rebuilding
-        through load() would close/recreate stores and can invalidate live
-        StoredScheduleList objects after repeated Ranking/Generate flows.
-        """
         try:
-            resorted = self._controller.resort(config)
+            job = self._controller.build_ranking_job(config)
         except ValueError:
             # No cached results to re-rank; keep the new order for next generate.
             self._controller.apply_sort(config)
             return
 
+        queue = multiprocessing.Queue()
+        proc = multiprocessing.Process(
+            target=run_ranking_worker,
+            args=(queue, job),
+            daemon=True,
+        )
+
+        self._ranking_queue = queue
+        self._ranking_proc = proc
+        self._ranking_config = config
+        self._ranking_empty_after_exit_ticks = 0
+        self._set_ranking_busy(True)
+
+        try:
+            proc.start()
+        except Exception as exc:
+            self._cleanup_ranking_worker(terminate=True)
+            self._ranking_config = None
+            self._set_ranking_busy(False)
+            self._show_message(
+                "Ranking Failed",
+                f"Could not start Result Ranking.\n\n{exc}",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        timer = QTimer(self)
+        timer.timeout.connect(self._poll_ranking_worker)
+        timer.start(100)
+        self._ranking_timer = timer
+
+    def _poll_ranking_worker(self) -> None:
+        """Poll the background ranking worker without blocking the UI thread."""
+        queue = self._ranking_queue
+        proc = self._ranking_proc
+        if queue is None:
+            self._cleanup_ranking_worker(terminate=True)
+            self._set_ranking_busy(False)
+            return
+
+        try:
+            result = queue.get_nowait()
+        except _QueueEmpty:
+            if proc is not None and not proc.is_alive() and proc.exitcode is not None:
+                self._ranking_empty_after_exit_ticks += 1
+                if self._ranking_empty_after_exit_ticks <= _RANKING_EXIT_QUEUE_GRACE_TICKS:
+                    return
+                exitcode = proc.exitcode
+                self._cleanup_ranking_worker(terminate=False)
+                self._ranking_config = None
+                self._set_ranking_busy(False)
+                self._show_message(
+                    "Ranking Failed",
+                    f"Result Ranking stopped before returning a result (exit code {exitcode}).",
+                    QMessageBox.Icon.Warning,
+                )
+            return
+
+        self._ranking_empty_after_exit_ticks = 0
+        config = self._ranking_config
+        self._cleanup_ranking_worker(terminate=False)
+        self._ranking_config = None
+
+        if not isinstance(result, RankingWorkerResult):
+            self._set_ranking_busy(False)
+            self._show_message(
+                "Ranking Failed",
+                "Result Ranking returned an unexpected response.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        if not result.success:
+            self._set_ranking_busy(False)
+            self._show_message(
+                "Ranking Failed",
+                result.error or "Result Ranking failed.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        if config is None:
+            self._set_ranking_busy(False)
+            self._show_message(
+                "Ranking Failed",
+                "Result Ranking finished after the ranking state was cleared.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        try:
+            resorted = self._controller.apply_ranked_results(
+                config,
+                result.schedules_by_period,
+            )
+        except Exception as exc:
+            self._set_ranking_busy(False)
+            self._show_message(
+                "Ranking Failed",
+                str(exc),
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        self._finish_ranking_success(resorted)
+        self._set_ranking_busy(False)
+
+    def _finish_ranking_success(
+        self,
+        resorted: dict[str, list[Schedule]],
+    ) -> None:
+        """Apply ranked results to the panel and refresh only the visible card."""
         for period_key, schedules in resorted.items():
             self._schedules_by_period[period_key] = schedules
             # A changed ranking changes what schedule index 0 means; show the new
@@ -1176,10 +1327,6 @@ class _ResultsPanel(QWidget):
             self._period_indices[period_key] = 0
 
         self._nav_model.clear()
-        self._rebuild_navigation_cache()
-
-        for period_key in list(self._cards):
-            self._refresh_period_card(period_key)
 
         has_proctor_report = any(
             self._has_classroom_feature_results(period_key)
@@ -1187,7 +1334,61 @@ class _ResultsPanel(QWidget):
             if schedules
         )
         self._proctor_btn.setVisible(has_proctor_report)
+
+        visible_period_key = self._current_period_key()
+        if visible_period_key is not None and visible_period_key in self._cards:
+            self._refresh_period_card(visible_period_key)
+        else:
+            self._update_summary()
+
+    def _set_ranking_busy(self, busy: bool) -> None:
+        """Update ranking button state while a background ranking job runs."""
+        if not hasattr(self, "_ranking_btn"):
+            return
+
+        if busy:
+            self._ranking_button_text = self._ranking_btn.text()
+            self._ranking_btn.setEnabled(False)
+            self._ranking_btn.setText("Ranking results...")
+            self._summary_lbl.setText("Ranking results...")
+            return
+
+        self._ranking_btn.setEnabled(True)
+        if self._ranking_button_text is not None:
+            self._ranking_btn.setText(self._ranking_button_text)
+        self._ranking_button_text = None
         self._update_summary()
+
+    def _cleanup_ranking_worker(self, terminate: bool = False) -> None:
+        """Stop timers/processes for the ranking worker and release handles."""
+        timer = self._ranking_timer
+        self._ranking_timer = None
+        if timer is not None:
+            timer.stop()
+
+        proc = self._ranking_proc
+        self._ranking_proc = None
+        self._ranking_empty_after_exit_ticks = 0
+        if proc is not None:
+            try:
+                if terminate and proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=0.2)
+                    if proc.is_alive():
+                        proc.kill()
+                        proc.join(timeout=0.2)
+                else:
+                    if not proc.is_alive():
+                        proc.join(timeout=0.2)
+            except Exception:
+                logger.debug("Failed cleaning up ranking process", exc_info=True)
+
+        queue = self._ranking_queue
+        self._ranking_queue = None
+        if queue is not None:
+            close = getattr(queue, "close", None)
+            if callable(close):
+                close()
 
     def _on_proctor_report(self) -> None:
         """Build and show the spec 4.6 proctor report for displayed schedules."""
