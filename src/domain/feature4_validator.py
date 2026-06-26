@@ -13,11 +13,29 @@ methods here.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
 from src.domain.exam_period import ExamPeriod
+from src.domain.proctor import ProctorConfig
 from src.domain.semester import normalize_semester
+from src.domain.time_slot import TimeSlot
+
+
+class UnplaceableExam(NamedTuple):
+    """One exam session that cannot fit in any room arrangement.
+
+    Tuple-compatible DTO ordered as
+    ``(course_id, name, student_count, max_usable_capacity)`` so callers may
+    unpack it positionally or read fields by name.
+    """
+
+    course_id: str
+    name: str
+    student_count: int
+    max_usable_capacity: int
 
 
 class Feature4Validator:
@@ -145,3 +163,55 @@ class Feature4Validator:
         if total_capacity < largest_exam:
             return total_capacity, largest_exam
         return None
+
+    @staticmethod
+    def unplaceable_exams(
+        courses: list[Course],
+        classrooms: list[Classroom],
+        slots: list[TimeSlot],
+        proctor_config: ProctorConfig,
+    ) -> list[UnplaceableExam]:
+        """Structural pre-flight: exams that cannot fit in any room arrangement.
+
+        Returns one :class:`UnplaceableExam` per exam *session* whose student
+        count strictly exceeds the combined usable capacity of all classrooms.
+        Because a single exam may be split across every room within one time
+        slot, the binding constraint is the total usable capacity — not any one
+        room. The check is program-agnostic and worst-case: offerings of the same
+        exam course in the same semester are summed (a missing StudentCount counts
+        as zero), so an exam flagged here is un-placeable under *any* programme
+        selection. Offerings in different semesters are distinct sessions and are
+        never summed together.
+
+        ``slots`` and ``proctor_config`` are part of the assignment context so
+        callers pass the same bundle they hand to ClassroomAssigner; capacity is
+        the only structural limit, so they do not change which exams are flagged.
+        """
+        del slots, proctor_config  # accepted for call-site parity; capacity-only check
+
+        max_usable_capacity = sum(room.usable_capacity for room in classrooms)
+
+        unplaceable: list[UnplaceableExam] = []
+        for course in courses:
+            if not course.has_exam():
+                continue
+
+            totals_by_semester: dict[str, int] = {}
+            for offering in course.offerings:
+                semester = normalize_semester(offering.semester)
+                totals_by_semester[semester] = (
+                    totals_by_semester.get(semester, 0) + (offering.student_count or 0)
+                )
+
+            for student_count in totals_by_semester.values():
+                if student_count > max_usable_capacity:
+                    unplaceable.append(
+                        UnplaceableExam(
+                            course_id=course.id,
+                            name=course.name,
+                            student_count=student_count,
+                            max_usable_capacity=max_usable_capacity,
+                        )
+                    )
+
+        return unplaceable

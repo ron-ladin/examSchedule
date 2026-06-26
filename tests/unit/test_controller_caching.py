@@ -129,13 +129,18 @@ def test_begin_streaming_cache_clears_previous_run():
 
 # ── M4: engine-level schedule rejection count ─────────────────────────────────
 
-def test_pipeline_rejects_unassignable_schedules(tmp_path):
-    """Schedules where any exam cannot be assigned rooms must be dropped (spec §4.4).
+def test_pipeline_flags_structurally_unplaceable_exam(tmp_path):
+    """An exam too large for any room is flagged unassigned, not dropped (SCRUM-390).
 
-    Guarantee that the generator emits at least one candidate before the assigner
-    runs: one course + one valid date (Monday 2026-01-05) → exactly one schedule
-    produced by backtracking. Classrooms are intentionally undersized so the
-    assigner must return None for that schedule, proving the §4.4 rejection path.
+    "Always place what you can, flag the gap": an exam whose student count
+    structurally exceeds the combined usable room capacity must NOT blank the
+    solution space. The pipeline auto-routes the shortfall through the unassigned
+    fallback, so the schedule is still produced with the oversized exam recorded
+    in ``unassigned_classroom_exams`` and given no room assignment.
+
+    Guarantee that the generator emits exactly one candidate: one course + one
+    valid date (Monday 2026-01-05). Classrooms are intentionally undersized so the
+    exam cannot be placed, exercising the structural-shortfall fallback path.
     """
     from queue import Queue
     from src.controller import _run_generation_process
@@ -176,13 +181,15 @@ def test_pipeline_rejects_unassignable_schedules(tmp_path):
     result = q.get_nowait()
     schedules_by_period = result.schedules_by_period
     assert result.success is True
-    # The period key must be present — the generator produced a candidate but the
-    # assigner rejected it (rooms too small), so the list is empty, not missing.
     period_key = "FALL - Aleph"
-    assert period_key in schedules_by_period, (
-        "Period key missing: generator produced no candidates — "
-        "test fixture must guarantee at least one schedule before assigner runs"
+    assert period_key in schedules_by_period
+
+    # New policy: the schedule is kept, with the oversized exam flagged unassigned
+    # instead of the whole candidate being dropped.
+    schedules = schedules_by_period[period_key]
+    assert len(schedules) == 1, (
+        "Structurally unplaceable exam must be flagged, not blank the solution space"
     )
-    assert schedules_by_period[period_key] == [], (
-        "Schedules with unassignable exams must be rejected by the assigner (spec §4.4)"
-    )
+    flagged = schedules[0]
+    assert flagged.unassigned_classroom_exams.get("99999") == 200
+    assert not flagged.classroom_assignments.get("99999")

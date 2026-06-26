@@ -37,6 +37,7 @@ from collections.abc import Iterator
 from src.domain.interfaces import IThresholdFilter
 from src.domain.classroom import Classroom
 from src.domain.course import Course
+from src.domain.feature4_validator import Feature4Validator
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.threshold import ThresholdSettings
@@ -193,6 +194,30 @@ class AppController:
                 )
 
             if self._classrooms and self._time_slots and self._proctor_config:
+                # "Always place what you can, flag the gap": when an exam is
+                # structurally too large for any room arrangement, force the
+                # unassigned fallback for this period instead of letting one
+                # un-placeable exam blank the entire solution space. The fallback
+                # only fires for exams with zero assignable room combinations, so
+                # placeable exams are still fully room-mapped (SCRUM-390).
+                unplaceable = Feature4Validator.unplaceable_exams(
+                    relevant_courses,
+                    self._classrooms,
+                    self._time_slots,
+                    self._proctor_config,
+                )
+                if unplaceable:
+                    logger.warning(
+                        "Period %s: %d exam(s) exceed total usable room capacity; "
+                        "routing through unassigned fallback: %s",
+                        period_key,
+                        len(unplaceable),
+                        ", ".join(exam.course_id for exam in unplaceable),
+                    )
+                effective_allow_unassigned = (
+                    self._allow_unassigned_classrooms or bool(unplaceable)
+                )
+
                 schedule_iter = _apply_classroom_assignment(
                     schedule_iter,
                     relevant_courses,
@@ -200,7 +225,7 @@ class AppController:
                     self._classrooms,
                     self._time_slots,
                     self._proctor_config,
-                    self._allow_unassigned_classrooms,
+                    effective_allow_unassigned,
                     self._classroom_variant_mode,
                 )
 

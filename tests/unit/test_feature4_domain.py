@@ -13,7 +13,10 @@ import pytest
 
 from src.domain.classroom import Classroom
 from src.domain.classroom_assignment import ClassroomAssignment
+from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
+from src.domain.feature4_validator import Feature4Validator
+from src.domain.proctor import ProctorConfig
 from src.domain.time_slot import TimeSlot
 
 
@@ -262,3 +265,118 @@ def test_classroom_assignment_is_immutable():
     )
     with pytest.raises(FrozenInstanceError):
         assignment.proctor_count = 3
+
+
+# --- SCRUM-390: Feature4Validator.unplaceable_exams ------------------------
+# Pre-flight analytics: list every exam whose single-session student count
+# structurally exceeds the combined usable capacity of all rooms, so the engine
+# can route only those exams through the unassigned fallback instead of blanking
+# the whole solution space.
+
+
+def _exam(course_id, name, *offerings):
+    """Build an Exam course from (program_id, year, semester, requirement, count)."""
+    return Course(
+        id=course_id,
+        name=name,
+        instructor="Dr. Test",
+        evaluation_type="Exam",
+        offerings=[CourseOffering(*o) for o in offerings],
+    )
+
+
+_SLOTS = [TimeSlot(time(9, 0))]
+_PROCTORS = ProctorConfig(20)
+
+
+# An exam larger than the combined usable capacity is flagged with full detail.
+def test_unplaceable_exams_flags_oversized_exam():
+    rooms = [Classroom("A-1", 40), Classroom("A-2", 60)]  # usable 30 + 45 = 75
+    courses = [_exam("10004", "Advanced Materials", ("83109", 3, "FALL", "Obligatory", 400))]
+
+    result = Feature4Validator.unplaceable_exams(courses, rooms, _SLOTS, _PROCTORS)
+
+    assert len(result) == 1
+    entry = result[0]
+    assert entry.course_id == "10004"
+    assert entry.name == "Advanced Materials"
+    assert entry.student_count == 400
+    assert entry.max_usable_capacity == 75
+    # DTO is also tuple-compatible (course_id, name, student_count, max_usable_capacity).
+    assert tuple(entry) == ("10004", "Advanced Materials", 400, 75)
+
+
+# When every exam fits within combined usable capacity, nothing is flagged.
+def test_unplaceable_exams_empty_when_capacity_suffices():
+    rooms = [Classroom("A-1", 40), Classroom("A-2", 60)]  # usable 75
+    courses = [_exam("100", "Small Exam", ("83101", 1, "FALL", "Obligatory", 50))]
+
+    assert Feature4Validator.unplaceable_exams(courses, rooms, _SLOTS, _PROCTORS) == []
+
+
+# Boundary: an exam exactly equal to combined usable capacity IS placeable
+# (the check is a strict ">").
+def test_unplaceable_exams_boundary_equal_capacity_is_placeable():
+    rooms = [Classroom("A-1", 40), Classroom("A-2", 60)]  # usable 75
+    courses = [_exam("100", "Exactly Fits", ("83101", 1, "FALL", "Obligatory", 75))]
+
+    assert Feature4Validator.unplaceable_exams(courses, rooms, _SLOTS, _PROCTORS) == []
+
+
+# Non-exam courses (Project/Attendance) never need rooms and are never flagged.
+def test_unplaceable_exams_ignores_non_exam_courses():
+    rooms = [Classroom("A-1", 40)]  # usable 30
+    project = Course(
+        id="200",
+        name="Huge Project",
+        instructor="Dr. Test",
+        evaluation_type="Project",
+        offerings=[CourseOffering("83101", 1, "FALL", "Obligatory", 9999)],
+    )
+
+    assert Feature4Validator.unplaceable_exams([project], rooms, _SLOTS, _PROCTORS) == []
+
+
+# Offerings of the same exam in the same semester are one session: their counts
+# are summed (worst case across programmes) before the capacity comparison.
+def test_unplaceable_exams_sums_offerings_in_same_semester():
+    rooms = [Classroom("A-1", 40), Classroom("A-2", 60)]  # usable 75
+    courses = [
+        _exam(
+            "300",
+            "Two Programmes",
+            ("83101", 1, "FALL", "Obligatory", 40),
+            ("83102", 1, "FALL", "Obligatory", 40),
+        )
+    ]
+
+    result = Feature4Validator.unplaceable_exams(courses, rooms, _SLOTS, _PROCTORS)
+
+    assert len(result) == 1
+    assert result[0].student_count == 80
+    assert result[0].max_usable_capacity == 75
+
+
+# Different semesters are distinct sessions and must NOT be summed together.
+def test_unplaceable_exams_does_not_sum_across_semesters():
+    rooms = [Classroom("A-1", 40), Classroom("A-2", 60)]  # usable 75
+    courses = [
+        _exam(
+            "400",
+            "Fall And Spring",
+            ("83101", 1, "FALL", "Obligatory", 60),
+            ("83101", 1, "SPRI", "Obligatory", 60),
+        )
+    ]
+
+    # 60 (FALL) and 60 (SPRI) are each <= 75; summing would wrongly flag 120.
+    assert Feature4Validator.unplaceable_exams(courses, rooms, _SLOTS, _PROCTORS) == []
+
+
+# A missing StudentCount contributes zero to the structural pre-flight total
+# (the strict per-offering count rule is enforced later, at assignment time).
+def test_unplaceable_exams_treats_missing_count_as_zero():
+    rooms = [Classroom("A-1", 40)]  # usable 30
+    courses = [_exam("500", "No Count", ("83101", 1, "FALL", "Obligatory"))]
+
+    assert Feature4Validator.unplaceable_exams(courses, rooms, _SLOTS, _PROCTORS) == []
