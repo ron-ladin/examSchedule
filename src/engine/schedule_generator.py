@@ -170,13 +170,16 @@ class ScheduleGenerator(IScheduleGenerator):
         next_unassigned = set(unassigned)
         next_unassigned.remove(course)
 
+        constraints_active = not constraints.is_empty
+
         for exam_date in candidate_dates:
-            if not constraints.allows(course, exam_date):
+            if constraints_active and not constraints.allows(course, exam_date):
                 metrics.threshold_prunes += 1
                 continue
 
             assignment[course] = exam_date
-            constraints.record(course, exam_date)
+            if constraints_active:
+                constraints.record(course, exam_date)
 
             try:
                 next_domains = domains
@@ -192,11 +195,14 @@ class ScheduleGenerator(IScheduleGenerator):
                     ):
                         continue
 
-                    if not self._forward_check_constraints(
-                        next_unassigned,
-                        next_domains,
-                        constraints,
-                        metrics,
+                    if (
+                        constraints_active
+                        and not self._forward_check_constraints(
+                            next_unassigned,
+                            next_domains,
+                            constraints,
+                            metrics,
+                        )
                     ):
                         continue
 
@@ -211,7 +217,8 @@ class ScheduleGenerator(IScheduleGenerator):
                     constraints,
                 )
             finally:
-                constraints.undo(course, exam_date)
+                if constraints_active:
+                    constraints.undo(course, exam_date)
                 del assignment[course]
 
     def _select_next_course(
@@ -264,6 +271,9 @@ class ScheduleGenerator(IScheduleGenerator):
         constraints: PlacementConstraintSet,
         metrics: GenerationMetrics,
     ) -> bool:
+        if constraints.is_empty:
+            return True
+
         for course in unassigned:
             domain = domains[course]
             reduced = tuple(
