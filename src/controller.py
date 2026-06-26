@@ -559,6 +559,33 @@ class DesktopController:
             if student_count > max_usable_capacity
         ]
 
+    def empty_period_reason(self, period_key: str) -> str:
+        """Explain why one period produced no schedules (spec / SCRUM-390).
+
+        Replaces the blanket "No valid schedules found" with the concrete cause
+        for this period so a partial or empty result is honest about *why*:
+
+        - no relevant courses for the current programme selection,
+        - no valid exam dates in the period window, or
+        - no schedule satisfies the spacing (threshold) rules.
+        """
+        period = next(
+            (p for p in self._exam_periods if p.get_key() == period_key), None
+        )
+        if period is None:
+            return "No schedules generated for this period."
+
+        relevant = [
+            course
+            for course in self._courses
+            if course.is_relevant_for_period(self._selected_programs, period.semester)
+        ]
+        if not relevant:
+            return "No relevant courses for the selected programmes in this period."
+        if not period.get_valid_dates():
+            return "No valid exam dates are available in this period."
+        return "No schedule satisfies the spacing (threshold) rules for this period."
+
     def has_more_schedules(self, period_key: str) -> bool:
         """Return True if more schedules can be loaded for the given period."""
         return self._has_more_schedules.get(period_key, False)

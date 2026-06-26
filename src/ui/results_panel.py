@@ -48,6 +48,10 @@ from src.adapters.sqlite_schedule_store import (
 )
 from src.domain.course import Course
 from src.domain.period_order import canonical_period_key
+from src.domain.partial_placement_policy import (
+    PartialPlacementPolicy,
+    PlacementFailureReason,
+)
 from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
 from src.domain.sorting import SortingConfig
@@ -735,6 +739,20 @@ class _ResultsPanel(QWidget):
 
         cl.addWidget(self._stale_banner)
 
+        # Honest reporting for the "always place what you can, flag the gap"
+        # strategy (SCRUM-390): names exams left without a room so a partial
+        # result is never mistaken for a complete one.
+        self._unassigned_banner = QLabel("")
+        self._unassigned_banner.setWordWrap(True)
+        self._unassigned_banner.setStyleSheet(
+            "background: #FEF3C7; color: #92400E;"
+            " border: 1px solid #F59E0B; border-radius: 8px;"
+            " padding: 8px 14px; font-size: 12px; font-weight: 500;"
+        )
+        self._unassigned_banner.setVisible(False)
+
+        cl.addWidget(self._unassigned_banner)
+
         tip_lbl = QLabel("Tip: Click on any scheduled exam date to view full details.")
         tip_lbl.setStyleSheet(
             "background: rgba(0,90,194,0.06); color: #004394;"
@@ -848,6 +866,9 @@ class _ResultsPanel(QWidget):
             variant_pos = -1
 
             if card is not None:
+                card.empty_label.setText(
+                    self._controller.empty_period_reason(period_key)
+                )
                 card.empty_label.setVisible(True)
                 card.cal_table.setVisible(False)
         else:
@@ -943,9 +964,83 @@ class _ResultsPanel(QWidget):
 
         self._update_summary()
 
+    def _displayed_schedules(self) -> list[Schedule]:
+        """The schedule currently visible in each non-empty period card."""
+        displayed: list[Schedule] = []
+        for period_key, schedules in self._schedules_by_period.items():
+            if not schedules:
+                continue
+            idx = self._period_indices.get(period_key, 0)
+            if idx < 0 or idx >= len(schedules):
+                idx = 0
+            displayed.append(schedules[idx])
+        return displayed
+
+    def _refresh_unassigned_banner(self) -> None:
+        """Flag exams left without a room across the displayed schedules.
+
+        Names each un-placeable exam and, when the cause is reachable, phrases
+        structural ("exceeds all room capacity") versus runtime ("no free
+        room/slot") via PartialPlacementPolicy.classify (SCRUM-390).
+        """
+        unassigned: dict[str, int] = {}
+        for schedule in self._displayed_schedules():
+            unassigned.update(getattr(schedule, "unassigned_classroom_exams", {}) or {})
+
+        if not unassigned:
+            self._unassigned_banner.setVisible(False)
+            self._unassigned_banner.setText("")
+            return
+
+        structural_ids = frozenset(
+            exam.course_id for exam in self._controller.feature4_unplaceable_exams()
+        )
+        cause_text = {
+            PlacementFailureReason.STRUCTURAL_CAPACITY_SHORTFALL: "exceeds all room capacity",
+            PlacementFailureReason.RUNTIME_ASSIGNMENT_FAILURE: "no free room/slot",
+        }
+        parts: list[str] = []
+        for course_id in unassigned:
+            course = self._courses_by_id.get(course_id)
+            name = course.name if course is not None else course_id
+            reason = PartialPlacementPolicy.classify(course_id, structural_ids)
+            parts.append(f"{name} ({cause_text[reason]})")
+
+        count = len(unassigned)
+        self._unassigned_banner.setText(
+            f"⚠  {count} exam(s) could not be assigned rooms: " + ", ".join(parts)
+        )
+        self._unassigned_banner.setVisible(True)
+
+    def _no_schedules_summary(self) -> str:
+        """Per-period reasons when no period produced any schedule (SCRUM-390).
+
+        Reports the concrete cause instead of a blanket "No valid schedules
+        found": a single shared reason is shown once; otherwise each period is
+        listed with its own reason.
+        """
+        reasons = {
+            period_key: self._controller.empty_period_reason(period_key)
+            for period_key in self._schedules_by_period
+        }
+        if not reasons:
+            return "⚠  No valid schedules found."
+
+        distinct = set(reasons.values())
+        if len(distinct) == 1:
+            return f"⚠  {next(iter(distinct))}"
+
+        per_period = "; ".join(
+            f"{_display_period_key(key)}: {reason}"
+            for key, reason in reasons.items()
+        )
+        return f"⚠  No valid schedules found — {per_period}"
+
     def _update_summary(self) -> None:
         if not self._schedules_by_period:
             return
+
+        self._refresh_unassigned_banner()
 
         non_empty = {
             key: value
@@ -957,7 +1052,7 @@ class _ResultsPanel(QWidget):
             self._summary_lbl.setStyleSheet(
                 "color: #DC2626; font-weight: 600; font-size: 12px;"
             )
-            self._summary_lbl.setText("⚠  No valid schedules found.")
+            self._summary_lbl.setText(self._no_schedules_summary())
             return
 
         period_schedules_total = sum(
