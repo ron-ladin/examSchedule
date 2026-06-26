@@ -59,6 +59,45 @@ def test_feature4_capacity_compares_largest_single_exam_not_sum():
     assert ctrl.feature4_capacity_shortfall() is None
 
 
+def test_unplaceable_exams_names_oversized_exam():
+    """An exam exceeding all usable seats is named with its shortfall."""
+    ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
+    unplaceable = ctrl.feature4_unplaceable_exams()
+    assert len(unplaceable) == 1
+    exam = unplaceable[0]
+    assert exam.course_id == "11111"
+    assert exam.name == "Calculus"
+    assert exam.student_count == 75
+    assert exam.max_usable_capacity == 30  # 40 * 0.75 occupancy
+
+
+def test_unplaceable_exams_empty_when_capacity_suffices():
+    ctrl = _active_feature4_controller(total_capacity=200, student_count=75)
+    assert ctrl.feature4_unplaceable_exams() == []
+
+
+def test_unplaceable_exams_is_relevance_filtered_by_selection():
+    """An exam huge for an unselected programme but small for the selected one
+    must NOT be flagged — the check follows the current selection, not worst case."""
+    ctrl = _active_feature4_controller(total_capacity=40, student_count=10)
+    # Same exam also offered to programme 83102 with a huge cohort.
+    ctrl._courses[0].offerings.append(
+        CourseOffering("83102", 1, "FALL", "Obligatory", 999)
+    )
+    ctrl._selected_programs = ["83101"]  # only the small cohort is relevant
+    assert ctrl.feature4_unplaceable_exams() == []
+    # Selecting the large programme flags it.
+    ctrl._selected_programs = ["83102"]
+    flagged = ctrl.feature4_unplaceable_exams()
+    assert len(flagged) == 1 and flagged[0].student_count == 999
+
+
+def test_unplaceable_exams_empty_when_feature4_inactive():
+    ctrl = _active_feature4_controller(total_capacity=40, student_count=75)
+    ctrl.set_feature4_enabled(False)
+    assert ctrl.feature4_unplaceable_exams() == []
+
+
 def test_feature4_ready_requires_student_counts_on_exam_courses():
     ctrl = _active_feature4_controller(total_capacity=200, student_count=50)
     assert ctrl.feature4_ready() is True

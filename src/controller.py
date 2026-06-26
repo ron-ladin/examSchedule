@@ -529,16 +529,35 @@ class DesktopController:
         )
 
     def feature4_unplaceable_exams(self) -> list[UnplaceableExam]:
-        """Structural pre-flight: exams too large for any room arrangement.
+        """Pre-flight: exams too large for any room arrangement (spec 4.4).
 
-        Names each exam whose student count exceeds the combined usable
-        capacity of all rooms (spec 4.4). Returns an empty list when Feature 4
-        is inactive. Delegates to Feature4Validator; program-agnostic worst-case
-        so the flagged exams are un-placeable under any programme selection.
+        Names each exam whose *relevant* student total (only the currently
+        selected programmes) exceeds the combined usable capacity of all rooms,
+        so generation will leave it unassigned. Relevance-filtered — matching
+        feature4_capacity_shortfall — so an exam is flagged only when it cannot
+        fit for the actual selection, never as a worst-case false positive.
+        Returns an empty list when Feature 4 is inactive.
         """
         if not self.feature4_active:
             return []
-        return Feature4Validator.unplaceable_exams(self._courses, self._classrooms)
+
+        totals = self._exam_student_totals()
+        if not totals:
+            return []
+
+        max_usable_capacity = sum(room.usable_capacity for room in self._classrooms)
+        names = {course.id: course.name for course in self._courses}
+
+        return [
+            UnplaceableExam(
+                course_id=course_id,
+                name=names.get(course_id, course_id),
+                student_count=student_count,
+                max_usable_capacity=max_usable_capacity,
+            )
+            for (course_id, _semester), student_count in totals.items()
+            if student_count > max_usable_capacity
+        ]
 
     def has_more_schedules(self, period_key: str) -> bool:
         """Return True if more schedules can be loaded for the given period."""
