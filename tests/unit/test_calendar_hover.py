@@ -41,8 +41,13 @@ def _get_qapp() -> QApplication:
 
 def test_calendar_table_tracks_mouse_for_hover():
     """The table and its viewport must track the mouse so hover events fire."""
-    _get_qapp()
+    app = _get_qapp()
     table = _make_data_table(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"])
 
-    assert table.hasMouseTracking() is True
-    assert table.viewport().hasMouseTracking() is True
+    try:
+        assert table.hasMouseTracking() is True
+        assert table.viewport().hasMouseTracking() is True
+    finally:
+        table.close()
+        table.deleteLater()
+        app.processEvents()
