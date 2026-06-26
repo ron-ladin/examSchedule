@@ -148,6 +148,7 @@ class GenerationPoller(QObject):
         self._expected_period_keys: set[str] = set()
         self._completed_periods: set[str] = set()
         self._truncated_periods: set[str] = set()
+        self._timed_out_periods: set[str] = set()
         self._poll_cursor: int = 0
 
     def is_running(self) -> bool:
@@ -185,6 +186,7 @@ class GenerationPoller(QObject):
         self._expected_period_keys = set()
         self._completed_periods = set()
         self._truncated_periods = set()
+        self._timed_out_periods = set()
         self._poll_cursor = 0
         self._set_legacy_refs()
 
@@ -281,6 +283,7 @@ class GenerationPoller(QObject):
         self._completed_periods.clear()
         self._expected_period_keys.clear()
         self._truncated_periods.clear()
+        self._timed_out_periods.clear()
         self._poll_cursor = 0
         self._courses_snapshot = []
         self._settings_snapshot = None
@@ -703,17 +706,30 @@ class GenerationPoller(QObject):
                 continue
 
             logger.error(
-                "Generation worker timed out: run=%s period=%s elapsed=%.1fs",
+                "Generation worker timed out: run=%s period=%s elapsed=%.1fs — "
+                "dropping period and continuing",
                 run_id,
                 state.period_key,
                 worker_elapsed,
             )
-            self._fail(
-                run_id,
-                f"Generation timed out after {_HARD_KILL_GEN_SECS // 60} minutes "
-                "and was stopped.",
-            )
-            return True
+            self._cleanup_worker_resources(state, terminate=True)
+            self._timed_out_periods.add(state.period_key)
+            self._retire_worker_state(run_id, state, cleanup=False)
+            if not self._is_current_run(run_id):
+                return True
+
+            if len(self._completed_periods) >= len(self._expected_period_keys):
+                if self._timed_out_periods >= self._expected_period_keys:
+                    # Every period timed out; nothing to show.
+                    self._fail(
+                        run_id,
+                        "All exam periods timed out. No schedules were generated.",
+                    )
+                    return True
+                self._finish(run_id, set(self._truncated_periods))
+                return True
+
+            return not self._start_next_workers(run_id)
 
         return False
 
@@ -1093,6 +1109,20 @@ class GenerationPoller(QObject):
         """Finalise a completed streaming run."""
         if not self._is_current_run(run_id):
             return
+
+        if self._timed_out_periods:
+            period_list = ", ".join(sorted(self._timed_out_periods))
+            logger.warning(
+                "Generation run %s completed with timed-out periods: %s",
+                run_id,
+                period_list,
+            )
+            self.generation_warning.emit(
+                f"Generation timed out for: {period_list}. "
+                "Other periods completed successfully."
+            )
+            if not self._is_current_run(run_id):
+                return
 
         logger.info(
             "Generation run %s succeeded: truncated_periods=%s",
