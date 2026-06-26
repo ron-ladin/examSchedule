@@ -178,10 +178,13 @@ class ScheduleGenerator(IScheduleGenerator):
                 continue
 
             assignment[course] = exam_date
-            if constraints_active:
-                constraints.record(course, exam_date)
+            recorded = False
 
             try:
+                if constraints_active:
+                    constraints.record(course, exam_date)
+                    recorded = True
+
                 next_domains = domains
                 if next_unassigned:
                     next_domains = dict(domains)
@@ -217,7 +220,7 @@ class ScheduleGenerator(IScheduleGenerator):
                     constraints,
                 )
             finally:
-                if constraints_active:
+                if constraints_active and recorded:
                     constraints.undo(course, exam_date)
                 del assignment[course]
 

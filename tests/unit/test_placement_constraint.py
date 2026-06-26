@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
 from src.domain.exam_period import ExamPeriod
@@ -7,6 +9,7 @@ from src.domain.placement_constraint import (
     MaxElectiveCollisionsConstraint,
     MaxExamsPerDayConstraint,
     MinDaysConstraint,
+    PlacementConstraint,
     PlacementConstraintSet,
 )
 from src.domain.threshold import Criterion, ThresholdEntry, ThresholdSettings
@@ -250,3 +253,42 @@ def test_exam_period_spread_is_not_installed_in_constraint_set():
     )
 
     assert constraints._constraints == []
+
+class _RecordingConstraint(PlacementConstraint):
+    def __init__(self) -> None:
+        self.recorded: list[tuple[Course, date]] = []
+        self.undone: list[tuple[Course, date]] = []
+
+    def allows(self, course: Course, exam_date: date) -> bool:
+        return True
+
+    def record(self, course: Course, exam_date: date) -> None:
+        self.recorded.append((course, exam_date))
+
+    def undo(self, course: Course, exam_date: date) -> None:
+        self.undone.append((course, exam_date))
+        self.recorded.remove((course, exam_date))
+
+
+class _FailingRecordConstraint(PlacementConstraint):
+    def allows(self, course: Course, exam_date: date) -> bool:
+        return True
+
+    def record(self, course: Course, exam_date: date) -> None:
+        raise RuntimeError("record failed")
+
+    def undo(self, course: Course, exam_date: date) -> None:
+        raise AssertionError("undo must not be called for an unrecorded constraint")
+
+
+def test_constraint_set_rolls_back_prior_records_when_composite_record_fails():
+    course = _course("11111")
+    exam_date = date(2026, 1, 5)
+    first = _RecordingConstraint()
+    constraints = PlacementConstraintSet([first, _FailingRecordConstraint()])
+
+    with pytest.raises(RuntimeError, match="record failed"):
+        constraints.record(course, exam_date)
+
+    assert first.recorded == []
+    assert first.undone == [(course, exam_date)]

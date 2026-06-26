@@ -114,8 +114,15 @@ class PlacementConstraintSet:
         )
 
     def record(self, course: Course, exam_date: date) -> None:
-        for constraint in self._constraints:
-            constraint.record(course, exam_date)
+        recorded_constraints: list[PlacementConstraint] = []
+        try:
+            for constraint in self._constraints:
+                constraint.record(course, exam_date)
+                recorded_constraints.append(constraint)
+        except Exception:
+            for constraint in reversed(recorded_constraints):
+                constraint.undo(course, exam_date)
+            raise
 
     def undo(self, course: Course, exam_date: date) -> None:
         for constraint in reversed(self._constraints):
