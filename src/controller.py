@@ -43,7 +43,7 @@ from src.adapters.text_file_exporter import TextFileExporter
 from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
-from src.domain.feature4_validator import Feature4Validator
+from src.domain.feature4_validator import Feature4Validator, UnplaceableExam
 from src.domain.period_order import sort_period_mapping_canonically
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
@@ -527,6 +527,18 @@ class DesktopController:
             self._classrooms,
             self.feature4_active,
         )
+
+    def feature4_unplaceable_exams(self) -> list[UnplaceableExam]:
+        """Structural pre-flight: exams too large for any room arrangement.
+
+        Names each exam whose student count exceeds the combined usable
+        capacity of all rooms (spec 4.4). Returns an empty list when Feature 4
+        is inactive. Delegates to Feature4Validator; program-agnostic worst-case
+        so the flagged exams are un-placeable under any programme selection.
+        """
+        if not self.feature4_active:
+            return []
+        return Feature4Validator.unplaceable_exams(self._courses, self._classrooms)
 
     def has_more_schedules(self, period_key: str) -> bool:
         """Return True if more schedules can be loaded for the given period."""

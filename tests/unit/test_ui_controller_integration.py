@@ -409,14 +409,14 @@ def test_spec_4_3_file_load_aborted_when_student_count_missing(
     screen.close()
 
 
-# NOTE: the capacity-warning *cancel* path (warning -> No -> generation blocked)
-# is covered end-to-end by tests/e2e/test_ui_engine_stress.py
-# ::test_capacity_shortfall_warns_before_generation, which also asserts the
-# shortfall tuple. The proceed path (message content + Yes) is kept below.
+# NOTE: the pre-flight *cancel* path (Cancel -> generation blocked) is covered
+# end-to-end by tests/e2e/test_ui_engine_stress.py
+# ::test_capacity_shortfall_warns_before_generation. The informational pre-flight
+# content + Generate/Cancel behavior is exercised below.
 
 
-def test_capacity_warning_proceed_returns_true(monkeypatch):
-    app = _get_qapp()
+def _oversized_feature4_controller() -> DesktopController:
+    """Controller whose single exam (50 students) exceeds all rooms (15 usable)."""
     controller = DesktopController()
     controller._feature4_enabled = True
     controller._classrooms = [Classroom("Room 1", 20)]
@@ -435,20 +435,64 @@ def test_capacity_warning_proceed_returns_true(monkeypatch):
             [CourseOffering("83101", 1, "FALL", "Obligatory", 50)],
         )
     ]
+    return controller
+
+
+def _click_preflight_role(monkeypatch, role, captured: list) -> None:
+    """Patch QMessageBox.exec to record the text and click the button for role."""
+
+    def fake_exec(box_self):
+        captured.append(box_self.text())
+        for button in box_self.buttons():
+            if box_self.buttonRole(button) == role:
+                button.click()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec, raising=False)
+
+
+def test_preflight_names_unplaceable_exam_and_generate_proceeds(monkeypatch):
+    app = _get_qapp()
+    controller = _oversized_feature4_controller()
     screen = ConfigScreen(controller)
-    shown = []
-
-    def answer_yes(_parent, title, text, _buttons, _default):
-        shown.append((title, text))
-        return QMessageBox.StandardButton.Yes
-
-    monkeypatch.setattr(QMessageBox, "warning", answer_yes)
+    shown: list[str] = []
+    _click_preflight_role(monkeypatch, QMessageBox.ButtonRole.AcceptRole, shown)
 
     assert screen._confirm_capacity_warning() is True
     assert shown
-    assert "Total usable classroom capacity: 15" in shown[0][1]
-    assert "Largest exam: 50 students" in shown[0][1]
-    assert "Shortfall: 35" in shown[0][1]
+    text = shown[0]
+    assert "Calculus" in text and "11111" in text
+    assert "50 students" in text
+    assert "15 usable seats" in text
+    app.processEvents()
+    screen.close()
+
+
+def test_preflight_cancel_blocks_generation(monkeypatch):
+    app = _get_qapp()
+    controller = _oversized_feature4_controller()
+    screen = ConfigScreen(controller)
+    captured: list[str] = []
+    _click_preflight_role(monkeypatch, QMessageBox.ButtonRole.RejectRole, captured)
+
+    assert screen._confirm_capacity_warning() is False
+    assert captured
+    app.processEvents()
+    screen.close()
+
+
+def test_preflight_skipped_when_all_exams_placeable(monkeypatch):
+    app = _get_qapp()
+    controller = _oversized_feature4_controller()
+    controller._classrooms = [Classroom("Hall", 100)]  # 75 usable >= 50
+    screen = ConfigScreen(controller)
+
+    def fail_exec(_box_self):
+        raise AssertionError("pre-flight dialog should not be shown")
+
+    monkeypatch.setattr(QMessageBox, "exec", fail_exec, raising=False)
+
+    assert screen._confirm_capacity_warning() is True
     app.processEvents()
     screen.close()
 
@@ -846,15 +890,12 @@ def test_generation_failed_signal_returns_to_config_screen(monkeypatch):
     screen.close()
 
 
-def test_capacity_warning_uses_newly_selected_programmes_not_stale_ones(monkeypatch):
-    """Regression: capacity warning must fire based on the *current* UI selection.
+def test_preflight_blocks_generation_for_structurally_unplaceable_exam(monkeypatch):
+    """An exam too large for all rooms must surface the pre-flight on Generate,
+    and Cancel must stop generation.
 
-    Old flow: _confirm_capacity_warning() ran before set_selected_programs(),
-    so the warning was calculated using stale selected_programs.
-
-    New flow: set_selected_programs(selected) runs first, then the warning.
-    This test verifies: switching from programme A to B in the UI, where only B
-    has a capacity shortfall, causes the warning to appear.
+    The structural pre-flight is program-agnostic worst-case, so the oversized
+    exam is flagged regardless of which programme is selected in the UI.
     """
     app = _get_qapp()
 
@@ -884,22 +925,20 @@ def test_capacity_warning_uses_newly_selected_programmes_not_stale_ones(monkeypa
     controller._selected_programs = [PROG_A]  # stale — no shortfall for A
 
     screen = ConfigScreen(controller)
-    # Simulate user switching UI selection to PROG_B before clicking Generate.
     monkeypatch.setattr(screen, "_get_selected_ids", lambda: [PROG_B])
 
-    shown_warnings: list[tuple] = []
+    started: list = []
+    screen.generation_started.connect(started.append)
 
-    def capture_warning(_parent, title, text, buttons, default):
-        shown_warnings.append((title, text))
-        return QMessageBox.StandardButton.No
-
-    monkeypatch.setattr(QMessageBox, "warning", capture_warning)
+    shown_text: list[str] = []
+    _click_preflight_role(monkeypatch, QMessageBox.ButtonRole.RejectRole, shown_text)
 
     screen._on_generate()
     app.processEvents()
 
-    assert shown_warnings, "Capacity warning must fire for the newly selected PROG_B"
-    assert "Insufficient Classroom Capacity" in shown_warnings[0][0]
+    assert shown_text, "Pre-flight must fire for the structurally un-placeable exam"
+    assert "Big Exam" in shown_text[0]
+    assert started == [], "Cancel must stop generation"
     screen.close()
 
 

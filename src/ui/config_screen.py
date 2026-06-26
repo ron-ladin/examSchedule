@@ -649,28 +649,41 @@ class ConfigScreen(QWidget):
         self._poller.start(selected, color_map, self._allow_unassigned_generation)
 
     def _confirm_capacity_warning(self) -> bool:
-        """Show the optional Feature 4 capacity warning before generation."""
-        shortfall = self._controller.feature4_capacity_shortfall()
-        if shortfall is None:
+        """Informational pre-flight for structurally un-placeable exams.
+
+        Names each exam that exceeds the combined usable capacity of all rooms
+        and will therefore be left unassigned, then lets the user proceed
+        (Generate) or stop (Cancel). Generation proceeds for everything else —
+        the engine flags the gap automatically rather than blanking the whole
+        result — so the dialog is informational, not a "proceed anyway" gate.
+        """
+        unplaceable = self._controller.feature4_unplaceable_exams()
+        if not unplaceable:
             self._allow_unassigned_generation = False
             return True
 
-        total_capacity, largest_exam_students = shortfall
-        response = QMessageBox.warning(
-            self,
-            "Insufficient Classroom Capacity",
-            "The total usable classroom capacity under the configured occupancy policy is lower "
-            "than the number of students in at least one exam.\n\n"
-            f"Total usable classroom capacity: {total_capacity:,}\n"
-            f"Largest exam: {largest_exam_students:,} students\n"
-            f"Shortfall: {largest_exam_students - total_capacity:,}\n\n"
-            "Generation may reject schedules that cannot be assigned to rooms. "
-            "Do you want to proceed anyway?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        lines = "\n".join(
+            f"  • {exam.name} ({exam.course_id}): {exam.student_count:,} students "
+            f"vs {exam.max_usable_capacity:,} usable seats"
+            for exam in unplaceable
         )
-        self._allow_unassigned_generation = response == QMessageBox.StandardButton.Yes
-        return self._allow_unassigned_generation
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Some Exams Cannot Be Assigned Rooms")
+        box.setText(
+            f"{len(unplaceable)} exam(s) exceed the usable capacity of all rooms "
+            "combined and will be left unassigned:\n\n"
+            f"{lines}\n\n"
+            "Generation will proceed for every other exam. Continue?"
+        )
+        generate_btn = box.addButton("Generate", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(generate_btn)
+        box.exec()
+
+        proceed = box.clickedButton() is generate_btn
+        self._allow_unassigned_generation = proceed
+        return proceed
 
     def _import_schedule(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

@@ -285,13 +285,14 @@ def test_capacity_shortfall_warns_before_generation(tmp_path, monkeypatch):
     assert shortfall is not None
     total_cap, largest = shortfall
     assert total_cap == 15 and largest == 80
+    assert controller.feature4_unplaceable_exams(), "exam must be flagged un-placeable"
 
     screen = ConfigScreen(controller)
     started = []
     screen.generation_started.connect(started.append)
-    monkeypatch.setattr(
-        QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.No
-    )
+    # Pre-flight uses an instance QMessageBox; with no button clicked,
+    # clickedButton() is None so the choice resolves to Cancel.
+    monkeypatch.setattr(QMessageBox, "exec", lambda _self: 0, raising=False)
     # Ensure _get_selected_ids returns the pre-configured programme so the
     # capacity check sees the same selection that was set on the controller.
     monkeypatch.setattr(screen, "_get_selected_ids", lambda: ["83101"])
