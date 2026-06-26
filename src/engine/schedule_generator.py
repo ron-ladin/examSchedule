@@ -22,10 +22,9 @@ class ScheduleGenerator(IScheduleGenerator):
     ) -> Iterator[Schedule]:
         """Yield every valid conflict-free schedule for the given exam period.
 
-        Uses a conflict graph + MCV heuristic to prune the search space before
-        starting backtracking. Yields lazily — never builds a list in memory.
+        Uses a conflict graph + dynamic MCV heuristic inside the backtracker.
+        Yields lazily — never builds a list in memory.
         """
-        # Resolve the allowed dates from the period (excludes weekends & holidays)
         valid_dates = exam_period.get_valid_dates()
         if not valid_dates or not courses:
             return
@@ -33,13 +32,7 @@ class ScheduleGenerator(IScheduleGenerator):
         # Build the conflict graph once — reused across every backtrack step
         conflict_graph = self._build_conflict_graph(courses)
 
-        # Most-Constrained-Variable (MCV) heuristic:
-        # courses with more conflicts are harder to place, so assign them first.
-        # This causes failures to surface early, pruning large branches of the search tree.
-        ordered = sorted(courses, key=lambda c: len(conflict_graph[c]), reverse=True)
-
-        # Hand off to the recursive backtracker with an empty initial assignment
-        yield from self._backtrack({}, ordered, 0, valid_dates, conflict_graph, exam_period)
+        yield from self._backtrack({}, set(courses), valid_dates, conflict_graph, exam_period)
 
     def _build_conflict_graph(self, courses: list[Course]) -> dict[Course, set[Course]]:
         """Return an adjacency map: course → set of courses it conflicts with.
@@ -61,48 +54,75 @@ class ScheduleGenerator(IScheduleGenerator):
     def _backtrack(
         self,
         assignment: dict[Course, date],
-        remaining: list[Course],
-        index: int,
+        unassigned: set[Course],
         valid_dates: list[date],
         conflict_graph: dict[Course, set[Course]],
         exam_period: ExamPeriod,
     ) -> Iterator[Schedule]:
         """Recursively assign dates to courses, yielding a Schedule when all are placed.
 
-        Classic backtracking pattern — choose, explore, un-choose:
-          1. Pick the next unassigned course (head of `remaining`).
-          2. Try every valid date that isn't blocked by an already-assigned neighbor.
-          3. Recurse with the new assignment; yield any complete schedules found.
-          4. Undo the assignment before trying the next date (backtrack).
+        Classic backtracking — choose, explore, un-choose — with two pruning strategies:
 
-        `assignment` is mutated in-place and restored after each branch, so it never
-        holds more than one partial solution at a time — O(n) memory regardless of
-        how many schedules exist.
+        1. Dynamic MCV: at each step pick the unassigned course whose current remaining
+           domain (valid dates not blocked by already-assigned conflicting neighbours) is
+           smallest.  Ties are broken by course id for determinism (C2).  Choosing the
+           tightest course first surfaces failures early without any look-ahead cost.
+
+        2. Forward-checking (SCRUM-453): after each assignment verify that every still-
+           unassigned course retains at least one valid date.  If any future domain is
+           empty the branch cannot produce a valid schedule — prune it immediately.
+
+        `assignment` and `unassigned` are mutated in-place and fully restored after each
+        branch — O(n) memory regardless of how many schedules exist.
         """
-        # Base case: every course has been assigned — emit one complete schedule
-        if index >= len(remaining):
-            # Copy assignment so the yielded Schedule is independent of future mutations
+        if not unassigned:
             yield Schedule(period=exam_period, assignments={c.id: d for c, d in assignment.items()})
             return
 
-        # Advance through `remaining` by index instead of slicing (remaining[1:]),
-        # which would allocate a fresh list at every node — O(n) extra work per
-        # call and O(n) garbage per branch. An index keeps recursion allocation-free.
-        course = remaining[index]
+        # Dynamic MCV + deterministic tiebreaker (C2):
+        # blocked_count = number of distinct dates taken by assigned neighbours.
+        # max(blocked_count) ≡ min(remaining domain); secondary key c.id breaks ties.
+        course = max(
+            unassigned,
+            key=lambda c: (
+                len({assignment[n] for n in conflict_graph[c] if n in assignment}),
+                c.id,
+            ),
+        )
+        unassigned.remove(course)   # `unassigned` now contains exactly the future courses
 
-        # Collect dates already taken by conflicting neighbors (already assigned).
-        # Building this set once per call keeps the inner loop O(1) per date.
         blocked = {assignment[n] for n in conflict_graph[course] if n in assignment}
-
         for d in valid_dates:
             if d not in blocked:
-                # Choose: tentatively place this course on date d
                 assignment[course] = d
-
-                # Explore: recurse on the remaining courses
-                yield from self._backtrack(
-                    assignment, remaining, index + 1, valid_dates, conflict_graph, exam_period
-                )
-
-                # Un-choose: remove the assignment so the next iteration starts clean
+                # Forward-check: prune if any still-unassigned course's domain is now empty
+                if self._forward_check(assignment, unassigned, valid_dates, conflict_graph):
+                    yield from self._backtrack(
+                        assignment, unassigned, valid_dates, conflict_graph, exam_period
+                    )
                 del assignment[course]
+
+        unassigned.add(course)   # restore for caller's backtrack
+
+    def _forward_check(
+        self,
+        assignment: dict[Course, date],
+        unassigned: set[Course],
+        valid_dates: list[date],
+        conflict_graph: dict[Course, set[Course]],
+    ) -> bool:
+        """Return False if any still-unassigned course has no valid date left.
+
+        Iterates `unassigned` (which already excludes the just-chosen course) so it
+        examines exactly the future courses — semantically equivalent to the old
+        remaining[next_index:] slice but without allocating a new list.
+
+        Cost: O(n × k) per call (n = remaining courses, k = average degree).
+        This overhead is negligible compared to the exponential subtrees it avoids
+        on dense conflict graphs with tight date windows.
+        """
+        for future in unassigned:
+            blocked_future = {assignment[nb] for nb in conflict_graph[future] if nb in assignment}
+            if all(d in blocked_future for d in valid_dates):
+                return False
+        return True

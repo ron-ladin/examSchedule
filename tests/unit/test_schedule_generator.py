@@ -171,6 +171,132 @@ def test_generator_respects_saturday_exclusion():
             assert d.weekday() != 5
 
 
+def test_dynamic_mcv_selects_most_constrained_at_each_step():
+    """Prove via spy that the dynamic MCV selects the most-constrained course at every step.
+
+    Scenario:
+      - ZZZZ has no conflicts (different year) — largest id, wins all ties at depth 0
+      - AAAA conflicts with BBBB (83101) and CCCC (83102)
+      - BBBB and CCCC do NOT conflict with each other (different programs)
+
+    Expected selection order per path (depth = len(assignment) when course is chosen):
+      depth 0: ZZZZ  — all tied at 0 blocked, tiebreaker (max c.id) picks ZZZZ
+      depth 1: CCCC  — ZZZZ has no neighbours, A/B/C all still at 0 blocked,
+                        tiebreaker picks CCCC (largest id among AAAA/BBBB/CCCC)
+      depth 2: AAAA  — CCCC is now assigned; AAAA has 1 blocked date (conflict with CCCC),
+                        BBBB has 0 blocked (different program from CCCC) → AAAA wins on primary key
+      depth 3: BBBB  — only BBBB remains
+    """
+    log: list[tuple[int, str]] = []  # (len(assignment), chosen course id)
+
+    class _SpyGenerator(ScheduleGenerator):
+        def _backtrack(self, assignment, unassigned, valid_dates, conflict_graph, exam_period):
+            if unassigned:
+                chosen = max(
+                    unassigned,
+                    key=lambda c: (
+                        len({assignment[n] for n in conflict_graph[c] if n in assignment}),
+                        c.id,
+                    ),
+                )
+                log.append((len(assignment), chosen.id))
+            yield from super()._backtrack(
+                assignment, unassigned, valid_dates, conflict_graph, exam_period
+            )
+
+    gen = _SpyGenerator(ExactConflictStrategy(["83101", "83102"]))
+    a = Course(id="AAAA", name="A", instructor="x", evaluation_type="Exam")
+    a.add_offering(CourseOffering("83101", 1, "FALL", "Obligatory"))
+    a.add_offering(CourseOffering("83102", 1, "FALL", "Obligatory"))
+    b = _make_course("BBBB", "83101", 1, "FALL", "Obligatory")
+    c = _make_course("CCCC", "83102", 1, "FALL", "Obligatory")
+    z = _make_course("ZZZZ", "83101", 2, "FALL", "Obligatory")  # different year → no conflicts
+
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 7))  # Mon / Tue / Wed
+    list(gen.generate_schedules([a, b, c, z], period))
+
+    assert log, "no selections recorded — generator yielded nothing"
+    assert all(cid == "ZZZZ" for depth, cid in log if depth == 0), \
+        "depth 0: expected ZZZZ (largest id, all tied at 0 blocked)"
+    assert all(cid == "CCCC" for depth, cid in log if depth == 1), \
+        "depth 1: expected CCCC (largest id among A/B/C, all still at 0 blocked)"
+    assert all(cid == "AAAA" for depth, cid in log if depth == 2), \
+        "depth 2: AAAA must be chosen (1 blocked date from CCCC conflict) over BBBB (0 blocked)"
+    assert all(cid == "BBBB" for depth, cid in log if depth == 3), \
+        "depth 3: BBBB is the only remaining course"
+
+
+def test_forward_check_proves_pruning_by_call_count():
+    """H2: prove forward-checking actually eliminates dead-branch recursion.
+
+    Scenario: 3 mutually-conflicting mandatory courses, 2 valid dates.
+    No valid schedule exists, but the two implementations reach that conclusion
+    via different paths (manually traced):
+
+    WITHOUT forward-checking — 5 _backtrack calls:
+      depth-0 (×1) → depth-1 for CCCC=Mon (×1) → depth-2 AAAA runs out of dates (×1)
+                    → depth-1 for CCCC=Tue (×1) → depth-2 AAAA runs out of dates (×1)
+
+    WITH forward-checking — 3 _backtrack calls:
+      depth-0 (×1) → depth-1 for CCCC=Mon: BBBB→Tue triggers FC (AAAA empty) → prune
+                    → depth-1 for CCCC=Tue: BBBB→Mon triggers FC (AAAA empty) → prune
+      depth-2 is never entered.
+
+    Both must produce identical (empty) schedule sets.
+    """
+    courses = [
+        _make_course("AAAA", "83101", 1, "FALL", "Obligatory"),
+        _make_course("BBBB", "83101", 1, "FALL", "Obligatory"),
+        _make_course("CCCC", "83101", 1, "FALL", "Obligatory"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 6))  # Mon + Tue only
+
+    counter: dict[str, int] = {"with_fc": 0, "no_fc": 0}
+
+    class _CountingGen(ScheduleGenerator):
+        def __init__(self, strategy, key: str) -> None:
+            super().__init__(strategy)
+            self._key = key
+
+        def _backtrack(self, assignment, unassigned, valid_dates, conflict_graph, exam_period):
+            counter[self._key] += 1
+            yield from super()._backtrack(
+                assignment, unassigned, valid_dates, conflict_graph, exam_period
+            )
+
+    class _NoFCGen(_CountingGen):
+        def _forward_check(self, *args, **kwargs) -> bool:  # type: ignore[override]
+            return True  # disable pruning — always recurse
+
+    strategy = ExactConflictStrategy(["83101"])
+    result_fc = list(_CountingGen(strategy, "with_fc").generate_schedules(courses, period))
+    result_no_fc = list(_NoFCGen(strategy, "no_fc").generate_schedules(courses, period))
+
+    assert result_fc == result_no_fc == [], "both should yield no schedules (impossible problem)"
+    assert counter["with_fc"] < counter["no_fc"], (
+        f"FC: {counter['with_fc']} calls, no-FC: {counter['no_fc']} — FC must prune"
+    )
+    assert counter["with_fc"] == 3, f"Expected 3 _backtrack calls with FC, got {counter['with_fc']}"
+    assert counter["no_fc"] == 5, f"Expected 5 _backtrack calls without FC, got {counter['no_fc']}"
+
+
+def test_forward_check_preserves_valid_schedules():
+    """H2 correctness: with FC enabled, all valid schedules are still found.
+
+    3 mutually-conflicting courses, 3 dates → exactly 6 valid schedules (3!).
+    FC must not prune any live branch.
+    """
+    gen = _generator(["83101"])
+    a = _make_course("AAAA", "83101", 1, "FALL", "Obligatory")
+    b = _make_course("BBBB", "83101", 1, "FALL", "Obligatory")
+    c = _make_course("CCCC", "83101", 1, "FALL", "Obligatory")
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 7))  # Mon + Tue + Wed
+    result = list(gen.generate_schedules([a, b, c], period))
+    assert len(result) == 6
+    for s in result:
+        assert len(set(s.assignments.values())) == 3  # all three on distinct dates
+
+
 # 3 independent program pairs × 2 conflicting courses × 10 weekdays
 # → (10×9)^3 = 729,000 valid schedules; sample 500 to verify invariant and speed
 def test_high_scale_combinatorial_stress():
