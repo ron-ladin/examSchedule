@@ -541,21 +541,6 @@ class LoadMoreController(QObject):
         else:
             should_continue_auto = False
 
-        # Anti-OOM guardrail: once the panel is holding the hard maximum number
-        # of schedules in RAM, refuse to continue Auto Load and disable the
-        # manual Load More button. The panel has already truncated the merge; we
-        # stop here so a user who keeps clicking cannot trigger an OOM kill.
-        if panel.is_at_memory_cap():
-            should_continue_auto = False
-            if btn:
-                btn.setEnabled(False)
-                btn.setText("Memory limit reached")
-            self.stop_auto_load(period_key, refresh=False)
-            logger.warning(
-                "In-memory schedule cap reached for %s; Load More disabled.",
-                period_key,
-            )
-
         self.cleanup_load_more_state(period_key)
         self.cardRefreshRequested.emit(period_key)
 

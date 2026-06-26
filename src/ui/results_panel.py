@@ -482,9 +482,9 @@ class _ResultsPanel(QWidget):
         if self._is_imported_schedule:
             return
 
-        # Disk-backed result storage: the UI keeps only current objects in RAM.
-        # Still enforce a high disk-cache ceiling so Auto Load cannot fill the
-        # user's drive forever.  If no store exists, fall back to the old RAM cap.
+        # Disk-backed result storage keeps only current objects in RAM and still
+        # enforces its disk-cache ceiling. Plain in-memory results append the
+        # whole returned batch; there is no artificial RAM cap.
         if self._schedule_store is not None:
             headroom = ABSOLUTE_MAX_STORED_SCHEDULES - self._schedule_store.total_count()
             if headroom <= 0:
@@ -499,25 +499,6 @@ class _ResultsPanel(QWidget):
                     "SQLite schedule cache cap (%s) reached; truncating batch for %s "
                     "from %s to %s schedules.",
                     ABSOLUTE_MAX_STORED_SCHEDULES,
-                    period_key,
-                    len(extra),
-                    headroom,
-                )
-                extra = extra[:headroom]
-        else:
-            headroom = ABSOLUTE_MAX_IN_MEMORY_SCHEDULES - self.total_in_memory_schedule_count()
-            if headroom <= 0:
-                logger.warning(
-                    "In-memory schedule cap (%s) reached; refusing further load for %s.",
-                    ABSOLUTE_MAX_IN_MEMORY_SCHEDULES,
-                    period_key,
-                )
-                return
-            if len(extra) > headroom:
-                logger.warning(
-                    "In-memory schedule cap (%s) reached; truncating batch for %s "
-                    "from %s to %s schedules.",
-                    ABSOLUTE_MAX_IN_MEMORY_SCHEDULES,
                     period_key,
                     len(extra),
                     headroom,
@@ -605,9 +586,11 @@ class _ResultsPanel(QWidget):
         return sum(len(scheds) for scheds in self._schedules_by_period.values())
 
     def is_at_memory_cap(self) -> bool:
-        """Return True once the active result cache has reached its safety cap."""
+        """Return True once the active disk-backed result cache reaches its cap."""
         if self._schedule_store is not None:
             return self._schedule_store.total_count() >= ABSOLUTE_MAX_STORED_SCHEDULES
+        if ABSOLUTE_MAX_IN_MEMORY_SCHEDULES is None:
+            return False
         return self.total_in_memory_schedule_count() >= ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
 
     def get_current_index(self, period_key: str) -> int:
