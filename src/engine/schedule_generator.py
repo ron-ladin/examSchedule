@@ -61,25 +61,27 @@ class ScheduleGenerator(IScheduleGenerator):
     ) -> Iterator[Schedule]:
         """Recursively assign dates to courses, yielding a Schedule when all are placed.
 
-        Classic backtracking — choose, explore, un-choose — with a dynamic
-        Most-Constrained-Variable heuristic: at each step we pick the unassigned
-        course whose current remaining domain (valid dates not blocked by already-
-        assigned conflicting neighbours) is smallest.  Choosing the tightest course
-        first surfaces failures early and prunes large dead subtrees without any
-        look-ahead cost beyond what the current assignment already tells us.
+        Classic backtracking — choose, explore, un-choose — with two pruning strategies:
 
-        `assignment` and `unassigned` are mutated in-place and fully restored after
-        each branch — O(n) memory regardless of how many schedules exist.
+        1. Dynamic MCV: at each step pick the unassigned course whose current remaining
+           domain (valid dates not blocked by already-assigned conflicting neighbours) is
+           smallest.  Ties are broken by course id for determinism (C2).  Choosing the
+           tightest course first surfaces failures early without any look-ahead cost.
+
+        2. Forward-checking (SCRUM-453): after each assignment verify that every still-
+           unassigned course retains at least one valid date.  If any future domain is
+           empty the branch cannot produce a valid schedule — prune it immediately.
+
+        `assignment` and `unassigned` are mutated in-place and fully restored after each
+        branch — O(n) memory regardless of how many schedules exist.
         """
         if not unassigned:
             yield Schedule(period=exam_period, assignments={c.id: d for c, d in assignment.items()})
             return
 
-        # Dynamic MCV: pick the course with the fewest remaining valid dates.
-        # blocked_count = number of distinct dates already taken by assigned neighbours.
-        # Maximising blocked_count is equivalent to minimising remaining domain size
-        # (remaining = len(valid_dates) − blocked_count) while being cheaper to compute:
-        # O(degree) per course instead of O(valid_dates × degree).
+        # Dynamic MCV + deterministic tiebreaker (C2):
+        # blocked_count = number of distinct dates taken by assigned neighbours.
+        # max(blocked_count) ≡ min(remaining domain); secondary key c.id breaks ties.
         course = max(
             unassigned,
             key=lambda c: (
@@ -87,13 +89,40 @@ class ScheduleGenerator(IScheduleGenerator):
                 c.id,
             ),
         )
-        unassigned.remove(course)
+        unassigned.remove(course)   # `unassigned` now contains exactly the future courses
 
         blocked = {assignment[n] for n in conflict_graph[course] if n in assignment}
         for d in valid_dates:
             if d not in blocked:
                 assignment[course] = d
-                yield from self._backtrack(assignment, unassigned, valid_dates, conflict_graph, exam_period)
+                # Forward-check: prune if any still-unassigned course's domain is now empty
+                if self._forward_check(assignment, unassigned, valid_dates, conflict_graph):
+                    yield from self._backtrack(
+                        assignment, unassigned, valid_dates, conflict_graph, exam_period
+                    )
                 del assignment[course]
 
-        unassigned.add(course)
+        unassigned.add(course)   # restore for caller's backtrack
+
+    def _forward_check(
+        self,
+        assignment: dict[Course, date],
+        unassigned: set[Course],
+        valid_dates: list[date],
+        conflict_graph: dict[Course, set[Course]],
+    ) -> bool:
+        """Return False if any still-unassigned course has no valid date left.
+
+        Iterates `unassigned` (which already excludes the just-chosen course) so it
+        examines exactly the future courses — semantically equivalent to the old
+        remaining[next_index:] slice but without allocating a new list.
+
+        Cost: O(n × k) per call (n = remaining courses, k = average degree).
+        This overhead is negligible compared to the exponential subtrees it avoids
+        on dense conflict graphs with tight date windows.
+        """
+        for future in unassigned:
+            blocked_future = {assignment[nb] for nb in conflict_graph[future] if nb in assignment}
+            if all(d in blocked_future for d in valid_dates):
+                return False
+        return True
