@@ -32,6 +32,19 @@ class PlacementConstraintSet:
     def __init__(self, constraints: Iterable[PlacementConstraint]) -> None:
         self._constraints = list(constraints)
 
+    @property
+    def is_empty(self) -> bool:
+        """Return True when no placement constraints are active.
+
+        Schedule generation can use this as a fast path to skip all
+        constraint-related checks when thresholds are disabled.
+        """
+        return not self._constraints
+
+    def __bool__(self) -> bool:
+        """Return True when at least one placement constraint is active."""
+        return bool(self._constraints)
+
     @classmethod
     def build(
         cls,
