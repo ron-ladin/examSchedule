@@ -967,6 +967,7 @@ def test_soft_warning_fires_once_and_does_not_kill():
 
 
 def test_worker_hard_timeout_terminates_all_workers():
+    # Each poll handles one timeout; two polls are needed for two timed-out workers.
     poller = _new_poller()
     failed = _collect(poller.generation_failed)
     now = time.monotonic()
@@ -983,7 +984,10 @@ def test_worker_hard_timeout_terminates_all_workers():
         started_at=now - (gp._HARD_KILL_GEN_SECS + 5),
     )
 
-    poller._poll(run_id)
+    poller._poll(run_id)  # drops first timed-out period
+    assert failed == []   # run still alive after first drop
+
+    poller._poll(run_id)  # drops second; all periods timed out → fail
 
     assert len(failed) == 1
     assert state_a.process.terminated == 1
@@ -1049,7 +1053,9 @@ def test_late_started_worker_receives_full_hard_timeout(monkeypatch):
     assert state.process.terminated == 1
 
 
-def test_old_worker_timeout_fails_run_while_new_worker_has_budget(monkeypatch):
+def test_timed_out_worker_dropped_while_other_has_budget(monkeypatch):
+    # The old worker times out and is dropped; the new worker still has its full
+    # budget and the run continues — no failure is emitted.
     now = gp._HARD_KILL_GEN_SECS + 1.0
     monkeypatch.setattr(gp.time, "monotonic", lambda: now)
     poller = _new_poller()
@@ -1064,13 +1070,16 @@ def test_old_worker_timeout_fails_run_while_new_worker_has_budget(monkeypatch):
 
     poller._poll(run_id)
 
-    assert len(failed) == 1
-    assert old_state.process.terminated == 1
-    assert new_state.process.terminated == 1
-    assert poller._workers == {}
+    assert failed == []
+    assert old_state.process.terminated == 1  # old worker killed
+    assert new_state.process.terminated == 0  # new worker untouched
+    assert "A" not in poller._workers         # old period retired
+    assert "B" in poller._workers             # new period still running
+    poller.stop()
 
 
 def test_multiple_worker_timeouts_emit_one_failure(monkeypatch):
+    # Each poll drops one period; all three time out → exactly one failure total.
     now = gp._HARD_KILL_GEN_SECS + 10.0
     monkeypatch.setattr(gp.time, "monotonic", lambda: now)
     poller = _new_poller()
@@ -1079,10 +1088,71 @@ def test_multiple_worker_timeouts_emit_one_failure(monkeypatch):
     _run_id, _state_b = _arm_worker(poller, "B", alive=True, started_at=0.0)
     _run_id, _state_c = _arm_worker(poller, "C", alive=True, started_at=0.0)
 
-    poller._poll(run_id)
-    poller._poll(run_id)
+    poller._poll(run_id)   # drops A
+    poller._poll(run_id)   # drops B
+    poller._poll(run_id)   # drops C → all timed out → fail
 
     assert len(failed) == 1
+    assert poller._active_run_id is None
+
+
+def test_timed_out_period_is_dropped_and_run_continues():
+    """SCRUM-450 acceptance test: one worker times out, remaining worker finishes,
+    success is emitted once, a warning naming the timed-out period is emitted,
+    no duplicate terminal signal is produced."""
+    poller = _new_poller()
+    failed = _collect(poller.generation_failed)
+    succeeded = _collect(poller.generation_succeeded)
+    warnings = _collect(poller.generation_warning)
+    now = time.monotonic()
+
+    run_id, slow_state = _arm_worker(
+        poller,
+        "FALL - Aleph",
+        alive=True,
+        started_at=now - (gp._HARD_KILL_GEN_SECS + 5),
+    )
+    _run_id, fast_state = _arm_worker(poller, "FALL - Bet", alive=True)
+    fast_state.queue.put(GenerationResult.ok({"FALL - Bet": []}, {}, set()))
+    fast_state.queue.put(GenerationDone.done(set(), period_key="FALL - Bet"))
+    fast_state.process.finish(0)
+
+    # One poll: drains fast worker's partial + done, then detects slow worker timeout.
+    poller._poll(run_id)
+
+    assert failed == []
+    assert len(succeeded) == 1
+    assert any("FALL - Aleph" in w for w in warnings)
+    assert slow_state.process.terminated == 1  # timed-out worker was killed
+    assert poller._active_run_id is None        # run closed cleanly
+
+
+def test_all_periods_timed_out_fails_run():
+    """When every period times out and no results were produced, fail the run."""
+    poller = _new_poller()
+    failed = _collect(poller.generation_failed)
+    succeeded = _collect(poller.generation_succeeded)
+    now = time.monotonic()
+
+    run_id, state_a = _arm_worker(
+        poller,
+        "FALL - Aleph",
+        alive=True,
+        started_at=now - (gp._HARD_KILL_GEN_SECS + 5),
+    )
+    _run_id, state_b = _arm_worker(
+        poller,
+        "FALL - Bet",
+        alive=True,
+        started_at=now - (gp._HARD_KILL_GEN_SECS + 5),
+    )
+
+    poller._poll(run_id)  # drops first period
+    poller._poll(run_id)  # drops second → all timed out → fail
+
+    assert succeeded == []
+    assert len(failed) == 1
+    assert "timed out" in failed[0].lower()
     assert poller._active_run_id is None
 
 
@@ -1493,7 +1563,8 @@ def test_cleanup_kills_only_workers_still_alive_after_terminate():
     assert stubborn.killed == 1
 
 
-def test_every_queue_closes_after_timeout():
+def test_timed_out_worker_queue_closes_and_other_queue_stays_open():
+    # A times out and is dropped (its queue closed); B still has budget and runs on.
     poller = _new_poller()
     failed = _collect(poller.generation_failed)
     now = time.monotonic()
@@ -1514,9 +1585,10 @@ def test_every_queue_closes_after_timeout():
 
     poller._poll(run_id)
 
-    assert len(failed) == 1
-    assert queue_a.closed is True
-    assert queue_b.closed is True
+    assert failed == []          # run still alive — B is still working
+    assert queue_a.closed is True   # timed-out worker's queue released
+    assert queue_b.closed is False  # continuing worker's queue intact
+    poller.stop()
 
 
 def test_every_queue_closes_after_restart(monkeypatch):
