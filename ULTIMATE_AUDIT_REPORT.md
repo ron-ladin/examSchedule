@@ -1,10 +1,10 @@
 # Ultimate Audit Report — examSchedule
 
-**Date:** 2026-06-23  
+**Date:** 2026-06-23 (audit snapshot); current test count updated 2026-06-26 after PR #104 and PR #107  
 **Branch:** `chore/ultimate-audit` → **follow-up refactor on same branch** (2026-06-23)  
 **Auditor role:** Principal Staff Engineer / Lead SDET / Chief Software Architect  
-**Test baseline (full env, PyQt6 installed):** 557 passed, 0 failed, 0 skipped  
-**Test result after all fixes:** 557 passed / 0 skipped with PyQt6 (92.01% cov); 491 passed / 5 skipped headless without PyQt6 (90.97% cov) ✅
+**Test baseline (full env, PyQt6 installed):** 557 passed, 0 failed, 0 skipped *(at audit date; see note)*  
+**Test result after all fixes:** 727 passed, 0 failed with PyQt6 ✅ *(557 at audit snapshot; grew to 727 after PR #104 deduplication+parametrize and PR #107 multiprocessing regressions)*
 
 ---
 
@@ -116,7 +116,7 @@ Both `threshold_filter.py` and `sorting_engine.py` now import from `schedule_met
 ## Phase 5 — Testing Suite Integrity
 
 ### Results
-- **557 tests, 0 failures, 0 skipped** with PyQt6 installed — **92.01%** line coverage. Headless without PyQt6: **491 passed, 5 skipped, 90.97%** (reads ~91%). The 5 skips are PyQt-dependent GUI test **modules** skipped at import time because the PyQt6 native GUI libraries are unavailable (`test_ui_smoke.py`, `test_programme_courses_dialog.py`, `test_ui_controller_integration.py`, `test_ui_import_schedule.py`, `test_ui_engine_stress.py`); their individual cases are then uncollected, leaving 491 of 557. They run in the full GUI/CI environment. ✅
+- **727 tests, 0 failures** with PyQt6 installed (2026-06-26). *(At audit snapshot 2026-06-23: 557 passed, 92.01% coverage; grew to 727 after PR #104 parametrize deduplication and PR #107 multiprocessing regression tests.)* GUI-dependent tests are PyQt6-gated and skipped in headless environments. ✅
 
 ### Coverage of edge cases
 - `test_schedule_generator.py` covers empty course list, single course, full conflict graph. ✅
@@ -189,7 +189,7 @@ All criteria negate the score in `sort_key()` to achieve descending order via `s
 | pytest CI deadlock risk | ⚠️ WATCH | No `pytest-timeout` used (feature dropped); suite runs cleanly. Monitor on CI |
 | Typing modernization | ✅ FIXED | All `typing.List/Dict/Tuple/Optional` → builtins across domain/ |
 | Oversized files | ⚠️ DEBT | 6 files exceed 500-line limit (UI code freeze — deferred) |
-| Test suite | ✅ 557/557 (full) · 491/491 (headless) | No regressions; GUI tests PyQt6-gated, 5 e2e data-gated |
+| Test suite | ✅ 727/727 (full, 2026-06-26) | No regressions; GUI tests PyQt6-gated, e2e data-gated |
 
 ---
 

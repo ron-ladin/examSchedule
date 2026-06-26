@@ -91,9 +91,8 @@ SORT
 
 ## Slide 7 — Architecture: Where the Code Lives
 
-> **⚠️ Proposed (PR #80 — not yet merged):** The lazy `AppController` wiring shown
-> below is the design from SCRUM-261. The currently merged code filters
-> post-materialisation in `controller.py`. This slide reflects the target architecture.
+> **Architecture (SCRUM-261 — merged):** Lazy `AppController` wiring — invalid
+> schedules are filtered before materialisation, never held in RAM.
 
 ```
 AppController.run()
@@ -175,10 +174,10 @@ Feature is optional and toggle-gated — existing workflow unchanged when off.
 
 ## Slide 13 — Testing
 
-- **456 tests** — all pass, 0 failures (as of 2026-06-17)
+- **727 tests** — all pass, 0 failures (as of 2026-06-26)
 - **≥ 85 % coverage** (excluding UI layer)
 - New tests for Feature 3: threshold criteria, sorting engine, settings reader, pipeline integration
-- New tests for Feature 4 scaffolding: classroom/proctor domain validation, file readers
+- New tests for Feature 4: ClassroomAssigner, proctor report, UI integration, multiprocessing regressions
 
 Testing philosophy:
 - Unit tests use fakes and stubs — no real files, no database
@@ -187,12 +186,12 @@ Testing philosophy:
 
 ---
 
-## Slide 14 — What's Next
+## Slide 14 — Sprint 3 Completed
 
-- Complete `ClassroomAssigner` (SCRUM-266)
-- Wire classroom assignment into the pipeline (SCRUM-267)
-- UI: Feature 4 inputs and proctor report dialog (SCRUM-268)
-- Tests for ClassroomAssigner and adapters (SCRUM-269)
+- ✅ `ClassroomAssigner` — capacity splitting, slot assignment, proctor calculation (SCRUM-266)
+- ✅ Pipeline integration — Feature 4 wired into generation flow (SCRUM-267)
+- ✅ UI — Feature 4 toggle, classroom/slots/ratio inputs, proctor report dialog (SCRUM-268)
+- ✅ Tests — ClassroomAssigner, adapters, and UI integration (SCRUM-269)
 
 ---
 
