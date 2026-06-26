@@ -2,17 +2,15 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
-from itertools import combinations
 
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
+from src.domain.placement_constraint import PlacementConstraintSet
 from src.domain.schedule import Schedule
-from src.domain.schedule_metrics import relevant_offerings
-from src.domain.threshold import Criterion, ThresholdSettings
+from src.domain.threshold import ThresholdSettings
 from src.interfaces.i_conflict_strategy import IConflictStrategy
 from src.interfaces.i_schedule_generator import IScheduleGenerator
 
@@ -31,18 +29,6 @@ class GenerationMetrics:
     threshold_prunes: int = 0
     prefiltered_candidates_removed: int = 0
     elapsed_seconds: float = 0.0
-
-
-@dataclass(frozen=True)
-class _ThresholdContext:
-    max_exams_per_day: int | None
-    max_elective_collisions: int | None
-    min_days_mandatory: int | None
-    min_days_any: int | None
-    mandatory_groups_by_course: dict[Course, tuple[tuple[str, int], ...]]
-    all_groups_by_course: dict[Course, tuple[tuple[str, int], ...]]
-    elective_programs_by_course: dict[Course, tuple[str, ...]]
-
 
 class ScheduleGenerator(IScheduleGenerator):
     """Generates all conflict-free exam schedules via lazy backtracking."""
@@ -105,7 +91,12 @@ class ScheduleGenerator(IScheduleGenerator):
             return iter(())
 
         original_order = {course: index for index, course in enumerate(courses)}
-        threshold_context = self._build_threshold_context(courses, exam_period)
+        constraints = PlacementConstraintSet.build(
+            self._threshold_settings,
+            courses,
+            self._selected_programs,
+            exam_period,
+        )
 
         def _iterator() -> Iterator[Schedule]:
             try:
@@ -117,7 +108,7 @@ class ScheduleGenerator(IScheduleGenerator):
                     original_order=original_order,
                     exam_period=exam_period,
                     metrics=metrics,
-                    threshold_context=threshold_context,
+                    constraints=constraints,
                 )
             finally:
                 metrics.elapsed_seconds = time.monotonic() - started
@@ -152,7 +143,7 @@ class ScheduleGenerator(IScheduleGenerator):
         original_order: dict[Course, int],
         exam_period: ExamPeriod,
         metrics: GenerationMetrics,
-        threshold_context: _ThresholdContext,
+        constraints: PlacementConstraintSet,
     ) -> Iterator[Schedule]:
         metrics.nodes_visited += 1
 
@@ -179,39 +170,49 @@ class ScheduleGenerator(IScheduleGenerator):
         next_unassigned.remove(course)
 
         for exam_date in candidate_dates:
-            assignment[course] = exam_date
-
-            if not self._partial_thresholds_are_safe(assignment, threshold_context):
+            if constraints and not constraints.allows(course, exam_date):
                 metrics.threshold_prunes += 1
-                del assignment[course]
                 continue
 
-            next_domains = domains
-            if next_unassigned:
-                next_domains = dict(domains)
-                if not self._forward_check_domains(
-                    course,
-                    exam_date,
+            assignment[course] = exam_date
+            if constraints:
+                constraints.record(course, exam_date)
+
+            try:
+                next_domains = domains
+                if next_unassigned:
+                    next_domains = dict(domains)
+                    if not self._forward_check_domains(
+                        course,
+                        exam_date,
+                        next_unassigned,
+                        next_domains,
+                        conflict_graph,
+                        metrics,
+                    ):
+                        continue
+                    if constraints and not self._forward_check_constraints(
+                        next_unassigned,
+                        next_domains,
+                        constraints,
+                        metrics,
+                    ):
+                        continue
+
+                yield from self._backtrack(
+                    assignment,
                     next_unassigned,
                     next_domains,
                     conflict_graph,
+                    original_order,
+                    exam_period,
                     metrics,
-                ):
-                    del assignment[course]
-                    continue
-
-            yield from self._backtrack(
-                assignment,
-                next_unassigned,
-                next_domains,
-                conflict_graph,
-                original_order,
-                exam_period,
-                metrics,
-                threshold_context,
-            )
-
-            del assignment[course]
+                    constraints,
+                )
+            finally:
+                if constraints:
+                    constraints.undo(course, exam_date)
+                del assignment[course]
 
     def _select_next_course(
         self,
@@ -256,131 +257,29 @@ class ScheduleGenerator(IScheduleGenerator):
 
         return True
 
-    def _build_threshold_context(
+    def _forward_check_constraints(
         self,
-        courses: list[Course],
-        exam_period: ExamPeriod,
-    ) -> _ThresholdContext:
-        entries = {
-            entry.criterion: entry.k
-            for entry in self._threshold_settings.entries
-            if entry.enabled
-        }
-        prog_set = set(self._selected_programs)
-
-        mandatory_groups_by_course: dict[Course, tuple[tuple[str, int], ...]] = {}
-        all_groups_by_course: dict[Course, tuple[tuple[str, int], ...]] = {}
-        elective_programs_by_course: dict[Course, tuple[str, ...]] = {}
-
-        for course in courses:
-            mandatory_groups: set[tuple[str, int]] = set()
-            all_groups: set[tuple[str, int]] = set()
-            elective_programs: set[str] = set()
-
-            for offering in relevant_offerings(course, prog_set, exam_period.semester):
-                group = (offering.program_id, offering.year)
-                all_groups.add(group)
-                if offering.requirement.strip().lower() == "obligatory":
-                    mandatory_groups.add(group)
-                elif offering.requirement.strip().lower() == "elective":
-                    elective_programs.add(offering.program_id)
-
-            mandatory_groups_by_course[course] = tuple(sorted(mandatory_groups))
-            all_groups_by_course[course] = tuple(sorted(all_groups))
-            elective_programs_by_course[course] = tuple(sorted(elective_programs))
-
-        return _ThresholdContext(
-            max_exams_per_day=entries.get(Criterion.MAX_EXAMS_PER_DAY),
-            max_elective_collisions=entries.get(Criterion.MAX_ELECTIVE_COLLISIONS),
-            min_days_mandatory=entries.get(
-                Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS
-            ),
-            min_days_any=entries.get(Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS),
-            mandatory_groups_by_course=mandatory_groups_by_course,
-            all_groups_by_course=all_groups_by_course,
-            elective_programs_by_course=elective_programs_by_course,
-        )
-
-    def _partial_thresholds_are_safe(
-        self,
-        assignment: dict[Course, date],
-        context: _ThresholdContext,
+        unassigned: set[Course],
+        domains: dict[Course, tuple[date, ...]],
+        constraints: PlacementConstraintSet,
+        metrics: GenerationMetrics,
     ) -> bool:
-        if context.max_exams_per_day is not None:
-            day_counts = Counter(assignment.values())
-            if day_counts and max(day_counts.values()) > context.max_exams_per_day:
+        for future_course in unassigned:
+            domain = domains[future_course]
+            reduced = tuple(
+                day for day in domain
+                if constraints.allows(future_course, day)
+            )
+            removed = len(domain) - len(reduced)
+            if removed:
+                metrics.threshold_prunes += removed
+
+            if not reduced:
+                metrics.domain_prunes += 1
                 return False
 
-        if (
-            context.min_days_mandatory is not None
-            and not self._group_gaps_are_safe(
-                assignment,
-                context.mandatory_groups_by_course,
-                context.min_days_mandatory,
-            )
-        ):
-            return False
-
-        if (
-            context.min_days_any is not None
-            and not self._group_gaps_are_safe(
-                assignment,
-                context.all_groups_by_course,
-                context.min_days_any,
-            )
-        ):
-            return False
-
-        if (
-            context.max_elective_collisions is not None
-            and not self._elective_collisions_are_safe(
-                assignment,
-                context.elective_programs_by_course,
-                context.max_elective_collisions,
-            )
-        ):
-            return False
-
-        return True
-
-    def _group_gaps_are_safe(
-        self,
-        assignment: dict[Course, date],
-        groups_by_course: dict[Course, tuple[tuple[str, int], ...]],
-        min_days: int,
-    ) -> bool:
-        dates_by_group: dict[tuple[str, int], list[date]] = {}
-        for course, exam_date in assignment.items():
-            for group in groups_by_course[course]:
-                dates_by_group.setdefault(group, []).append(exam_date)
-
-        for dates in dates_by_group.values():
-            if len(dates) < 2:
-                continue
-            for first, second in combinations(dates, 2):
-                if abs((second - first).days) < min_days:
-                    return False
-
-        return True
-
-    def _elective_collisions_are_safe(
-        self,
-        assignment: dict[Course, date],
-        elective_programs_by_course: dict[Course, tuple[str, ...]],
-        max_collisions: int,
-    ) -> bool:
-        dates_by_program: dict[str, list[date]] = {}
-        for course, exam_date in assignment.items():
-            for program_id in elective_programs_by_course[course]:
-                dates_by_program.setdefault(program_id, []).append(exam_date)
-
-        for dates in dates_by_program.values():
-            collisions = sum(
-                1 for first, second in combinations(dates, 2)
-                if first == second
-            )
-            if collisions > max_collisions:
-                return False
+            if removed:
+                domains[future_course] = reduced
 
         return True
 
