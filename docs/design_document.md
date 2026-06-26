@@ -211,3 +211,20 @@ Format to be defined in SCRUM-266.
 
 **Decision:** Re-sorting does not re-run the CSP engine.  
 **Rationale:** Re-running the engine for a sort change would be prohibitively expensive for large faculties. The threshold-valid schedules are cached in `_last_results` and can be re-ranked in O(n log n) without touching the engine.
+
+### AD-6: Timed-out period is dropped instead of failing the whole run (SCRUM-450)
+
+**Context:** PR #107 introduced a bounded pool of parallel per-period worker processes in `GenerationPoller`. Before this change there was a single worker process, so a hard timeout killing it cleanly ended the only active generation. With parallel workers a single stuck period used to terminate all other workers via `_fail()`, discarding already-completed results.
+
+**Decision:** When a worker exceeds `_HARD_KILL_GEN_SECS`, only that period is dropped. The worker is killed, its period key is recorded in `_timed_out_periods`, the period is retired as "completed", and the remaining workers continue. If at least one other period produced results the run succeeds and `generation_warning` names the timed-out period(s). If every period times out and no results were produced the run still fails via `_fail()` so the user is not silently shown an empty result.
+
+**Pros:**
+- Users see partial results instead of a total failure when one period is pathologically slow.
+- Already-completed parallel workers are not wasted.
+- Non-fatal: the user can inspect available schedules and retry generation with adjusted settings.
+
+**Cons:**
+- The user must notice the warning to realise one period is missing.
+- Partial success changes the previous contract (timeout → always fail); callers that relied on the failure path for error recovery must now also handle the `generation_warning` signal.
+
+**All-timeout policy:** If `_timed_out_periods == _expected_period_keys` (every period timed out) the run calls `_fail()` with message "All exam periods timed out. No schedules were generated." This avoids silent empty-result success.
