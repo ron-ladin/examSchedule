@@ -82,7 +82,10 @@ class ScheduleGenerator(IScheduleGenerator):
         # O(degree) per course instead of O(valid_dates × degree).
         course = max(
             unassigned,
-            key=lambda c: len({assignment[n] for n in conflict_graph[c] if n in assignment}),
+            key=lambda c: (
+                len({assignment[n] for n in conflict_graph[c] if n in assignment}),
+                c.id,
+            ),
         )
         unassigned.remove(course)
 

@@ -171,33 +171,59 @@ def test_generator_respects_saturday_exclusion():
             assert d.weekday() != 5
 
 
-def test_dynamic_mcv_picks_most_constrained_first():
-    """Dynamic MCV must assign the course with the smallest remaining domain first.
+def test_dynamic_mcv_selects_most_constrained_at_each_step():
+    """Prove via spy that the dynamic MCV selects the most-constrained course at every step.
 
-    Setup: A conflicts with B and C (degree 2); D has no conflicts (degree 0).
-    After the conflict graph is built, A's initial domain is 2 dates (both available),
-    but B and C together block 0 dates at the start.  The tiebreaker is irrelevant here;
-    what matters is that the generated schedules are still valid (no constraint violated)
-    and that the total count matches the exhaustive expectation.
+    Scenario:
+      - ZZZZ has no conflicts (different year) — largest id, wins all ties at depth 0
+      - AAAA conflicts with BBBB (83101) and CCCC (83102)
+      - BBBB and CCCC do NOT conflict with each other (different programs)
+
+    Expected selection order per path (depth = len(assignment) when course is chosen):
+      depth 0: ZZZZ  — all tied at 0 blocked, tiebreaker (max c.id) picks ZZZZ
+      depth 1: CCCC  — ZZZZ has no neighbours, A/B/C all still at 0 blocked,
+                        tiebreaker picks CCCC (largest id among AAAA/BBBB/CCCC)
+      depth 2: AAAA  — CCCC is now assigned; AAAA has 1 blocked date (conflict with CCCC),
+                        BBBB has 0 blocked (different program from CCCC) → AAAA wins on primary key
+      depth 3: BBBB  — only BBBB remains
     """
-    gen = _generator(["83101", "83102"])
+    log: list[tuple[int, str]] = []  # (len(assignment), chosen course id)
+
+    class _SpyGenerator(ScheduleGenerator):
+        def _backtrack(self, assignment, unassigned, valid_dates, conflict_graph, exam_period):
+            if unassigned:
+                chosen = max(
+                    unassigned,
+                    key=lambda c: (
+                        len({assignment[n] for n in conflict_graph[c] if n in assignment}),
+                        c.id,
+                    ),
+                )
+                log.append((len(assignment), chosen.id))
+            yield from super()._backtrack(
+                assignment, unassigned, valid_dates, conflict_graph, exam_period
+            )
+
+    gen = _SpyGenerator(ExactConflictStrategy(["83101", "83102"]))
     a = Course(id="AAAA", name="A", instructor="x", evaluation_type="Exam")
     a.add_offering(CourseOffering("83101", 1, "FALL", "Obligatory"))
     a.add_offering(CourseOffering("83102", 1, "FALL", "Obligatory"))
-    b = _make_course("BBBB", "83101", 1, "FALL", "Obligatory")  # conflicts with A
-    c = _make_course("CCCC", "83102", 1, "FALL", "Obligatory")  # conflicts with A
-    d = _make_course("DDDD", "83101", 2, "FALL", "Obligatory")  # no conflict with anyone
+    b = _make_course("BBBB", "83101", 1, "FALL", "Obligatory")
+    c = _make_course("CCCC", "83102", 1, "FALL", "Obligatory")
+    z = _make_course("ZZZZ", "83101", 2, "FALL", "Obligatory")  # different year → no conflicts
 
-    period = _make_period(date(2026, 1, 5), date(2026, 1, 7))  # Mon/Tue/Wed = 3 dates
-    schedules = list(gen.generate_schedules([a, b, c, d], period))
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 7))  # Mon / Tue / Wed
+    list(gen.generate_schedules([a, b, c, z], period))
 
-    # Verify all schedules are conflict-free
-    for s in schedules:
-        assert s.assignments["AAAA"] != s.assignments["BBBB"]
-        assert s.assignments["AAAA"] != s.assignments["CCCC"]
-        # B and C do not conflict — they may share a date
-
-    assert len(schedules) > 0
+    assert log, "no selections recorded — generator yielded nothing"
+    assert all(cid == "ZZZZ" for depth, cid in log if depth == 0), \
+        "depth 0: expected ZZZZ (largest id, all tied at 0 blocked)"
+    assert all(cid == "CCCC" for depth, cid in log if depth == 1), \
+        "depth 1: expected CCCC (largest id among A/B/C, all still at 0 blocked)"
+    assert all(cid == "AAAA" for depth, cid in log if depth == 2), \
+        "depth 2: AAAA must be chosen (1 blocked date from CCCC conflict) over BBBB (0 blocked)"
+    assert all(cid == "BBBB" for depth, cid in log if depth == 3), \
+        "depth 3: BBBB is the only remaining course"
 
 
 # 3 independent program pairs × 2 conflicting courses × 10 weekdays
