@@ -19,9 +19,7 @@ from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
 from src.domain.exam_period import ExamPeriod
-from src.domain.proctor import ProctorConfig
 from src.domain.semester import normalize_semester
-from src.domain.time_slot import TimeSlot
 
 
 class UnplaceableExam(NamedTuple):
@@ -168,8 +166,6 @@ class Feature4Validator:
     def unplaceable_exams(
         courses: list[Course],
         classrooms: list[Classroom],
-        slots: list[TimeSlot],
-        proctor_config: ProctorConfig,
     ) -> list[UnplaceableExam]:
         """Structural pre-flight: exams that cannot fit in any room arrangement.
 
@@ -183,12 +179,13 @@ class Feature4Validator:
         selection. Offerings in different semesters are distinct sessions and are
         never summed together.
 
-        ``slots`` and ``proctor_config`` are part of the assignment context so
-        callers pass the same bundle they hand to ClassroomAssigner; capacity is
-        the only structural limit, so they do not change which exams are flagged.
+        This is a capacity-only structural check, so it deliberately depends on
+        nothing but ``courses`` and ``classrooms``. Time slots and proctor config
+        belong to the *runtime* assignment phase (ClassroomAssigner) and do not
+        change which exams are structurally un-placeable, so they are not
+        parameters here — that keeps the validation layer decoupled from the
+        full assignment context.
         """
-        del slots, proctor_config  # accepted for call-site parity; capacity-only check
-
         max_usable_capacity = sum(room.usable_capacity for room in classrooms)
 
         unplaceable: list[UnplaceableExam] = []

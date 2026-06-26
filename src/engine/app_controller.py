@@ -36,8 +36,12 @@ from collections.abc import Iterator
 
 from src.domain.interfaces import IThresholdFilter
 from src.domain.classroom import Classroom
-from src.domain.course import Course
 from src.domain.feature4_validator import Feature4Validator
+from src.domain.partial_placement_policy import (
+    PartialPlacementDecision,
+    PartialPlacementPolicy,
+    PlacementFailureReason,
+)
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.threshold import ThresholdSettings
@@ -194,29 +198,21 @@ class AppController:
                 )
 
             if self._classrooms and self._time_slots and self._proctor_config:
-                # "Always place what you can, flag the gap": when an exam is
-                # structurally too large for any room arrangement, force the
-                # unassigned fallback for this period instead of letting one
-                # un-placeable exam blank the entire solution space. The fallback
-                # only fires for exams with zero assignable room combinations, so
-                # placeable exams are still fully room-mapped (SCRUM-390).
+                # "Always place what you can, flag the gap" (SCRUM-390). The
+                # business rule of whether/why this period must use the unassigned
+                # fallback lives in PartialPlacementPolicy; the controller only
+                # orchestrates. A structurally oversized exam is detected here by
+                # a pure, capacity-only pre-flight so one un-placeable exam never
+                # blanks the entire solution space.
                 unplaceable = Feature4Validator.unplaceable_exams(
                     relevant_courses,
                     self._classrooms,
-                    self._time_slots,
-                    self._proctor_config,
                 )
-                if unplaceable:
-                    logger.warning(
-                        "Period %s: %d exam(s) exceed total usable room capacity; "
-                        "routing through unassigned fallback: %s",
-                        period_key,
-                        len(unplaceable),
-                        ", ".join(exam.course_id for exam in unplaceable),
-                    )
-                effective_allow_unassigned = (
-                    self._allow_unassigned_classrooms or bool(unplaceable)
+                decision = PartialPlacementPolicy.decide(
+                    self._allow_unassigned_classrooms,
+                    unplaceable,
                 )
+                self._log_partial_placement(period_key, decision)
 
                 schedule_iter = _apply_classroom_assignment(
                     schedule_iter,
@@ -225,7 +221,7 @@ class AppController:
                     self._classrooms,
                     self._time_slots,
                     self._proctor_config,
-                    effective_allow_unassigned,
+                    decision.allow_unassigned,
                     self._classroom_variant_mode,
                 )
 
@@ -233,6 +229,39 @@ class AppController:
 
         self._exporter.export_schedules(schedules_by_period, courses_by_id)
         logger.info("Export complete")
+
+    def _log_partial_placement(
+        self,
+        period_key: str,
+        decision: PartialPlacementDecision,
+    ) -> None:
+        """Emit structured diagnostics when a period uses the partial fallback.
+
+        Structural shortfalls are known up front, so each one is logged with full
+        per-exam detail (course id/name, student count, max usable capacity, and
+        the failure reason). Runtime assignment failures only surface later while
+        the exporter consumes the lazy iterator, so here we record that the period
+        has the runtime fallback enabled rather than the individual exams.
+        """
+        for exam in decision.unplaceable_exams:
+            logger.warning(
+                "Partial placement: period=%s reason=%s course_id=%s "
+                "course_name=%s student_count=%d max_usable_capacity=%d",
+                period_key,
+                PlacementFailureReason.STRUCTURAL_CAPACITY_SHORTFALL.value,
+                exam.course_id,
+                exam.name,
+                exam.student_count,
+                exam.max_usable_capacity,
+            )
+
+        if decision.reason is PlacementFailureReason.RUNTIME_ASSIGNMENT_FAILURE:
+            logger.info(
+                "Partial placement enabled for period=%s reason=%s: exams with no "
+                "valid room combination at assignment time will be flagged unassigned",
+                period_key,
+                decision.reason.value,
+            )
 
     def _sort_exam_periods(self, exam_periods):
         semester_order = {"FALL": 1, "SPRI": 2, "SUMM": 3}
