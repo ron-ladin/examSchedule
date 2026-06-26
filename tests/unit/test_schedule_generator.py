@@ -304,6 +304,65 @@ def test_safe_threshold_pruning_matches_final_threshold_filter():
     assert gen.last_metrics.threshold_prunes > 0
 
 
+def test_all_threshold_criteria_off_matches_unfiltered_bruteforce():
+    courses = [
+        _make_course("11111", "83101", 1, "FALL", "Obligatory"),
+        _make_course("22222", "83101", 1, "FALL", "Obligatory"),
+        _make_course("33333", "83101", 1, "FALL", "Elective"),
+        _make_course("44444", "83102", 2, "FALL", "Elective"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 7))
+    selected_programs = ["83101", "83102"]
+    settings = ThresholdSettings(
+        entries=tuple(
+            ThresholdEntry(criterion, False, 1)
+            for criterion in Criterion
+        )
+    )
+    gen = ScheduleGenerator(
+        ExactConflictStrategy(selected_programs),
+        threshold_settings=settings,
+        selected_programs=selected_programs,
+    )
+
+    optimized = list(gen.generate_schedules(courses, period))
+    brute_force = _brute_force_schedules(courses, period, selected_programs)
+
+    assert {_schedule_signature(schedule) for schedule in optimized} == {
+        _schedule_signature(schedule) for schedule in brute_force
+    }
+    assert gen.last_metrics.threshold_prunes == 0
+
+
+def test_exam_period_spread_remains_final_threshold_filter_only():
+    courses = [
+        _make_course("11111", "83101", 1, "FALL", "Obligatory"),
+        _make_course("22222", "83101", 1, "FALL", "Obligatory"),
+    ]
+    period = _make_period(date(2026, 1, 5), date(2026, 1, 6))
+    selected_programs = ["83101"]
+    settings = ThresholdSettings(
+        entries=(
+            ThresholdEntry(Criterion.MIN_DAYS_EXAM_PERIOD_SPREAD, True, 2),
+        )
+    )
+    gen = ScheduleGenerator(
+        ExactConflictStrategy(selected_programs),
+        threshold_settings=settings,
+        selected_programs=selected_programs,
+    )
+
+    generated = list(gen.generate_schedules(courses, period))
+    filtered = [
+        schedule for schedule in generated
+        if ThresholdFilter.is_valid(schedule, courses, settings, selected_programs)
+    ]
+
+    assert len(generated) == 2
+    assert filtered == []
+    assert gen.last_metrics.threshold_prunes == 0
+
+
 def test_max_exams_per_day_pruning_matches_threshold_filter_for_k0_and_k1():
     courses = [
         _make_course("11111", "83101", 1, "FALL", "Obligatory"),

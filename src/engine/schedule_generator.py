@@ -10,6 +10,7 @@ from itertools import combinations
 
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
+from src.domain.placement_constraint import PlacementConstraintSet
 from src.domain.schedule import Schedule
 from src.domain.schedule_metrics import relevant_offerings
 from src.domain.threshold import Criterion, ThresholdSettings
@@ -105,7 +106,12 @@ class ScheduleGenerator(IScheduleGenerator):
             return iter(())
 
         original_order = {course: index for index, course in enumerate(courses)}
-        threshold_context = self._build_threshold_context(courses, exam_period)
+        constraints = PlacementConstraintSet.build(
+            self._threshold_settings,
+            courses,
+            self._selected_programs,
+            exam_period,
+        )
 
         def _iterator() -> Iterator[Schedule]:
             try:
@@ -117,7 +123,7 @@ class ScheduleGenerator(IScheduleGenerator):
                     original_order=original_order,
                     exam_period=exam_period,
                     metrics=metrics,
-                    threshold_context=threshold_context,
+                    constraints=constraints,
                 )
             finally:
                 metrics.elapsed_seconds = time.monotonic() - started
@@ -152,7 +158,7 @@ class ScheduleGenerator(IScheduleGenerator):
         original_order: dict[Course, int],
         exam_period: ExamPeriod,
         metrics: GenerationMetrics,
-        threshold_context: _ThresholdContext,
+        constraints: PlacementConstraintSet,
     ) -> Iterator[Schedule]:
         metrics.nodes_visited += 1
 
@@ -179,39 +185,48 @@ class ScheduleGenerator(IScheduleGenerator):
         next_unassigned.remove(course)
 
         for exam_date in candidate_dates:
-            assignment[course] = exam_date
-
-            if not self._partial_thresholds_are_safe(assignment, threshold_context):
+            if not constraints.allows(course, exam_date):
                 metrics.threshold_prunes += 1
-                del assignment[course]
                 continue
 
-            next_domains = domains
-            if next_unassigned:
-                next_domains = dict(domains)
-                if not self._forward_check_domains(
-                    course,
-                    exam_date,
+            assignment[course] = exam_date
+            constraints.record(course, exam_date)
+
+            try:
+                next_domains = domains
+                if next_unassigned:
+                    next_domains = dict(domains)
+                    if not self._forward_check_domains(
+                        course,
+                        exam_date,
+                        next_unassigned,
+                        next_domains,
+                        conflict_graph,
+                        metrics,
+                    ):
+                        continue
+
+                    if not self._forward_check_constraints(
+                        next_unassigned,
+                        next_domains,
+                        constraints,
+                        metrics,
+                    ):
+                        continue
+
+                yield from self._backtrack(
+                    assignment,
                     next_unassigned,
                     next_domains,
                     conflict_graph,
+                    original_order,
+                    exam_period,
                     metrics,
-                ):
-                    del assignment[course]
-                    continue
-
-            yield from self._backtrack(
-                assignment,
-                next_unassigned,
-                next_domains,
-                conflict_graph,
-                original_order,
-                exam_period,
-                metrics,
-                threshold_context,
-            )
-
-            del assignment[course]
+                    constraints,
+                )
+            finally:
+                constraints.undo(course, exam_date)
+                del assignment[course]
 
     def _select_next_course(
         self,
@@ -381,6 +396,32 @@ class ScheduleGenerator(IScheduleGenerator):
             )
             if collisions > max_collisions:
                 return False
+
+        return True
+
+    def _forward_check_constraints(
+        self,
+        unassigned: set[Course],
+        domains: dict[Course, tuple[date, ...]],
+        constraints: PlacementConstraintSet,
+        metrics: GenerationMetrics,
+    ) -> bool:
+        for course in unassigned:
+            domain = domains[course]
+            reduced = tuple(
+                day for day in domain
+                if constraints.allows(course, day)
+            )
+            removed = len(domain) - len(reduced)
+            if removed == 0:
+                continue
+
+            metrics.threshold_prunes += removed
+            if not reduced:
+                metrics.domain_prunes += 1
+                return False
+
+            domains[course] = reduced
 
         return True
 
