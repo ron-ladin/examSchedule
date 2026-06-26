@@ -18,7 +18,9 @@ DesktopController re-exports these names for backwards compatibility.
 
 import logging
 import pickle
+import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from itertools import chain, islice
 
 from src.adapters.exact_conflict_strategy import ExactConflictStrategy
@@ -38,6 +40,8 @@ from src.domain.time_slot import TimeSlot
 from src.engine.app_controller import (
     AppController as _EngineController,
     CLASSROOM_VARIANT_MODE_FIRST,
+    _apply_classroom_assignment,
+    _apply_filter,
 )
 from src.engine.classroom_assigner import ClassroomAssigner
 from src.engine.schedule_generator import ScheduleGenerator
@@ -56,6 +60,19 @@ logger = logging.getLogger(__name__)
 # schedules are resident, further loads are refused gracefully and Auto Load is
 # stopped. See README -> "Handling Extreme Scale: Why We Don't Sort Billions".
 ABSOLUTE_MAX_IN_MEMORY_SCHEDULES = 100_000
+
+
+@dataclass
+class DateGenerationCursor:
+    """Persistent Auto Dates iterator state owned by one load-more worker."""
+
+    iterator: Iterator[Schedule]
+    emitted_count: int
+    overflow: list[Schedule]
+    exhausted: bool
+    courses_by_id: dict[str, Course]
+    courses_for_sorting: list[Course]
+    metrics: object | None = None
 
 
 def _put_generation_message(result_queue, message) -> None:
@@ -219,7 +236,11 @@ def _run_generation_process(
             selected_programs=selected_programs,
         )
         conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
-        generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
+        generator = ScheduleGenerator(
+            conflict_strategy=conflict_strategy,
+            threshold_settings=active_settings.thresholds,
+            selected_programs=selected_programs,
+        )
 
         memory_exporter = _MemoryExporter(
             cap=cap,
@@ -390,7 +411,7 @@ class _KindTaggedQueue:
 
 
 def _course_signature(course: Course) -> tuple:
-    """Stable course data key for reusing a variant cursor safely."""
+    """Stable course data key for reusing worker cursors safely."""
     offerings_key = tuple(
         (
             offering.program_id,
@@ -399,9 +420,373 @@ def _course_signature(course: Course) -> tuple:
             offering.requirement,
             offering.student_count,
         )
-        for offering in course.offerings
+        for offering in sorted(
+            course.offerings,
+            key=lambda offering: (
+                offering.program_id,
+                offering.year,
+                offering.semester,
+                offering.requirement,
+                -1 if offering.student_count is None else offering.student_count,
+            ),
+        )
     )
-    return (course.id, course.evaluation_type, offerings_key)
+    return (
+        course.id,
+        course.name,
+        course.instructor,
+        course.evaluation_type,
+        offerings_key,
+    )
+
+
+def _settings_signature(settings: Settings) -> tuple:
+    threshold_key = tuple(
+        (entry.criterion.value, entry.enabled, entry.k)
+        for entry in settings.thresholds.entries
+    )
+    sorting_key = tuple(
+        (rule.priority, rule.criterion.value)
+        for rule in settings.sorting.rules
+    )
+    return threshold_key, sorting_key
+
+
+def _period_signature(period: ExamPeriod) -> tuple:
+    return (
+        period.get_key(),
+        tuple(period.date_ranges),
+        tuple(sorted(period.excluded_dates)),
+    )
+
+
+def _date_request_key(
+    period_key: str,
+    courses: list[Course],
+    exam_periods: list[ExamPeriod],
+    selected_programs: list[str],
+    settings: Settings,
+    classrooms: list[Classroom],
+    time_slots: list[TimeSlot],
+    proctor_config: ProctorConfig | None,
+    allow_unassigned_classrooms: bool,
+    classroom_variant_mode: str,
+) -> tuple:
+    """Return an immutable key for one Auto Dates generation stream."""
+    return (
+        period_key,
+        tuple(sorted(_course_signature(course) for course in courses)),
+        tuple(_period_signature(period) for period in exam_periods),
+        tuple(selected_programs),
+        _settings_signature(settings),
+        tuple((room.room_id, room.capacity) for room in classrooms),
+        tuple(slot.time for slot in time_slots),
+        None if proctor_config is None else proctor_config.students_per_proctor,
+        allow_unassigned_classrooms,
+        classroom_variant_mode,
+    )
+
+
+def _build_date_cursor(
+    period_key: str,
+    courses: list[Course],
+    exam_periods: list[ExamPeriod],
+    selected_programs: list[str],
+    settings: Settings,
+    classrooms: list[Classroom],
+    time_slots: list[TimeSlot],
+    proctor_config: ProctorConfig | None,
+    allow_unassigned_classrooms: bool,
+    classroom_variant_mode: str,
+) -> DateGenerationCursor:
+    matching_periods = [
+        period for period in exam_periods
+        if period.get_key() == period_key
+    ]
+    courses_by_id = {course.id: course for course in courses}
+    courses_for_sorting = list(courses_by_id.values())
+
+    if not matching_periods:
+        return DateGenerationCursor(
+            iterator=iter(()),
+            emitted_count=0,
+            overflow=[],
+            exhausted=True,
+            courses_by_id=courses_by_id,
+            courses_for_sorting=courses_for_sorting,
+        )
+
+    period = matching_periods[0]
+    relevant_courses = [
+        course for course in courses
+        if course.is_relevant_for_period(selected_programs, period.semester)
+    ]
+
+    if not relevant_courses:
+        return DateGenerationCursor(
+            iterator=iter(()),
+            emitted_count=0,
+            overflow=[],
+            exhausted=True,
+            courses_by_id=courses_by_id,
+            courses_for_sorting=courses_for_sorting,
+        )
+
+    generator = ScheduleGenerator(
+        conflict_strategy=ExactConflictStrategy(selected_programs=selected_programs),
+        threshold_settings=settings.thresholds,
+        selected_programs=selected_programs,
+    )
+    schedule_iter: Iterator[Schedule] = generator.generate_schedules(
+        relevant_courses,
+        period,
+    )
+    schedule_iter = _apply_filter(
+        schedule_iter,
+        ThresholdFilter(),
+        settings.thresholds,
+        relevant_courses,
+        selected_programs,
+    )
+
+    if classrooms and time_slots and proctor_config is not None:
+        schedule_iter = _apply_classroom_assignment(
+            schedule_iter,
+            relevant_courses,
+            selected_programs,
+            classrooms,
+            time_slots,
+            proctor_config,
+            allow_unassigned_classrooms,
+            classroom_variant_mode,
+        )
+
+    return DateGenerationCursor(
+        iterator=schedule_iter,
+        emitted_count=0,
+        overflow=[],
+        exhausted=False,
+        courses_by_id=courses_by_id,
+        courses_for_sorting=courses_for_sorting,
+        metrics=generator.last_metrics,
+    )
+
+
+def _skip_date_options(cursor: DateGenerationCursor, offset: int) -> int:
+    skipped = 0
+    while skipped < offset:
+        try:
+            next(cursor.iterator)
+        except StopIteration:
+            cursor.exhausted = True
+            break
+        skipped += 1
+
+    cursor.emitted_count = skipped
+    return skipped
+
+
+def _take_date_page(
+    cursor: DateGenerationCursor,
+    cap: int | None,
+) -> tuple[list[Schedule], bool]:
+    if cursor.exhausted:
+        return [], False
+
+    if cap is None:
+        batch = list(cursor.overflow)
+        cursor.overflow.clear()
+        batch.extend(cursor.iterator)
+        cursor.emitted_count += len(batch)
+        cursor.exhausted = True
+        return batch, False
+
+    batch: list[Schedule] = []
+    while len(batch) < cap:
+        if cursor.overflow:
+            batch.append(cursor.overflow.pop(0))
+            continue
+
+        try:
+            batch.append(next(cursor.iterator))
+        except StopIteration:
+            cursor.emitted_count += len(batch)
+            cursor.exhausted = True
+            return batch, False
+
+    try:
+        cursor.overflow.append(next(cursor.iterator))
+        still_more = True
+    except StopIteration:
+        cursor.exhausted = True
+        still_more = False
+
+    cursor.emitted_count += len(batch)
+    return batch, still_more
+
+
+def _run_date_options_from_state(
+    result_queue,
+    date_states: dict[tuple, DateGenerationCursor],
+    courses: list[Course],
+    exam_periods: list[ExamPeriod],
+    selected_programs: list[str],
+    settings: Settings | None = None,
+    cap: int | None = None,
+    period_key: str | None = None,
+    offset: int = 0,
+    classrooms: list[Classroom] | None = None,
+    time_slots: list[TimeSlot] | None = None,
+    proctor_config: ProctorConfig | None = None,
+    allow_unassigned_classrooms: bool = False,
+    classroom_variant_mode: str = CLASSROOM_VARIANT_MODE_FIRST,
+) -> None:
+    """Stateful Auto Dates implementation used by the persistent worker."""
+    started = time.monotonic()
+    active_settings = settings or Settings(
+        thresholds=ThresholdSettings(),
+        sorting=SortingConfig(),
+    )
+    classrooms = list(classrooms or [])
+    time_slots = list(time_slots or [])
+
+    try:
+        if period_key is None:
+            _run_generation_process(
+                result_queue,
+                courses,
+                exam_periods,
+                selected_programs,
+                settings=active_settings,
+                cap=cap,
+                period_key=period_key,
+                offset=offset,
+                classrooms=classrooms,
+                time_slots=time_slots,
+                proctor_config=proctor_config,
+                allow_unassigned_classrooms=allow_unassigned_classrooms,
+                classroom_variant_mode=classroom_variant_mode,
+            )
+            return
+
+        request_key = _date_request_key(
+            period_key,
+            courses,
+            exam_periods,
+            selected_programs,
+            active_settings,
+            classrooms,
+            time_slots,
+            proctor_config,
+            allow_unassigned_classrooms,
+            classroom_variant_mode,
+        )
+
+        for key in list(date_states):
+            if key[0] == period_key and key != request_key:
+                date_states.pop(key, None)
+
+        cursor = date_states.get(request_key)
+        reused_cursor = cursor is not None
+
+        if cursor is not None and cursor.emitted_count != offset:
+            message = (
+                f"Stale date-options pagination state for {period_key}: "
+                f"expected offset {cursor.emitted_count}, received {offset}."
+            )
+            logger.warning(message)
+            date_states.pop(request_key, None)
+            result_queue.put(GenerationResult.failure(message))
+            return
+
+        if cursor is None:
+            cursor = _build_date_cursor(
+                period_key,
+                courses,
+                exam_periods,
+                selected_programs,
+                active_settings,
+                classrooms,
+                time_slots,
+                proctor_config,
+                allow_unassigned_classrooms,
+                classroom_variant_mode,
+            )
+            date_states[request_key] = cursor
+
+            if offset:
+                skipped = _skip_date_options(cursor, offset)
+                if skipped < offset:
+                    cursor.exhausted = True
+                    date_states.pop(request_key, None)
+                    _put_generation_message(
+                        result_queue,
+                        GenerationResult.ok(
+                            {period_key: []},
+                            cursor.courses_by_id,
+                            set(),
+                        ),
+                    )
+                    return
+
+        batch, still_more = _take_date_page(cursor, cap)
+        sorted_batch = _sort_schedule_batch(
+            batch,
+            cursor.courses_for_sorting,
+            active_settings,
+            selected_programs,
+        )
+
+        if cursor.exhausted:
+            date_states.pop(request_key, None)
+
+        _put_generation_message(
+            result_queue,
+            GenerationResult.ok(
+                {period_key: sorted_batch},
+                cursor.courses_by_id,
+                {period_key} if still_more else set(),
+            )
+        )
+
+        metrics = cursor.metrics
+        logger.info(
+            "Generation batch metrics: period=%s nodes=%s schedules=%s "
+            "domain_prunes=%s conflict_prunes=%s threshold_prunes=%s "
+            "prefilter_removed=%s reused_cursor=%s emitted=%s elapsed=%.3fs",
+            period_key,
+            getattr(metrics, "nodes_visited", 0),
+            getattr(metrics, "schedules_produced", 0),
+            getattr(metrics, "domain_prunes", 0),
+            getattr(metrics, "conflict_prunes", 0),
+            getattr(metrics, "threshold_prunes", 0),
+            getattr(metrics, "prefiltered_candidates_removed", 0),
+            reused_cursor,
+            cursor.emitted_count,
+            time.monotonic() - started,
+        )
+    except Exception as exc:
+        logger.exception("Stateful date-options generation failed")
+        try:
+            result_queue.put(GenerationResult.failure(str(exc)))
+        except Exception:
+            logger.exception("Could not send stateful date-options failure")
+
+
+def _sort_schedule_batch(
+    schedules: list[Schedule],
+    courses: list[Course],
+    settings: Settings,
+    selected_programs: list[str],
+) -> list[Schedule]:
+    if settings.sorting.rules:
+        return SortingEngine.sort(
+            schedules,
+            courses,
+            settings.sorting,
+            selected_programs,
+        )
+    return schedules
 
 
 def _variant_request_key(
@@ -630,12 +1015,15 @@ def _run_load_more_worker(task_queue, result_queue) -> None:
     batches. That means block 2 continues from block 1 instead of recalculating
     all classroom combinations from the beginning and skipping the old results.
     """
+    date_states: dict[tuple, DateGenerationCursor] = {}
     variant_states: dict[tuple, dict] = {}
 
     while True:
         task = task_queue.get()
 
         if task is None:
+            date_states.clear()
+            variant_states.clear()
             return
 
         try:
@@ -654,8 +1042,11 @@ def _run_load_more_worker(task_queue, result_queue) -> None:
             # variant cursors so stale classroom blocks cannot be reused after the
             # user moves to another date schedule.
             variant_states.clear()
-            _run_generation_process(
-                _KindTaggedQueue(result_queue, "date_options"), *args, **kwargs
+            _run_date_options_from_state(
+                _KindTaggedQueue(result_queue, "date_options"),
+                date_states,
+                *args,
+                **kwargs,
             )
         elif task_type == "variants":
             _run_classroom_variants_from_state(
