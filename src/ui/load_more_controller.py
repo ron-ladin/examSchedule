@@ -84,6 +84,14 @@ class LoadMoreController(QObject):
         The current UI uses per-period Auto Load buttons, but tests can call this
         directly to start loading every truncated period.
         """
+        if self._panel.is_ranking_active():
+            self.messageRequested.emit(
+                "Ranking In Progress",
+                "Load More is available after Result Ranking finishes.",
+                _INFO,
+            )
+            return
+
         for period_key in self._panel.get_truncated_periods():
             if period_key in self.procs:
                 continue
@@ -160,6 +168,16 @@ class LoadMoreController(QObject):
             self.stop_auto_load(period_key)
             return
 
+        if self._panel.is_ranking_active():
+            self.messageRequested.emit(
+                "Ranking In Progress",
+                "Auto Load is available after Result Ranking finishes.",
+                _INFO,
+            )
+            self.update_auto_load_button(period_key)
+            self.cardRefreshRequested.emit(period_key)
+            return
+
         if period_key in self.procs:
             self.pending_auto_modes[period_key] = target_mode
             self.auto_load_periods.discard(period_key)
@@ -196,6 +214,10 @@ class LoadMoreController(QObject):
         """Request the next batch for the active scoped Auto mode."""
         if period_key not in self.auto_load_periods:
             self.update_auto_load_button(period_key)
+            return
+
+        if self._panel.is_ranking_active():
+            self.stop_auto_load(period_key)
             return
 
         if period_key in self.procs:
@@ -239,6 +261,7 @@ class LoadMoreController(QObject):
         mode = self.auto_load_modes.get(period_key)
         pending_mode = self.pending_auto_modes.get(period_key)
         is_loading = period_key in self.procs
+        ranking_active = panel.is_ranking_active()
         has_more_dates = self._controller.has_more_schedules(period_key)
         has_classroom = panel.has_classroom_results(period_key)
         variant_maybe_more = True
@@ -267,6 +290,7 @@ class LoadMoreController(QObject):
                     "#047857",
                     "rgba(4, 120, 87, 0.07)",
                     has_more_dates
+                    and not ranking_active
                     and pending_mode is None
                     and (not is_loading or mode == _AUTO_MODE_VARIANTS),
                 )
@@ -290,6 +314,7 @@ class LoadMoreController(QObject):
                     "rgba(124, 58, 237, 0.07)",
                     has_classroom
                     and variant_maybe_more
+                    and not ranking_active
                     and pending_mode is None
                     and (not is_loading or mode == _AUTO_MODE_DATES),
                 )
@@ -336,13 +361,19 @@ class LoadMoreController(QObject):
         """Load one batch of different date options."""
         if period_key in self.procs:
             return
+        if not self._begin_loading_task(period_key):
+            return
 
-        already_date_options = self._panel.get_date_option_count(period_key)
-        queue, proc = self._controller.start_load_more_date_options_for_period(
-            period_key,
-            already_date_options,
-        )
-        self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_DATES)
+        try:
+            already_date_options = self._panel.get_date_option_count(period_key)
+            queue, proc = self._controller.start_load_more_date_options_for_period(
+                period_key,
+                already_date_options,
+            )
+            self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_DATES)
+        except Exception:
+            self._panel._end_heavy_task("loading")
+            raise
 
     def on_load_more_variants(
         self,
@@ -352,10 +383,13 @@ class LoadMoreController(QObject):
         """Load one batch of variants for the currently displayed date option."""
         if period_key in self.procs:
             return
+        if not self._begin_loading_task(period_key):
+            return
 
         panel = self._panel
         schedules = panel.get_schedules(period_key)
         if not schedules:
+            panel._end_heavy_task("loading")
             self.stop_auto_load(period_key)
             return
 
@@ -364,12 +398,40 @@ class LoadMoreController(QObject):
         signature = panel.signature_of(current_schedule)
         existing_variants = panel.get_variant_index_count(period_key, signature)
 
-        queue, proc = self._controller.start_load_variants_for_schedule(
-            period_key,
-            current_schedule,
-            existing_variants,
-        )
-        self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_VARIANTS)
+        try:
+            queue, proc = self._controller.start_load_variants_for_schedule(
+                period_key,
+                current_schedule,
+                existing_variants,
+            )
+            self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_VARIANTS)
+        except Exception:
+            panel._end_heavy_task("loading")
+            raise
+
+    def _begin_loading_task(self, period_key: str) -> bool:
+        """Reserve the shared heavy-task slot for one load-more batch."""
+        if self._panel.is_ranking_active():
+            self.messageRequested.emit(
+                "Ranking In Progress",
+                "Load More is available after Result Ranking finishes.",
+                _INFO,
+            )
+            self.update_auto_load_button(period_key)
+            self.cardRefreshRequested.emit(period_key)
+            return False
+
+        if not self._panel._begin_heavy_task("loading"):
+            self.messageRequested.emit(
+                "Busy",
+                "Another heavy task is already running. Please wait for it to finish.",
+                _INFO,
+            )
+            self.update_auto_load_button(period_key)
+            self.cardRefreshRequested.emit(period_key)
+            return False
+
+        return True
 
     def poll_load_more(self, period_key: str) -> None:
         try:
@@ -598,3 +660,6 @@ class LoadMoreController(QObject):
                     proc.join(timeout=0)
             except Exception:
                 logger.debug("Failed cleaning up load-more process", exc_info=True)
+
+        if not self.procs:
+            self._panel._end_heavy_task("loading")

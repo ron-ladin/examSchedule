@@ -23,7 +23,7 @@ import multiprocessing
 from pathlib import Path
 from queue import Empty as _QueueEmpty
 
-from PyQt6.QtCore import QPoint, QTimer
+from PyQt6.QtCore import QPoint, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -44,7 +44,7 @@ from src.ui.calendar_cell_delegate import (
 )
 from src.ui.tokens import PERIOD_TAB_STYLE
 
-from src.controller import DesktopController
+from src.controller import DesktopController, LOAD_BATCH_SIZE
 from src.adapters.sqlite_schedule_store import (
     ABSOLUTE_MAX_STORED_SCHEDULES,
     SQLiteScheduleStore,
@@ -70,6 +70,7 @@ from src.ui.widgets.period_card_builder import (
 
 logger = logging.getLogger(__name__)
 _RANKING_EXIT_QUEUE_GRACE_TICKS = 3
+_RANKING_BUTTON_TEXT = "⇅  Result Ranking"
 
 
 def _standard_period_keys() -> list[str]:
@@ -137,6 +138,8 @@ class _ResultsPanel(QWidget):
     hidden by the period-card builder and no additional schedules are fetched.
     """
 
+    heavy_task_state_changed = pyqtSignal(str, bool)
+
     def __init__(self, controller: DesktopController, parent=None):
         super().__init__(parent)
 
@@ -174,6 +177,7 @@ class _ResultsPanel(QWidget):
         self._ranking_config: SortingConfig | None = None
         self._ranking_button_text: str | None = None
         self._ranking_empty_after_exit_ticks = 0
+        self._ranking_dirty = False
 
         self._navigator = PeriodNavigator(
             self._nav_model,
@@ -252,6 +256,7 @@ class _ResultsPanel(QWidget):
         self._lm.reset()
         self._cleanup_ranking_worker(terminate=True)
         self._set_ranking_busy(False)
+        self._ranking_dirty = False
 
         # Stop idle persistent load-more workers from the previous result set.
         # They will be recreated lazily if the user clicks Load More / Auto again.
@@ -374,6 +379,7 @@ class _ResultsPanel(QWidget):
         """
         self._cleanup_ranking_worker(terminate=True)
         self._set_ranking_busy(False)
+        self._ranking_dirty = False
         self._streaming_run_active = False
 
     def append_period(
@@ -524,17 +530,24 @@ class _ResultsPanel(QWidget):
 
         self._schedules_by_period[period_key].extend(extra)
 
-        # Re-rank without materialising SQLite-backed periods.  For StoredScheduleList
-        # this only updates the SQL ORDER BY rule; for plain lists the controller
-        # keeps the previous in-memory behavior.
-        self._schedules_by_period = self._controller.cache_generated_results(
+        # Keep the appended schedules cached, but do not re-sort the whole
+        # result set on every Load More / Auto Load batch. Users can explicitly
+        # run Result Ranking once loading settles.
+        self._schedules_by_period = self._controller.cache_loaded_results_without_reranking(
             dict(self._schedules_by_period)
         )
+        period_schedules = self._schedules_by_period.get(period_key, [])
+        if (
+            self._controller.settings.sorting.criteria_in_order()
+            and not isinstance(period_schedules, StoredScheduleList)
+        ):
+            self._ranking_dirty = True
         self._period_indices[period_key] = min(
             self._period_indices.get(period_key, 0),
             max(0, len(self._schedules_by_period[period_key]) - 1),
         )
         self._rebuild_navigation_cache(period_key)
+        self._update_summary()
 
     def advance_to_next_date_option(self, period_key: str, prev_len: int) -> None:
         """Move the displayed index to the next date option after a load.
@@ -664,6 +677,9 @@ class _ResultsPanel(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
         self._cleanup_ranking_worker(terminate=True)
+        if self._controller.heavy_task_kind == "ranking":
+            self._controller.end_heavy_task("ranking")
+            self.heavy_task_state_changed.emit("ranking", False)
         if self._schedule_store is not None:
             self._schedule_store.close(delete=True)
             self._schedule_store = None
@@ -699,7 +715,7 @@ class _ResultsPanel(QWidget):
         action_row.addStretch()
 
         # Spec: re-rank the already-generated schedules in memory (no regenerate).
-        self._ranking_btn = QPushButton("⇅  Result Ranking")
+        self._ranking_btn = QPushButton(_RANKING_BUTTON_TEXT)
         self._ranking_btn.setStyleSheet(
             "QPushButton {"
             " background: #2563EB; color: #FFFFFF; font-weight: 700;"
@@ -922,11 +938,17 @@ class _ResultsPanel(QWidget):
             card.next_btn.setEnabled(False)
 
         card.load_more_btn.setVisible(has_more)
+        ranking_active = self.is_ranking_active()
         card.load_more_btn.setEnabled(
             has_more
             and period_key not in self._lm.procs
             and period_key not in self._lm.auto_load_periods
+            and not ranking_active
         )
+        if ranking_active and has_more:
+            card.load_more_btn.setText("Ranking in progress")
+        elif has_more and period_key not in self._lm.procs:
+            card.load_more_btn.setText(f"⟳  +{LOAD_BATCH_SIZE:,} more options")
 
         active_mode = self._lm.auto_load_modes.get(period_key)
         if not has_more and active_mode == _AUTO_MODE_DATES:
@@ -964,6 +986,13 @@ class _ResultsPanel(QWidget):
 
     def _update_summary(self) -> None:
         if not self._schedules_by_period:
+            return
+
+        if self._ranking_dirty:
+            self._summary_lbl.setStyleSheet(
+                "color: #B45309; font-weight: 600; font-size: 12px;"
+            )
+            self._summary_lbl.setText("New results loaded. Re-rank to apply sorting.")
             return
 
         non_empty = {
@@ -1201,11 +1230,21 @@ class _ResultsPanel(QWidget):
             )
             return
 
+        if not self._begin_heavy_task("ranking"):
+            self._show_message(
+                "Ranking Unavailable",
+                "Result Ranking is available after generation/loading finishes.",
+                QMessageBox.Icon.Information,
+            )
+            self._refresh_heavy_task_controls()
+            return
+
         try:
             job = self._controller.build_ranking_job(config)
         except ValueError:
             # No cached results to re-rank; keep the new order for next generate.
             self._controller.apply_sort(config)
+            self._end_heavy_task("ranking")
             return
 
         queue = multiprocessing.Queue()
@@ -1226,6 +1265,7 @@ class _ResultsPanel(QWidget):
         except Exception as exc:
             self._cleanup_ranking_worker(terminate=True)
             self._ranking_config = None
+            self._end_heavy_task("ranking")
             self._set_ranking_busy(False)
             self._show_message(
                 "Ranking Failed",
@@ -1258,6 +1298,7 @@ class _ResultsPanel(QWidget):
                 exitcode = proc.exitcode
                 self._cleanup_ranking_worker(terminate=False)
                 self._ranking_config = None
+                self._end_heavy_task("ranking")
                 self._set_ranking_busy(False)
                 self._show_message(
                     "Ranking Failed",
@@ -1272,6 +1313,7 @@ class _ResultsPanel(QWidget):
         self._ranking_config = None
 
         if not isinstance(result, RankingWorkerResult):
+            self._end_heavy_task("ranking")
             self._set_ranking_busy(False)
             self._show_message(
                 "Ranking Failed",
@@ -1281,6 +1323,7 @@ class _ResultsPanel(QWidget):
             return
 
         if not result.success:
+            self._end_heavy_task("ranking")
             self._set_ranking_busy(False)
             self._show_message(
                 "Ranking Failed",
@@ -1290,6 +1333,7 @@ class _ResultsPanel(QWidget):
             return
 
         if config is None:
+            self._end_heavy_task("ranking")
             self._set_ranking_busy(False)
             self._show_message(
                 "Ranking Failed",
@@ -1304,6 +1348,7 @@ class _ResultsPanel(QWidget):
                 result.schedules_by_period,
             )
         except Exception as exc:
+            self._end_heavy_task("ranking")
             self._set_ranking_busy(False)
             self._show_message(
                 "Ranking Failed",
@@ -1313,6 +1358,7 @@ class _ResultsPanel(QWidget):
             return
 
         self._finish_ranking_success(resorted)
+        self._end_heavy_task("ranking")
         self._set_ranking_busy(False)
 
     def _finish_ranking_success(
@@ -1327,6 +1373,7 @@ class _ResultsPanel(QWidget):
             self._period_indices[period_key] = 0
 
         self._nav_model.clear()
+        self._ranking_dirty = False
 
         has_proctor_report = any(
             self._has_classroom_feature_results(period_key)
@@ -1346,16 +1393,29 @@ class _ResultsPanel(QWidget):
         if not hasattr(self, "_ranking_btn"):
             return
 
-        if busy:
-            self._ranking_button_text = self._ranking_btn.text()
+        heavy_kind = self._controller.heavy_task_kind
+        if busy or heavy_kind == "ranking":
+            current_text = self._ranking_btn.text()
+            if current_text not in {
+                "Ranking results...",
+                "Ranking available after loading finishes",
+            }:
+                self._ranking_button_text = current_text
+            elif self._ranking_button_text is None:
+                self._ranking_button_text = _RANKING_BUTTON_TEXT
             self._ranking_btn.setEnabled(False)
             self._ranking_btn.setText("Ranking results...")
             self._summary_lbl.setText("Ranking results...")
             return
 
+        if heavy_kind in {"generation", "loading"}:
+            self._ranking_btn.setEnabled(False)
+            self._ranking_btn.setText("Ranking available after loading finishes")
+            self._update_summary()
+            return
+
         self._ranking_btn.setEnabled(True)
-        if self._ranking_button_text is not None:
-            self._ranking_btn.setText(self._ranking_button_text)
+        self._ranking_btn.setText(self._ranking_button_text or _RANKING_BUTTON_TEXT)
         self._ranking_button_text = None
         self._update_summary()
 
@@ -1389,6 +1449,38 @@ class _ResultsPanel(QWidget):
             close = getattr(queue, "close", None)
             if callable(close):
                 close()
+
+        if terminate and self._controller.end_heavy_task("ranking"):
+            self.heavy_task_state_changed.emit("ranking", False)
+
+    def is_ranking_active(self) -> bool:
+        """Return True while the Result Ranking worker owns the heavy slot."""
+        return self._controller.heavy_task_kind == "ranking"
+
+    def _begin_heavy_task(self, kind: str) -> bool:
+        """Reserve the shared heavy-task slot and refresh visible controls."""
+        if not self._controller.begin_heavy_task(kind):
+            return False
+        self.heavy_task_state_changed.emit(kind, True)
+        self._refresh_heavy_task_controls()
+        return True
+
+    def _end_heavy_task(self, kind: str) -> None:
+        """Release the shared heavy-task slot and refresh visible controls."""
+        if self._controller.end_heavy_task(kind):
+            self.heavy_task_state_changed.emit(kind, False)
+        self._refresh_heavy_task_controls()
+
+    def _refresh_heavy_task_controls(self) -> None:
+        """Refresh ranking/load controls after heavy-task state changes."""
+        self._set_ranking_busy(self._ranking_proc is not None)
+        current = self._current_period_key()
+        if current is not None and current in self._cards:
+            self._refresh_period_card(current)
+
+    def sync_heavy_task_state(self) -> None:
+        """Public hook for the parent screen to refresh controls after generation."""
+        self._refresh_heavy_task_controls()
 
     def _on_proctor_report(self) -> None:
         """Build and show the spec 4.6 proctor report for displayed schedules."""

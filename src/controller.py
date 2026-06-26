@@ -132,6 +132,10 @@ class DesktopController:
         # Persistent Load More / Auto Load workers — lifecycle managed by pool.
         self._worker_pool = LoadWorkerPool()
 
+        # UI-wide throttle: generation/loading/ranking should not compete for
+        # CPU, RAM, and SQLite I/O at the same time.
+        self._heavy_task_kind: str | None = None
+
     @property
     def settings(self) -> Settings:
         return self._settings
@@ -149,6 +153,27 @@ class DesktopController:
     def read_only_import(self) -> bool:
         """True while the cached results come from an imported schedule file."""
         return self._read_only_import
+
+    @property
+    def heavy_task_kind(self) -> str | None:
+        """Return the active CPU/disk-heavy UI task kind, if any."""
+        return self._heavy_task_kind
+
+    def begin_heavy_task(self, kind: str) -> bool:
+        """Reserve the single heavy-task slot for *kind* if available."""
+        if self._heavy_task_kind is not None:
+            return False
+        self._heavy_task_kind = kind
+        return True
+
+    def end_heavy_task(self, kind: str | None = None) -> bool:
+        """Release the heavy-task slot when it matches *kind* or kind is omitted."""
+        if self._heavy_task_kind is None:
+            return False
+        if kind is not None and self._heavy_task_kind != kind:
+            return False
+        self._heavy_task_kind = None
+        return True
 
     def _reset_owned_schedule_store(self) -> SQLiteScheduleStore:
         """Replace the controller-owned SQLite store for a new generation run."""
@@ -778,6 +803,14 @@ class DesktopController:
                 resorted[period_key] = ranked_schedules_by_period[period_key]
 
         self._last_results = sort_period_mapping_canonically(resorted)
+        return self._last_results
+
+    def cache_loaded_results_without_reranking(
+        self,
+        schedules_by_period: dict[str, list[Schedule]],
+    ) -> dict[str, list[Schedule]]:
+        """Cache appended Load More results without re-sorting the full result set."""
+        self._last_results = sort_period_mapping_canonically(schedules_by_period)
         return self._last_results
 
     def cache_generated_results(
