@@ -22,7 +22,7 @@ Sprint 3 extended the scheduling engine with two Quality-of-Life features for ge
 | SCRUM-258 | Core domain models (Sections 2+3) | ✅ Done |
 | SCRUM-259 | Filter & Sort Engine | ✅ Done (merged PR #78) |
 | SCRUM-260 | SettingsFileReader (CLI) | ✅ Done |
-| SCRUM-261 | Pipeline Integration | 🔄 PR #80 under review |
+| SCRUM-261 | Pipeline Integration | ✅ Done |
 | SCRUM-262 | UI: Settings Screen | ✅ Done |
 | SCRUM-263 | Tests: ThresholdFilter & SortingEngine | ✅ Done |
 
@@ -57,10 +57,7 @@ SORT
 2, SORT_AVG_DAYS_ANY
 ```
 
-### Pipeline Wiring (SCRUM-261 — PR #80, not yet merged)
-
-> **⚠️ The wiring described below is proposed in PR #80 and not yet on develop.**
-> The currently merged architecture filters post-materialisation in `controller.py`.
+### Pipeline Wiring (SCRUM-261 — merged)
 
 - ThresholdFilter is wired **lazily** in the iterator chain inside `AppController` — invalid schedules are never materialised into RAM.
 - SortingEngine is applied **post-materialisation** inside `_MemoryExporter` — after the schedule list is collected.
@@ -68,7 +65,7 @@ SORT
 
 ---
 
-## Feature 4: Classroom Assignment — IN PROGRESS
+## Feature 4: Classroom Assignment — COMPLETE
 
 ### What was built
 
@@ -76,10 +73,10 @@ SORT
 |-------|-------------|--------|
 | SCRUM-264 | Domain Extensions (Feature 4) | ✅ Done |
 | SCRUM-265 | File I/O: Classroom Readers | ✅ Done |
-| SCRUM-266 | Assignment Engine: ClassroomAssigner | 🔄 In Progress |
-| SCRUM-267 | Pipeline Integration (Feature 4) | ⏳ Blocked by SCRUM-266 |
-| SCRUM-268 | UI: Feature 4 Screens | ⏳ To Do |
-| SCRUM-269 | Tests: ClassroomAssigner & Adapters | ⏳ To Do |
+| SCRUM-266 | Assignment Engine: ClassroomAssigner | ✅ Done |
+| SCRUM-267 | Pipeline Integration (Feature 4) | ✅ Done |
+| SCRUM-268 | UI: Feature 4 Screens | ✅ Done |
+| SCRUM-269 | Tests: ClassroomAssigner & Adapters | ✅ Done |
 
 ### Domain Models Added
 
@@ -93,7 +90,7 @@ SORT
 - **`ProctorConfigReader`** — parses `1:X` ratio from a single-line file
 - **`SlotsFileReader`** — parses comma-separated exam time slots (up to 3 per day, min 4 h apart)
 
-### Algorithm Design (pending SCRUM-266)
+### Algorithm (SCRUM-266 — complete)
 
 `ClassroomAssigner.assign(schedule, classrooms, slots, proctor_config)`:
 1. For each exam in the schedule, determine total student count from all relevant offerings.
@@ -114,7 +111,7 @@ SORT
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| Total tests (measured) | 456 | `python -m pytest -q` on 2026-06-17 |
+| Total tests (measured) | 727 | `python -m pytest -q` on 2026-06-26 |
 | Feature 3+4 tests (measured) | 172+ | see §4 breakdown in tests_document |
 | Test coverage (excl. `src/ui/`) | ≥ 85 % | enforced via `pytest --cov=src` gate |
 | Pylint score (measured) | 7.63 / 10 | target 8.5; delta from E1131 false positives (pylint version) + R0904 backlog |

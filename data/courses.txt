@@ -41,6 +41,6 @@ $$$$
 Advanced Materials Engineering
 10004
 Dr. Yael Barak
-83109,3,FALL,Obligatory,400
+83109,3,FALL,Obligatory,200
 Exam
 $$$$
