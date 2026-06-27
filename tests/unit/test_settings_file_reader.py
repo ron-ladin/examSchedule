@@ -168,10 +168,22 @@ def test_rejects_zero_k_for_positive_criterion(tmp_path):
         ).read()
 
 
-# A THRESHOLD header with no entries beneath it is rejected.
-def test_rejects_empty_threshold_block(tmp_path):
-    with pytest.raises(ValueError):
-        SettingsFileReader(_write(tmp_path, "THRESHOLD\n")).read()
+# A THRESHOLD header with no entries beneath it means "no limiting": it parses
+# successfully into an empty ThresholdSettings instead of crashing.
+def test_empty_threshold_block_yields_no_rules(tmp_path):
+    settings = SettingsFileReader(_write(tmp_path, "THRESHOLD\n")).read()
+    assert settings.thresholds.entries == ()
+
+
+# An empty THRESHOLD block still parses a valid SORT block beneath it.
+def test_empty_threshold_block_keeps_sort_block(tmp_path):
+    settings = SettingsFileReader(
+        _write(tmp_path, "THRESHOLD\nSORT\n1, SORT_MAX_EXAMS_PER_DAY\n")
+    ).read()
+    assert settings.thresholds.entries == ()
+    assert [r.criterion for r in settings.sorting.rules] == [
+        SortCriterion.SORT_MAX_EXAMS_PER_DAY
+    ]
 
 
 # Sort priorities must be sequential from 1 with no gaps.

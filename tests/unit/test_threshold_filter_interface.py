@@ -15,6 +15,11 @@ Public contract assumed:
     ) -> bool
 
 All criteria are applied only when their ThresholdEntry.enabled is True.
+
+The boundary cases (gap == k / > k / < k), the disabled-criterion cases, and the
+"different programmes are not compared" cases are consolidated into module-level
+``@pytest.mark.parametrize`` tables so each criterion's distinct semantics are
+exercised once, without copy-pasted per-class methods.
 """
 
 import pytest
@@ -83,7 +88,142 @@ def _schedule(assignments: dict) -> Schedule:
 
 
 # ---------------------------------------------------------------------------
-# 2.1  MIN_DAYS_BETWEEN_MANDATORY_EXAMS
+# Boundary table (2.1–2.5): k == metric / passing side / failing side.
+#
+# Each row is (criterion, courses_factory, assignments, k, expected). A factory
+# is used for courses so every case builds fresh Course objects.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "criterion, courses_factory, assignments, k, expected",
+    [
+        # 2.1 MIN_DAYS_BETWEEN_MANDATORY_EXAMS — gap == k / > k / < k
+        pytest.param(
+            Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+            lambda: [_mandatory("11111"), _mandatory("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 8)}, 3, True,
+            id="2.1_gap_equals_k",
+        ),
+        pytest.param(
+            Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+            lambda: [_mandatory("11111"), _mandatory("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 12)}, 3, True,
+            id="2.1_gap_above_k",
+        ),
+        pytest.param(
+            Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+            lambda: [_mandatory("11111"), _mandatory("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 7)}, 3, False,
+            id="2.1_gap_below_k",
+        ),
+        # 2.2 MIN_DAYS_BETWEEN_ANY_EXAMS — gap == k passes, gap < k fails
+        pytest.param(
+            Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS,
+            lambda: [_mandatory("11111"), _elective("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 8)}, 3, True,
+            id="2.2_gap_equals_k",
+        ),
+        pytest.param(
+            Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS,
+            lambda: [_mandatory("11111"), _elective("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 6)}, 3, False,
+            id="2.2_gap_below_k",
+        ),
+        # 2.3 MAX_ELECTIVE_COLLISIONS — count == k passes, count > k fails
+        pytest.param(
+            Criterion.MAX_ELECTIVE_COLLISIONS,
+            lambda: [_elective("11111"), _elective("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)}, 1, True,
+            id="2.3_collisions_equals_k",
+        ),
+        pytest.param(
+            Criterion.MAX_ELECTIVE_COLLISIONS,
+            lambda: [_elective("11111"), _elective("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)}, 0, False,
+            id="2.3_collisions_above_k",
+        ),
+        # 2.4 MIN_DAYS_EXAM_PERIOD_SPREAD — spread == k passes, spread < k fails
+        pytest.param(
+            Criterion.MIN_DAYS_EXAM_PERIOD_SPREAD,
+            lambda: [_mandatory("11111"), _mandatory("22222"), _mandatory("33333")],
+            {
+                "11111": date(2026, 1, 5),
+                "22222": date(2026, 1, 10),
+                "33333": date(2026, 1, 12),
+            }, 7, True,
+            id="2.4_spread_equals_k",
+        ),
+        pytest.param(
+            Criterion.MIN_DAYS_EXAM_PERIOD_SPREAD,
+            lambda: [_mandatory("11111"), _mandatory("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 7)}, 10, False,
+            id="2.4_spread_below_k",
+        ),
+        # 2.5 MAX_EXAMS_PER_DAY — count == k passes, count > k fails
+        pytest.param(
+            Criterion.MAX_EXAMS_PER_DAY,
+            lambda: [_mandatory("11111"), _mandatory("22222")],
+            {"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)}, 2, True,
+            id="2.5_day_count_equals_k",
+        ),
+        pytest.param(
+            Criterion.MAX_EXAMS_PER_DAY,
+            lambda: [_mandatory("11111"), _mandatory("22222"), _mandatory("33333")],
+            {
+                "11111": date(2026, 1, 5),
+                "22222": date(2026, 1, 5),
+                "33333": date(2026, 1, 5),
+            }, 2, False,
+            id="2.5_day_count_above_k",
+        ),
+    ],
+)
+def test_boundary_validation(criterion, courses_factory, assignments, k, expected):
+    """One boundary table covering every criterion's pass/fail edge (2.1–2.5)."""
+    schedule = _schedule(assignments)
+    settings = _settings_only(criterion, k=k)
+    assert ThresholdFilter.is_valid(schedule, courses_factory(), settings) is expected
+
+
+# ---------------------------------------------------------------------------
+# Offerings from different programmes are never compared (2.1, 2.2, 2.3).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "criterion, courses_factory, k",
+    [
+        pytest.param(
+            Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS,
+            lambda: [_mandatory("11111", program=PROGRAM_A),
+                     _mandatory("22222", program=PROGRAM_B)],
+            5,
+            id="2.1_mandatory",
+        ),
+        pytest.param(
+            Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS,
+            lambda: [_elective("11111", program=PROGRAM_A),
+                     _elective("22222", program=PROGRAM_B)],
+            7,
+            id="2.2_any",
+        ),
+        pytest.param(
+            Criterion.MAX_ELECTIVE_COLLISIONS,
+            lambda: [_elective("11111", program=PROGRAM_A),
+                     _elective("22222", program=PROGRAM_B)],
+            0,
+            id="2.3_collisions",
+        ),
+    ],
+)
+def test_different_programs_not_compared(criterion, courses_factory, k):
+    """Same-day exams in different programmes must never violate a threshold."""
+    schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
+    settings = _settings_only(criterion, k=k)
+    assert ThresholdFilter.is_valid(schedule, courses_factory(), settings) is True
+
+
+# ---------------------------------------------------------------------------
+# 2.1  MIN_DAYS_BETWEEN_MANDATORY_EXAMS — criterion-specific semantics
 # ---------------------------------------------------------------------------
 
 class TestMinDaysBetweenMandatoryExams:
@@ -91,33 +231,11 @@ class TestMinDaysBetweenMandatoryExams:
 
     CRITERION = Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS
 
-    @pytest.mark.parametrize(
-        "second_date, k, expected",
-        [
-            (date(2026, 1, 8), 3, True),   # gap == k
-            (date(2026, 1, 12), 3, True),  # gap > k
-            (date(2026, 1, 7), 3, False),  # gap < k
-        ],
-    )
-    def test_gap_against_threshold(self, second_date, k, expected):
-        courses = [_mandatory("11111"), _mandatory("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": second_date})
-        settings = _settings_only(self.CRITERION, k=k)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is expected
-
     def test_same_day_fails_when_k_is_1(self):
         courses = [_mandatory("11111"), _mandatory("22222")]
         schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
         settings = _settings_only(self.CRITERION, k=1)
         assert ThresholdFilter.is_valid(schedule, courses, settings) is False
-
-    def test_different_programs_not_compared(self):
-        """Courses from different programs are not compared against each other."""
-        c1 = _mandatory("11111", program=PROGRAM_A)
-        c2 = _mandatory("22222", program=PROGRAM_B)
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
-        settings = _settings_only(self.CRITERION, k=5)
-        assert ThresholdFilter.is_valid(schedule, [c1, c2], settings) is True
 
     def test_different_years_not_compared(self):
         """Year-1 vs year-2 within same program are not compared."""
@@ -137,19 +255,13 @@ class TestMinDaysBetweenMandatoryExams:
 
 
 # ---------------------------------------------------------------------------
-# 2.2  MIN_DAYS_BETWEEN_ANY_EXAMS
+# 2.2  MIN_DAYS_BETWEEN_ANY_EXAMS — criterion-specific semantics
 # ---------------------------------------------------------------------------
 
 class TestMinDaysBetweenAnyExams:
     """Criterion 2.2: gap between ANY two exams (same program, same year)."""
 
     CRITERION = Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS
-
-    def test_passes_when_gap_equals_k(self):
-        courses = [_mandatory("11111"), _elective("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 8)})
-        settings = _settings_only(self.CRITERION, k=3)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
 
     @pytest.mark.parametrize(
         "courses_factory",
@@ -170,36 +282,15 @@ class TestMinDaysBetweenAnyExams:
         settings = _settings_only(self.CRITERION, k=3)
         assert ThresholdFilter.is_valid(schedule, courses, settings) is False
 
-    def test_different_programs_not_compared(self):
-        c1 = _elective("11111", program=PROGRAM_A)
-        c2 = _elective("22222", program=PROGRAM_B)
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
-        settings = _settings_only(self.CRITERION, k=7)
-        assert ThresholdFilter.is_valid(schedule, [c1, c2], settings) is True
-
 
 # ---------------------------------------------------------------------------
-# 2.3  MAX_ELECTIVE_COLLISIONS  (k is non-negative; k=0 means none allowed)
+# 2.3  MAX_ELECTIVE_COLLISIONS — criterion-specific semantics
 # ---------------------------------------------------------------------------
 
 class TestMaxElectiveCollisions:
     """Criterion 2.3: number of same-day elective-elective pairs (same program)."""
 
     CRITERION = Criterion.MAX_ELECTIVE_COLLISIONS
-
-    def test_passes_when_collision_count_equals_k(self):
-        # Two electives on the same day = 1 collision; k=1 → pass
-        courses = [_elective("11111"), _elective("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
-        settings = _settings_only(self.CRITERION, k=1)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
-
-    def test_fails_when_collision_count_exceeds_k(self):
-        # Two electives on the same day = 1 collision; k=0 → fail
-        courses = [_elective("11111"), _elective("22222")]
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
-        settings = _settings_only(self.CRITERION, k=0)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is False
 
     def test_mandatory_elective_collision_not_counted(self):
         """Criterion 2.3 only counts elective-elective pairs, not mandatory-elective."""
@@ -225,44 +316,15 @@ class TestMaxElectiveCollisions:
         settings = _settings_only(self.CRITERION, k=2)
         assert ThresholdFilter.is_valid(schedule, courses, settings) is False
 
-    def test_different_programs_not_compared(self):
-        c1 = _elective("11111", program=PROGRAM_A)
-        c2 = _elective("22222", program=PROGRAM_B)
-        schedule = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})
-        settings = _settings_only(self.CRITERION, k=0)
-        assert ThresholdFilter.is_valid(schedule, [c1, c2], settings) is True
-
 
 # ---------------------------------------------------------------------------
-# 2.4  MIN_DAYS_EXAM_PERIOD_SPREAD
+# 2.4  MIN_DAYS_EXAM_PERIOD_SPREAD — criterion-specific semantics
 # ---------------------------------------------------------------------------
 
 class TestMinDaysExamPeriodSpread:
     """Criterion 2.4: gap between first and last mandatory exam (same program, year, term)."""
 
     CRITERION = Criterion.MIN_DAYS_EXAM_PERIOD_SPREAD
-
-    def test_passes_when_spread_equals_k(self):
-        courses = [
-            _mandatory("11111"), _mandatory("22222"), _mandatory("33333"),
-        ]
-        schedule = _schedule({
-            "11111": date(2026, 1, 5),
-            "22222": date(2026, 1, 10),
-            "33333": date(2026, 1, 12),
-        })
-        # spread = 12 - 5 = 7 days; k=7 → pass
-        settings = _settings_only(self.CRITERION, k=7)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
-
-    def test_fails_when_spread_below_k(self):
-        courses = [_mandatory("11111"), _mandatory("22222")]
-        schedule = _schedule({
-            "11111": date(2026, 1, 5),
-            "22222": date(2026, 1, 7),
-        })
-        settings = _settings_only(self.CRITERION, k=10)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is False
 
     def test_single_mandatory_exam_spread_zero_fails_k1(self):
         """A single mandatory exam has a spread of 0; k=1 should fail."""
@@ -285,32 +347,13 @@ class TestMinDaysExamPeriodSpread:
 
 
 # ---------------------------------------------------------------------------
-# 2.5  MAX_EXAMS_PER_DAY
+# 2.5  MAX_EXAMS_PER_DAY — criterion-specific semantics
 # ---------------------------------------------------------------------------
 
 class TestMaxExamsPerDay:
     """Criterion 2.5: maximum number of exams on the same day (global)."""
 
     CRITERION = Criterion.MAX_EXAMS_PER_DAY
-
-    def test_passes_when_day_count_equals_k(self):
-        courses = [_mandatory("11111"), _mandatory("22222")]
-        schedule = _schedule({
-            "11111": date(2026, 1, 5),
-            "22222": date(2026, 1, 5),
-        })
-        settings = _settings_only(self.CRITERION, k=2)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is True
-
-    def test_fails_when_day_count_exceeds_k(self):
-        courses = [_mandatory("11111"), _mandatory("22222"), _mandatory("33333")]
-        schedule = _schedule({
-            "11111": date(2026, 1, 5),
-            "22222": date(2026, 1, 5),
-            "33333": date(2026, 1, 5),
-        })
-        settings = _settings_only(self.CRITERION, k=2)
-        assert ThresholdFilter.is_valid(schedule, courses, settings) is False
 
     def test_courses_on_different_days_each_within_k(self):
         courses = [_mandatory("11111"), _mandatory("22222"), _mandatory("33333")]

@@ -110,8 +110,11 @@ class SettingsFileReader:
         return None
 
     def _parse_threshold_block(self, lines: List[str]) -> ThresholdSettings:
+        # An empty THRESHOLD block is valid: it means "no limiting". Returning an
+        # empty ThresholdSettings (no active rules) avoids crashing the CLI/GUI
+        # with a raw ValueError when the user leaves the block empty.
         if not lines:
-            raise ValueError("THRESHOLD block is empty")
+            return ThresholdSettings()
 
         entries: List[ThresholdEntry] = []
         seen: Set[Criterion] = set()

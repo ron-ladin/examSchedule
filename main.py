@@ -133,6 +133,15 @@ def _run_cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--classrooms", type=Path, default=None)
     parser.add_argument("--slots", type=Path, default=None)
     parser.add_argument("--proctor", type=Path, default=None)
+    parser.add_argument(
+        "--allow-unassigned",
+        action="store_true",
+        help=(
+            "Feature 4: keep schedules even when an exam is too large to fit the "
+            "available rooms, leaving those exams unassigned instead of dropping "
+            "the schedule. Mirrors the GUI capacity-warning 'proceed anyway' choice."
+        ),
+    )
 
     args = parser.parse_args(argv)
     args.output = _resolve_output_path(args.output)
@@ -231,6 +240,7 @@ def _run_cli(argv: list[str] | None = None) -> None:
         classrooms=classrooms,
         time_slots=time_slots,
         proctor_config=proctor_config,
+        allow_unassigned_classrooms=args.allow_unassigned,
         classroom_variant_mode=CLASSROOM_VARIANT_MODE_FIRST,
     ).run()
 

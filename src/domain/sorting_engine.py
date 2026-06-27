@@ -2,7 +2,11 @@
 Domain Service: SortingEngine
 -------------------------------
 Sorts a list of valid Schedules by a SortingConfig (spec sections 3.1–3.5).
-All criteria sort in DESCENDING order (higher score = ranked first).
+Direction is per-criterion: "higher is better" criteria (3.1, 3.2, 3.4) rank the
+highest score first (DESCENDING), while "lower is better" criteria (3.3 elective
+collisions, 3.5 max exams per day) rank the lowest score first (ASCENDING). The
+direction lives in src/domain/sorting.py (sorts_descending) so every sort path
+agrees.
 
 Public API:
     SortingEngine.sort(schedules, courses, config, selected_programs=None) -> list[Schedule]
@@ -21,7 +25,7 @@ from src.domain.schedule_metrics import (
     elective_dates_by_program,
     mandatory_dates_by_group,
 )
-from src.domain.sorting import SortCriterion, SortingConfig
+from src.domain.sorting import SortCriterion, SortingConfig, sorts_descending
 
 
 class SortingEngine:
@@ -70,8 +74,15 @@ class SortingEngine:
         prog_set: set = set(selected_programs) if selected_programs else set()
 
         def sort_key(schedule: Schedule) -> tuple:
-            # Negate each score so sorted() produces descending order.
-            return tuple(-_SCORERS[c](schedule, courses, prog_set) for c in criteria)
+            # sorted() is ascending. For "higher is better" criteria, negate the
+            # score so the highest ranks first; for "lower is better" criteria
+            # (3.3, 3.5) keep the score as-is so the lowest ranks first.
+            return tuple(
+                -_SCORERS[c](schedule, courses, prog_set)
+                if sorts_descending(c)
+                else _SCORERS[c](schedule, courses, prog_set)
+                for c in criteria
+            )
 
         return sorted(schedules, key=sort_key)
 

@@ -50,6 +50,30 @@ def normalize_sort_criterion(value: str) -> SortCriterion:
     return SORT_CRITERION_ALIASES[key]
 
 
+# Sort direction per criterion (single source of truth for every sort path).
+#
+# Most criteria are "higher is better" (more spacing between exams), so a higher
+# score must rank first → DESCENDING. But two criteria are "lower is better":
+#   - SORT_ELECTIVE_COLLISIONS (3.3): more same-day elective collisions is WORSE.
+#   - SORT_MAX_EXAMS_PER_DAY   (3.5): more exams crammed on one day is WORSE.
+# These must rank the LOWEST score first → ASCENDING. This matches the threshold
+# semantics for the same metrics (2.3 and 2.5 both bound them with "<= k").
+ASCENDING_CRITERIA: frozenset[SortCriterion] = frozenset(
+    {
+        SortCriterion.SORT_ELECTIVE_COLLISIONS,
+        SortCriterion.SORT_MAX_EXAMS_PER_DAY,
+    }
+)
+
+
+def sorts_descending(criterion: SortCriterion) -> bool:
+    """Return True if a higher score for *criterion* should rank first.
+
+    False means lower-is-better (rank the smallest score first).
+    """
+    return criterion not in ASCENDING_CRITERIA
+
+
 @dataclass(frozen=True)
 class SortRule:
     """A single SORT line: a criterion and its priority (1 = primary)."""
