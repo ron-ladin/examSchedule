@@ -80,6 +80,7 @@ class ResultsScreen(QWidget):
     """Screen 1: Course Details | Exam Periods | Schedule Results + loading pane."""
 
     back_requested = pyqtSignal()
+    heavy_task_state_changed = pyqtSignal(str, bool)
 
     def __init__(self, controller: DesktopController, parent=None) -> None:
         super().__init__(parent)
@@ -90,6 +91,9 @@ class ResultsScreen(QWidget):
         self._spin_timer.timeout.connect(self._tick_spinner)
         self._results_loaded: bool = False
         self._setup_ui()
+        self._results_panel.heavy_task_state_changed.connect(
+            self.heavy_task_state_changed
+        )
 
     def show_loading(self) -> None:
         self._content_stack.setCurrentIndex(0)
@@ -121,6 +125,10 @@ class ResultsScreen(QWidget):
     def prepare_streaming(self) -> None:
         """Reset the results panel before a new streaming generation run."""
         self._results_panel.begin_streaming()
+
+    def sync_heavy_task_state(self) -> None:
+        """Refresh result controls after another screen changes heavy-task state."""
+        self._results_panel.sync_heavy_task_state()
 
     def append_period(
         self,
@@ -175,6 +183,13 @@ class ResultsScreen(QWidget):
         threshold settings change invalidated the cached results)."""
         if self._results_loaded:
             self._results_panel.mark_stale()
+
+    def mark_sort_dirty(self) -> None:
+        """Show that sort settings changed and current results need ranking."""
+        if self._results_loaded:
+            self._results_panel.mark_ranking_dirty(
+                "Sort settings changed. Click Result Ranking to apply to current results."
+            )
 
     def refresh_periods(self) -> None:
         self._periods_tabs.clear()
@@ -420,7 +435,14 @@ class InputScreen(QWidget):
         self._config.courses_changed.connect(self._results.refresh_courses)
         self._config.periods_changed.connect(self._results.refresh_periods)
         self._config.results_invalidated.connect(self._results.mark_stale)
+        self._config.sort_settings_changed.connect(self._results.mark_sort_dirty)
         self._results.back_requested.connect(lambda: self._stacked.setCurrentIndex(0))
+        self._config.heavy_task_state_changed.connect(
+            lambda _kind, _active: self._results.sync_heavy_task_state()
+        )
+        self._results.heavy_task_state_changed.connect(
+            self._config.on_external_heavy_task_changed
+        )
 
     def _on_generation_started(self, data: tuple) -> None:
         selected, _ = data

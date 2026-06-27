@@ -84,6 +84,14 @@ class LoadMoreController(QObject):
         The current UI uses per-period Auto Load buttons, but tests can call this
         directly to start loading every truncated period.
         """
+        if self._panel.is_ranking_active():
+            self.messageRequested.emit(
+                "Ranking In Progress",
+                "Load More is available after Result Ranking finishes.",
+                _INFO,
+            )
+            return
+
         for period_key in self._panel.get_truncated_periods():
             if period_key in self.procs:
                 continue
@@ -160,6 +168,16 @@ class LoadMoreController(QObject):
             self.stop_auto_load(period_key)
             return
 
+        if self._panel.is_ranking_active():
+            self.messageRequested.emit(
+                "Ranking In Progress",
+                "Auto Load is available after Result Ranking finishes.",
+                _INFO,
+            )
+            self.update_auto_load_button(period_key)
+            self.cardRefreshRequested.emit(period_key)
+            return
+
         if period_key in self.procs:
             self.pending_auto_modes[period_key] = target_mode
             self.auto_load_periods.discard(period_key)
@@ -196,6 +214,10 @@ class LoadMoreController(QObject):
         """Request the next batch for the active scoped Auto mode."""
         if period_key not in self.auto_load_periods:
             self.update_auto_load_button(period_key)
+            return
+
+        if self._panel.is_ranking_active():
+            self.stop_auto_load(period_key)
             return
 
         if period_key in self.procs:
@@ -239,6 +261,7 @@ class LoadMoreController(QObject):
         mode = self.auto_load_modes.get(period_key)
         pending_mode = self.pending_auto_modes.get(period_key)
         is_loading = period_key in self.procs
+        ranking_active = panel.is_ranking_active()
         has_more_dates = self._controller.has_more_schedules(period_key)
         has_classroom = panel.has_classroom_results(period_key)
         variant_maybe_more = True
@@ -267,6 +290,7 @@ class LoadMoreController(QObject):
                     "#047857",
                     "rgba(4, 120, 87, 0.07)",
                     has_more_dates
+                    and not ranking_active
                     and pending_mode is None
                     and (not is_loading or mode == _AUTO_MODE_VARIANTS),
                 )
@@ -290,6 +314,7 @@ class LoadMoreController(QObject):
                     "rgba(124, 58, 237, 0.07)",
                     has_classroom
                     and variant_maybe_more
+                    and not ranking_active
                     and pending_mode is None
                     and (not is_loading or mode == _AUTO_MODE_DATES),
                 )
@@ -336,13 +361,23 @@ class LoadMoreController(QObject):
         """Load one batch of different date options."""
         if period_key in self.procs:
             return
-
-        already_date_options = self._panel.get_date_option_count(period_key)
-        queue, proc = self._controller.start_load_more_date_options_for_period(
-            period_key,
-            already_date_options,
+        if not self._begin_loading_task(period_key):
+            return
+        self._panel.show_workload_status(
+            f"Loading {LOAD_BATCH_SIZE:,} more date options..."
         )
-        self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_DATES)
+
+        try:
+            already_date_options = self._panel.get_date_option_count(period_key)
+            queue, proc = self._controller.start_load_more_date_options_for_period(
+                period_key,
+                already_date_options,
+            )
+            self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_DATES)
+        except Exception:
+            self._finish_load_metrics()
+            self._panel._end_heavy_task("loading")
+            raise
 
     def on_load_more_variants(
         self,
@@ -352,10 +387,15 @@ class LoadMoreController(QObject):
         """Load one batch of variants for the currently displayed date option."""
         if period_key in self.procs:
             return
+        if not self._begin_loading_task(period_key):
+            return
+        self._panel.show_workload_status("Loading classroom variants...")
 
         panel = self._panel
         schedules = panel.get_schedules(period_key)
         if not schedules:
+            self._finish_load_metrics()
+            panel._end_heavy_task("loading")
             self.stop_auto_load(period_key)
             return
 
@@ -364,12 +404,45 @@ class LoadMoreController(QObject):
         signature = panel.signature_of(current_schedule)
         existing_variants = panel.get_variant_index_count(period_key, signature)
 
-        queue, proc = self._controller.start_load_variants_for_schedule(
-            period_key,
-            current_schedule,
-            existing_variants,
+        try:
+            queue, proc = self._controller.start_load_variants_for_schedule(
+                period_key,
+                current_schedule,
+                existing_variants,
+            )
+            self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_VARIANTS)
+        except Exception:
+            self._finish_load_metrics()
+            panel._end_heavy_task("loading")
+            raise
+
+    def _begin_loading_task(self, period_key: str) -> bool:
+        """Reserve the shared heavy-task slot for one load-more batch."""
+        if self._panel.is_ranking_active():
+            self.messageRequested.emit(
+                "Ranking In Progress",
+                "Load More is available after Result Ranking finishes.",
+                _INFO,
+            )
+            self.update_auto_load_button(period_key)
+            self.cardRefreshRequested.emit(period_key)
+            return False
+
+        if not self._panel._begin_heavy_task("loading"):
+            self.messageRequested.emit(
+                "Busy",
+                "Another heavy task is already running. Please wait for it to finish.",
+                _INFO,
+            )
+            self.update_auto_load_button(period_key)
+            self.cardRefreshRequested.emit(period_key)
+            return False
+
+        self._controller.performance_metrics.start_load_batch(
+            batch_size=LOAD_BATCH_SIZE,
+            auto_load=period_key in self.auto_load_periods,
         )
-        self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_VARIANTS)
+        return True
 
     def poll_load_more(self, period_key: str) -> None:
         try:
@@ -541,21 +614,6 @@ class LoadMoreController(QObject):
         else:
             should_continue_auto = False
 
-        # Anti-OOM guardrail: once the panel is holding the hard maximum number
-        # of schedules in RAM, refuse to continue Auto Load and disable the
-        # manual Load More button. The panel has already truncated the merge; we
-        # stop here so a user who keeps clicking cannot trigger an OOM kill.
-        if panel.is_at_memory_cap():
-            should_continue_auto = False
-            if btn:
-                btn.setEnabled(False)
-                btn.setText("Memory limit reached")
-            self.stop_auto_load(period_key, refresh=False)
-            logger.warning(
-                "In-memory schedule cap reached for %s; Load More disabled.",
-                period_key,
-            )
-
         self.cleanup_load_more_state(period_key)
         self.cardRefreshRequested.emit(period_key)
 
@@ -613,3 +671,24 @@ class LoadMoreController(QObject):
                     proc.join(timeout=0)
             except Exception:
                 logger.debug("Failed cleaning up load-more process", exc_info=True)
+
+        if not self.procs:
+            self._finish_load_metrics()
+            self._panel._end_heavy_task("loading")
+
+    def _finish_load_metrics(self) -> None:
+        """Finalize the current load-batch metrics snapshot, if one is active."""
+        try:
+            snapshot = self._controller.performance_metrics.finish_load_batch(
+                sqlite_stored_row_count=self._panel.total_in_memory_schedule_count(),
+            )
+            logger.info(
+                "Load batch performance summary: load_more=%.3fs auto_load=%.3fs "
+                "sqlite_rows=%s batch_size=%s",
+                snapshot.load_more_batch_seconds,
+                snapshot.auto_load_batch_seconds,
+                snapshot.sqlite_stored_row_count,
+                snapshot.active_batch_size,
+            )
+        except Exception:
+            logger.debug("Failed recording load batch metrics", exc_info=True)

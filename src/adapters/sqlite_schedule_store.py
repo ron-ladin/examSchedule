@@ -478,6 +478,21 @@ class SQLiteScheduleStore(IScheduleStore):
         ).fetchall()
         return [(pickle.loads(row[0]), idx) for idx, row in enumerate(rows)]
 
+    def warm_order(self, period_key: str, sorting: SortingConfig | None = None) -> None:
+        """Exercise the SQL ranking order without unpickling schedule blobs."""
+        self._ensure_open()
+        order_by = self._order_by(sorting)
+        self._conn.execute(
+            f"""
+            SELECT id
+            FROM schedules
+            WHERE period_key = ?
+            ORDER BY {order_by}
+            LIMIT 1
+            """,
+            (period_key,),
+        ).fetchone()
+
     def has_classroom_data(self, period_key: str | None = None) -> bool:
         """Return True if any stored schedule has Feature-4 classroom data."""
         self._ensure_open()

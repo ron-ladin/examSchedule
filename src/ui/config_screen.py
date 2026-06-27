@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.adapters.readers.schedule_file_reader import EmptyScheduleImportError
-from src.controller import DesktopController, MissingStudentCountError
+from src.controller import DesktopController, LOAD_BATCH_SIZE, MissingStudentCountError
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
 from src.ui.generation_poller import GenerationPoller
@@ -96,6 +96,8 @@ class ConfigScreen(QWidget):
     courses_changed = pyqtSignal(list)
     periods_changed = pyqtSignal()
     results_invalidated = pyqtSignal()
+    sort_settings_changed = pyqtSignal()
+    heavy_task_state_changed = pyqtSignal(str, bool)
 
     def __init__(self, controller: DesktopController, parent=None) -> None:
         super().__init__(parent)
@@ -592,16 +594,13 @@ class ConfigScreen(QWidget):
         self._settings_dialog.activateWindow()
 
     def _on_sort_order_changed(self, config: SortingConfig) -> None:
-        """Re-sort cached results after the settings dialog is saved."""
-        try:
-            resorted = self._controller.resort(config)
-        except ValueError:
-            self._controller.apply_sort(config)
-            return
-        read_only_import = self._controller.read_only_import
-        self.schedule_generated.emit(
-            ([], resorted, self._last_courses_by_id, {}, set(), read_only_import)
+        """Persist sort config without re-ranking on the settings UI thread."""
+        self._controller.apply_sort(config)
+        logger.info(
+            "Sort order updated via SettingsScreen; cached results can be "
+            "re-ranked asynchronously from the results screen."
         )
+        self.sort_settings_changed.emit()
 
     def _on_settings_changed(self, new_settings: Settings) -> None:
         """Persist settings and invalidate generated results only for threshold changes."""
@@ -621,6 +620,15 @@ class ConfigScreen(QWidget):
             self._settings_dialog.set_generation_state(is_running)
 
     def _on_generate(self) -> None:
+        if self._controller.heavy_task_kind is not None:
+            QMessageBox.information(
+                self,
+                "Busy",
+                "Generate is available after the current heavy task finishes.",
+            )
+            self._update_gen_btn()
+            return
+
         selected = self._get_selected_ids()
         self._controller.set_selected_programs(selected)
 
@@ -635,6 +643,17 @@ class ConfigScreen(QWidget):
             for i, pid in enumerate(selected)
         }
 
+        if not self._controller.begin_heavy_task("generation"):
+            QMessageBox.information(
+                self,
+                "Busy",
+                "Generate is available after the current heavy task finishes.",
+            )
+            self._update_gen_btn()
+            return
+        self.heavy_task_state_changed.emit("generation", True)
+        self._controller.performance_metrics.start_generation(LOAD_BATCH_SIZE)
+
         self.generation_started.emit((selected, color_map))
 
         self._gen_btn.setEnabled(False)
@@ -646,7 +665,13 @@ class ConfigScreen(QWidget):
             "QProgressBar::chunk { background:#2563EB; }"
         )
 
-        self._poller.start(selected, color_map, self._allow_unassigned_generation)
+        try:
+            self._poller.start(selected, color_map, self._allow_unassigned_generation)
+        except Exception:
+            self._controller.performance_metrics.finish_generation()
+            if self._controller.end_heavy_task("generation"):
+                self.heavy_task_state_changed.emit("generation", False)
+            raise
 
     def _confirm_capacity_warning(self) -> bool:
         """Show the optional Feature 4 capacity warning before generation."""
@@ -780,14 +805,22 @@ class ConfigScreen(QWidget):
         # Terminal event for streaming generation. Results were already shown
         # incrementally via period_ready, so do NOT rebuild the results panel
         # here — just restore controls and status.
+        if self._controller.end_heavy_task("generation"):
+            self.heavy_task_state_changed.emit("generation", False)
+        self._controller.performance_metrics.finish_generation(
+            total_generated_schedules=self._controller.cached_schedule_count(),
+        )
         self._notify_settings_state(False)
-        self._gen_btn.setEnabled(True)
+        self._update_gen_btn()
         self._set_status("✓  Schedule generated.", ok=True)
 
     def _fail(self, msg: str) -> None:
         self._reset_progress()
         self._notify_settings_state(False)
         self._poller.stop()
+        if self._controller.end_heavy_task("generation"):
+            self.heavy_task_state_changed.emit("generation", False)
+        self._controller.performance_metrics.finish_generation()
         logger.error("Generation failed: %s", msg)
         self._update_gen_btn()
         self.generation_failed.emit(msg)
@@ -809,6 +842,7 @@ class ConfigScreen(QWidget):
 
     def _update_gen_btn(self) -> None:
         running = self._poller.is_running()
+        heavy_kind = self._controller.heavy_task_kind
 
         # When Feature 4 is enabled, generation is blocked until all its
         # inputs and student counts are valid (spec 4.2).
@@ -819,15 +853,24 @@ class ConfigScreen(QWidget):
 
         self._gen_btn.setEnabled(
             not running
+            and heavy_kind is None
             and self._controller.has_courses
             and self._controller.has_periods
             and self._count_checked() >= 1
             and feature4_ok
         )
 
+    def on_external_heavy_task_changed(self, kind: str, active: bool) -> None:
+        """Refresh Generate state when another screen owns the heavy-task slot."""
+        if kind == "ranking":
+            self._set_status("Ranking results; generation is paused." if active else "")
+        self._update_gen_btn()
+
     def shutdown_background_workers(self) -> None:
         """Stop generation workers owned by this screen."""
         self._poller.stop()
+        if self._controller.end_heavy_task("generation"):
+            self.heavy_task_state_changed.emit("generation", False)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
         self.shutdown_background_workers()

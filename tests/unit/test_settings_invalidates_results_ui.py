@@ -9,6 +9,7 @@ to discover the results are stale. A sorting-only change must NOT emit it.
 
 import os
 import sys
+from datetime import date
 
 import pytest
 
@@ -22,6 +23,8 @@ QtWidgets = pytest.importorskip(
 QtTest = pytest.importorskip("PyQt6.QtTest", exc_type=ImportError)
 
 from src.controller import DesktopController
+from src.domain.exam_period import ExamPeriod
+from src.domain.schedule import Schedule
 from src.domain.settings import Settings
 from src.domain.sorting import SortCriterion, SortingConfig
 from src.domain.threshold import Criterion, ThresholdEntry, ThresholdSettings
@@ -108,3 +111,29 @@ def test_input_screen_shows_stale_state_immediately_on_threshold_change(qapp):
     assert panel._stale_banner.isVisibleTo(panel) is True
     assert panel._save_btn.isEnabled() is False
     assert panel._proctor_btn.isEnabled() is False
+
+
+def test_sort_settings_change_marks_loaded_results_as_needing_rerank(qapp):
+    ctrl = _controller_with_results()
+    screen = InputScreen(ctrl)
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    schedule = Schedule(period, {"11111": date(2026, 1, 5)})
+
+    screen._results.load(
+        {"FALL - Aleph": [schedule]},
+        {},
+        {},
+        set(),
+    )
+    qapp.processEvents()
+
+    screen._config._on_sort_order_changed(
+        _sorting(SortCriterion.SORT_MIN_DAYS_MANDATORY)
+    )
+    qapp.processEvents()
+
+    panel = screen._results._results_panel
+    assert ctrl.results_stale is False
+    assert panel._is_stale() is False
+    assert panel._ranking_dirty is True
+    assert "Click Result Ranking" in panel._summary_lbl.text()
