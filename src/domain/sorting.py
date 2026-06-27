@@ -50,6 +50,28 @@ def normalize_sort_criterion(value: str) -> SortCriterion:
     return SORT_CRITERION_ALIASES[key]
 
 
+# Sort direction per criterion (single source of truth for every sort path).
+#
+# Per the SRS (stage 3, §3.1-3.5) ALL FIVE sort criteria are displayed in
+# DESCENDING order of their score - including §3.3 ("בסדר יורד של מספר
+# ההתנגשויות") and §3.5 ("בסדר יורד של מספר הבחינות המקסימלי"). So a higher
+# score always ranks first and ASCENDING_CRITERIA is currently empty.
+#
+# The per-criterion direction mechanism is kept intentionally: a criterion can
+# be flipped to "lowest score first" simply by adding it to this set, without
+# touching SortingEngine or the SQLite ORDER BY path. It stays empty until a
+# signed-off spec deviation says otherwise.
+ASCENDING_CRITERIA: frozenset[SortCriterion] = frozenset()
+
+
+def sorts_descending(criterion: SortCriterion) -> bool:
+    """Return True if a higher score for *criterion* should rank first.
+
+    False means lower-is-better (rank the smallest score first).
+    """
+    return criterion not in ASCENDING_CRITERIA
+
+
 @dataclass(frozen=True)
 class SortRule:
     """A single SORT line: a criterion and its priority (1 = primary)."""

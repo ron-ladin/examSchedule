@@ -29,7 +29,7 @@ from typing import overload
 from src.domain.course import Course
 from src.domain.schedule import Schedule
 from src.domain.settings import Settings
-from src.domain.sorting import SortCriterion, SortingConfig
+from src.domain.sorting import SortCriterion, SortingConfig, sorts_descending
 from src.domain.sorting_engine import SortingEngine
 from src.interfaces.i_output_exporter import IOutputExporter
 from src.interfaces.i_schedule_store import IScheduleStore
@@ -579,7 +579,10 @@ class SQLiteScheduleStore(IScheduleStore):
         if not criteria:
             return "position ASC"
 
-        parts = [f"{_SCORE_COLUMNS[criterion]} DESC" for criterion in criteria]
+        parts = [
+            f"{_SCORE_COLUMNS[criterion]} {'DESC' if sorts_descending(criterion) else 'ASC'}"
+            for criterion in criteria
+        ]
         parts.append("position ASC")
         return ", ".join(parts)
 
