@@ -52,18 +52,16 @@ def normalize_sort_criterion(value: str) -> SortCriterion:
 
 # Sort direction per criterion (single source of truth for every sort path).
 #
-# Most criteria are "higher is better" (more spacing between exams), so a higher
-# score must rank first → DESCENDING. But two criteria are "lower is better":
-#   - SORT_ELECTIVE_COLLISIONS (3.3): more same-day elective collisions is WORSE.
-#   - SORT_MAX_EXAMS_PER_DAY   (3.5): more exams crammed on one day is WORSE.
-# These must rank the LOWEST score first → ASCENDING. This matches the threshold
-# semantics for the same metrics (2.3 and 2.5 both bound them with "<= k").
-ASCENDING_CRITERIA: frozenset[SortCriterion] = frozenset(
-    {
-        SortCriterion.SORT_ELECTIVE_COLLISIONS,
-        SortCriterion.SORT_MAX_EXAMS_PER_DAY,
-    }
-)
+# Per the SRS (stage 3, §3.1-3.5) ALL FIVE sort criteria are displayed in
+# DESCENDING order of their score - including §3.3 ("בסדר יורד של מספר
+# ההתנגשויות") and §3.5 ("בסדר יורד של מספר הבחינות המקסימלי"). So a higher
+# score always ranks first and ASCENDING_CRITERIA is currently empty.
+#
+# The per-criterion direction mechanism is kept intentionally: a criterion can
+# be flipped to "lowest score first" simply by adding it to this set, without
+# touching SortingEngine or the SQLite ORDER BY path. It stays empty until a
+# signed-off spec deviation says otherwise.
+ASCENDING_CRITERIA: frozenset[SortCriterion] = frozenset()
 
 
 def sorts_descending(criterion: SortCriterion) -> bool:

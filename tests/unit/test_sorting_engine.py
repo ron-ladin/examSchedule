@@ -88,11 +88,11 @@ def _config_single(criterion: SortCriterion, priority: int = 1) -> SortingConfig
 
 
 # ---------------------------------------------------------------------------
-# Sort direction (single source of truth) — 3.3 & 3.5 are lower-is-better
+# Sort direction (single source of truth) — all five criteria sort DESCENDING
 # ---------------------------------------------------------------------------
 
 class TestSortDirection:
-    """Direction map: most criteria descend; 3.3 and 3.5 ascend (lower is better)."""
+    """Direction map: per the SRS all five criteria sort DESCENDING."""
 
     @pytest.mark.parametrize(
         "criterion, expected_descending",
@@ -100,20 +100,17 @@ class TestSortDirection:
             (SortCriterion.SORT_MIN_DAYS_MANDATORY, True),
             (SortCriterion.SORT_AVG_DAYS_ANY, True),
             (SortCriterion.SORT_EXAM_PERIOD_SPREAD, True),
-            (SortCriterion.SORT_ELECTIVE_COLLISIONS, False),
-            (SortCriterion.SORT_MAX_EXAMS_PER_DAY, False),
+            (SortCriterion.SORT_ELECTIVE_COLLISIONS, True),
+            (SortCriterion.SORT_MAX_EXAMS_PER_DAY, True),
         ],
     )
     def test_sorts_descending_direction(self, criterion, expected_descending):
         assert sorts_descending(criterion) is expected_descending
 
-    def test_ascending_criteria_is_exactly_3_3_and_3_5(self):
-        assert ASCENDING_CRITERIA == frozenset(
-            {
-                SortCriterion.SORT_ELECTIVE_COLLISIONS,
-                SortCriterion.SORT_MAX_EXAMS_PER_DAY,
-            }
-        )
+    def test_ascending_criteria_is_empty(self):
+        # SRS §3.1-3.5 mandate descending for all five; the flip mechanism stays
+        # available but no criterion is currently ascending.
+        assert ASCENDING_CRITERIA == frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -146,19 +143,21 @@ def _case_exam_period_spread():
 
 
 def _case_elective_collisions():
+    # 3.3 sorts DESCENDING: the HIGHER collision count ranks first.
     courses = [_elective("11111"), _elective("22222")]
-    better = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 6)})   # 0 collisions
-    worse = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})    # 1 collision
+    better = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})   # 1 collision
+    worse = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 6)})    # 0 collisions
     return courses, better, worse
 
 
 def _case_max_exams_per_day():
+    # 3.5 sorts DESCENDING: the HIGHER max-exams-per-day ranks first.
     courses = [_mandatory("11111"), _mandatory("22222"), _mandatory("33333")]
-    better = _schedule({  # max 1 exam/day
-        "11111": date(2026, 1, 5), "22222": date(2026, 1, 6), "33333": date(2026, 1, 7),
-    })
-    worse = _schedule({  # max 2 exams/day
+    better = _schedule({  # max 2 exams/day
         "11111": date(2026, 1, 5), "22222": date(2026, 1, 5), "33333": date(2026, 1, 10),
+    })
+    worse = _schedule({  # max 1 exam/day
+        "11111": date(2026, 1, 5), "22222": date(2026, 1, 6), "33333": date(2026, 1, 7),
     })
     return courses, better, worse
 
@@ -239,18 +238,18 @@ class TestSortAvgDaysAny:
 # ---------------------------------------------------------------------------
 
 class TestSortElectiveCollisions:
-    """Criterion 3.3: lower-is-better — FEWER elective collisions rank first (ASCENDING)."""
+    """Criterion 3.3: DESCENDING by elective collision count (SRS §3.3 'בסדר יורד')."""
 
     CRITERION = SortCriterion.SORT_ELECTIVE_COLLISIONS
 
-    def test_zero_collisions_ranks_first(self):
+    def test_most_collisions_ranks_first(self):
         c1, c2 = _elective("11111"), _elective("22222")
         sched_a = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 5)})  # 1 collision
         sched_b = _schedule({"11111": date(2026, 1, 5), "22222": date(2026, 1, 6)})  # 0 collisions
 
-        result = SortingEngine.sort([sched_a, sched_b], [c1, c2], _config_single(self.CRITERION))
-        assert result[0] is sched_b
-        assert result[-1] is sched_a
+        result = SortingEngine.sort([sched_b, sched_a], [c1, c2], _config_single(self.CRITERION))
+        assert result[0] is sched_a
+        assert result[-1] is sched_b
 
 
 # ---------------------------------------------------------------------------
@@ -282,25 +281,25 @@ class TestSortExamPeriodSpread:
 # ---------------------------------------------------------------------------
 
 class TestSortMaxExamsPerDay:
-    """Criterion 3.5: lower-is-better — FEWER exams on the busiest day rank first (ASCENDING)."""
+    """Criterion 3.5: DESCENDING by max exams on a single day (SRS §3.5 'בסדר יורד')."""
 
     CRITERION = SortCriterion.SORT_MAX_EXAMS_PER_DAY
 
-    def test_two_exams_same_day_beats_three(self):
+    def test_three_exams_same_day_ranks_before_two(self):
         c1, c2, c3 = _mandatory("11111"), _mandatory("22222"), _mandatory("33333")
         sched_a = _schedule({
             "11111": date(2026, 1, 5),
             "22222": date(2026, 1, 5),
             "33333": date(2026, 1, 5),
-        })  # max = 3
+        })  # max = 3 (more → ranks first)
         sched_b = _schedule({
             "11111": date(2026, 1, 5),
             "22222": date(2026, 1, 5),
             "33333": date(2026, 1, 6),
-        })  # max = 2 (fewer → ranks first)
+        })  # max = 2
 
-        result = SortingEngine.sort([sched_a, sched_b], [c1, c2, c3], _config_single(self.CRITERION))
-        assert result[0] is sched_b
+        result = SortingEngine.sort([sched_b, sched_a], [c1, c2, c3], _config_single(self.CRITERION))
+        assert result[0] is sched_a
 
 
 # ---------------------------------------------------------------------------
@@ -317,20 +316,20 @@ class TestMultiLevelSort:
 
         Setup: 2 mandatory courses (11111, 22222) with gap=10 in BOTH schedules.
         An elective (33333) is placed differently to create a difference in max-exams-per-day.
-        sched_a keeps max exams/day = 1, so under the corrected ASCENDING direction
-        for 3.5 (fewer is better) it ranks first.
+        sched_b reaches max exams/day = 2, so under the DESCENDING direction for 3.5
+        (more ranks first, SRS §3.5) it ranks first.
         """
         c1, c2 = _mandatory("11111"), _mandatory("22222")
         c3 = _elective("33333")
 
         # Both schedules: mandatory gap = Jan5→Jan15 = 10 days  (identical primary score)
-        # sched_a: elective alone on Jan10 → max exams/day = 1  (fewer → ranks first)
+        # sched_a: elective alone on Jan10 → max exams/day = 1  (fewer → ranks last)
         sched_a = _schedule({
             "11111": date(2026, 1, 5),
             "22222": date(2026, 1, 15),
             "33333": date(2026, 1, 10),
         })
-        # sched_b: elective on same day as 11111 (Jan5) → max exams/day = 2  (more → ranks last)
+        # sched_b: elective on same day as 11111 (Jan5) → max exams/day = 2  (more → ranks first)
         sched_b = _schedule({
             "11111": date(2026, 1, 5),
             "22222": date(2026, 1, 15),
@@ -344,7 +343,7 @@ class TestMultiLevelSort:
             )
         )
         result = SortingEngine.sort([sched_a, sched_b], [c1, c2, c3], config)
-        assert result[0] is sched_a
+        assert result[0] is sched_b
 
     def test_primary_criterion_overrides_secondary(self):
         """
@@ -543,14 +542,14 @@ class TestSortingConfigOrderedCriteria:
             "33333": date(2026, 1, 5),
         })  # max exams/day = 2, min gap = 0
 
-        # Priority: max-per-day first. 3.5 is lower-is-better (ASCENDING), so the
-        # schedule with fewer exams/day (sched_gap, max=1) wins over sched_dense (max=2).
+        # Priority: max-per-day first. 3.5 sorts DESCENDING (SRS §3.5), so the
+        # schedule with MORE exams/day (sched_dense, max=2) wins over sched_gap (max=1).
         config = SortingConfig.from_ordered_criteria([
             SortCriterion.SORT_MAX_EXAMS_PER_DAY,
             SortCriterion.SORT_MIN_DAYS_MANDATORY,
         ])
         result = SortingEngine.sort([sched_gap, sched_dense], [c1, c2, c3], config)
-        assert result[0] is sched_gap
+        assert result[0] is sched_dense
 
 
 # ---------------------------------------------------------------------------

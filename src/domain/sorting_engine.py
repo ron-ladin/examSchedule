@@ -2,11 +2,10 @@
 Domain Service: SortingEngine
 -------------------------------
 Sorts a list of valid Schedules by a SortingConfig (spec sections 3.1–3.5).
-Direction is per-criterion: "higher is better" criteria (3.1, 3.2, 3.4) rank the
-highest score first (DESCENDING), while "lower is better" criteria (3.3 elective
-collisions, 3.5 max exams per day) rank the lowest score first (ASCENDING). The
-direction lives in src/domain/sorting.py (sorts_descending) so every sort path
-agrees.
+Per the SRS all five criteria rank the highest score first (DESCENDING). The
+direction is still resolved per-criterion via src/domain/sorting.py
+(sorts_descending) so every sort path agrees and a criterion can be flipped to
+ascending later without touching this module; ASCENDING_CRITERIA is empty today.
 
 Public API:
     SortingEngine.sort(schedules, courses, config, selected_programs=None) -> list[Schedule]

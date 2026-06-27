@@ -122,8 +122,8 @@ def test_resort_can_switch_between_sort_criteria_without_regeneration():
     initially_sorted = ctrl.cache_generated_results(
         {PERIOD_KEY: [spread_out, dense_day]}
     )
-    # 3.5 is lower-is-better (ASCENDING): spread_out (max 1/day) beats dense_day (max 2/day).
-    assert initially_sorted[PERIOD_KEY] == [spread_out, dense_day]
+    # 3.5 sorts DESCENDING (SRS §3.5): dense_day (max 2/day) ranks before spread_out (max 1/day).
+    assert initially_sorted[PERIOD_KEY] == [dense_day, spread_out]
 
     resorted = ctrl.resort(_single_sort(SortCriterion.SORT_MIN_DAYS_MANDATORY))
 
@@ -170,8 +170,8 @@ def test_incremental_generation_batches_use_current_active_sort():
     second_partial = ctrl.cache_generated_results_incremental(
         {"FALL - Bet": [spread_out, dense_day]}
     )
-    # 3.5 is lower-is-better (ASCENDING): spread_out (max 1/day) ranks before dense_day.
-    assert second_partial["FALL - Bet"] == [spread_out, dense_day]
+    # 3.5 sorts DESCENDING (SRS §3.5): dense_day (max 2/day) ranks before spread_out.
+    assert second_partial["FALL - Bet"] == [dense_day, spread_out]
 
 
 def test_stateful_date_options_sort_each_loaded_batch_with_active_rules():
