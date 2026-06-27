@@ -69,6 +69,28 @@ def test_generate_returns_schedules_and_courses(tmp_path):
     assert not truncated
 
 
+def test_generate_records_sqlite_performance_metrics_without_changing_results(tmp_path):
+    cp = tmp_path / "courses.txt"
+    dp = tmp_path / "dates.txt"
+
+    _write_courses(cp)
+    _write_periods(dp)
+
+    ctrl = DesktopController()
+    ctrl.load_courses(cp)
+    ctrl.load_periods(dp)
+    ctrl.set_selected_programs(["83101"])
+
+    schedules_by_period, _courses_by_id, _truncated = ctrl.generate()
+    snapshot = ctrl.performance_metrics.snapshot()
+
+    produced = sum(len(schedules) for schedules in schedules_by_period.values())
+    assert produced > 0
+    assert snapshot.total_generated_schedules == produced
+    assert snapshot.schedules_stored_sqlite == produced
+    assert snapshot.sqlite_stored_row_count == produced
+
+
 def test_generate_returns_all_period_schedules_without_truncation(tmp_path):
     """
     Three obligatory courses in the same programme + a 4-week window produces

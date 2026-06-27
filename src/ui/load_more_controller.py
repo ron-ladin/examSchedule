@@ -363,6 +363,9 @@ class LoadMoreController(QObject):
             return
         if not self._begin_loading_task(period_key):
             return
+        self._panel.show_workload_status(
+            f"Loading {LOAD_BATCH_SIZE:,} more date options..."
+        )
 
         try:
             already_date_options = self._panel.get_date_option_count(period_key)
@@ -372,6 +375,7 @@ class LoadMoreController(QObject):
             )
             self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_DATES)
         except Exception:
+            self._finish_load_metrics()
             self._panel._end_heavy_task("loading")
             raise
 
@@ -385,10 +389,12 @@ class LoadMoreController(QObject):
             return
         if not self._begin_loading_task(period_key):
             return
+        self._panel.show_workload_status("Loading classroom variants...")
 
         panel = self._panel
         schedules = panel.get_schedules(period_key)
         if not schedules:
+            self._finish_load_metrics()
             panel._end_heavy_task("loading")
             self.stop_auto_load(period_key)
             return
@@ -406,6 +412,7 @@ class LoadMoreController(QObject):
             )
             self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_VARIANTS)
         except Exception:
+            self._finish_load_metrics()
             panel._end_heavy_task("loading")
             raise
 
@@ -431,6 +438,10 @@ class LoadMoreController(QObject):
             self.cardRefreshRequested.emit(period_key)
             return False
 
+        self._controller.performance_metrics.start_load_batch(
+            batch_size=LOAD_BATCH_SIZE,
+            auto_load=period_key in self.auto_load_periods,
+        )
         return True
 
     def poll_load_more(self, period_key: str) -> None:
@@ -662,4 +673,22 @@ class LoadMoreController(QObject):
                 logger.debug("Failed cleaning up load-more process", exc_info=True)
 
         if not self.procs:
+            self._finish_load_metrics()
             self._panel._end_heavy_task("loading")
+
+    def _finish_load_metrics(self) -> None:
+        """Finalize the current load-batch metrics snapshot, if one is active."""
+        try:
+            snapshot = self._controller.performance_metrics.finish_load_batch(
+                sqlite_stored_row_count=self._panel.total_in_memory_schedule_count(),
+            )
+            logger.info(
+                "Load batch performance summary: load_more=%.3fs auto_load=%.3fs "
+                "sqlite_rows=%s batch_size=%s",
+                snapshot.load_more_batch_seconds,
+                snapshot.auto_load_batch_seconds,
+                snapshot.sqlite_stored_row_count,
+                snapshot.active_batch_size,
+            )
+        except Exception:
+            logger.debug("Failed recording load batch metrics", exc_info=True)

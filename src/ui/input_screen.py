@@ -184,6 +184,13 @@ class ResultsScreen(QWidget):
         if self._results_loaded:
             self._results_panel.mark_stale()
 
+    def mark_sort_dirty(self) -> None:
+        """Show that sort settings changed and current results need ranking."""
+        if self._results_loaded:
+            self._results_panel.mark_ranking_dirty(
+                "Sort settings changed. Click Result Ranking to apply to current results."
+            )
+
     def refresh_periods(self) -> None:
         self._periods_tabs.clear()
         self._date_editors.clear()
@@ -428,6 +435,7 @@ class InputScreen(QWidget):
         self._config.courses_changed.connect(self._results.refresh_courses)
         self._config.periods_changed.connect(self._results.refresh_periods)
         self._config.results_invalidated.connect(self._results.mark_stale)
+        self._config.sort_settings_changed.connect(self._results.mark_sort_dirty)
         self._results.back_requested.connect(lambda: self._stacked.setCurrentIndex(0))
         self._config.heavy_task_state_changed.connect(
             lambda _kind, _active: self._results.sync_heavy_task_state()

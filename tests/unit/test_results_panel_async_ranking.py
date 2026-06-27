@@ -230,6 +230,9 @@ def test_ranking_success_updates_displayed_order(qapp):
     panel._ranking_proc = _FinishedProcess()
     panel._ranking_config = _sorting()
     panel._set_ranking_busy(True)
+    panel.mark_ranking_dirty(
+        "Sort settings changed. Click Result Ranking to apply to current results."
+    )
 
     try:
         panel._poll_ranking_worker()
@@ -238,6 +241,8 @@ def test_ranking_success_updates_displayed_order(qapp):
         assert panel.get_schedules(period_key) == [second, first]
         assert panel.get_current_index(period_key) == 0
         assert panel._ranking_btn.isEnabled() is True
+        assert panel._ranking_dirty is False
+        assert "Click Result Ranking" not in panel._summary_lbl.text()
     finally:
         panel.close()
 
@@ -287,6 +292,28 @@ def test_load_more_is_blocked_while_ranking_is_active(monkeypatch, qapp):
         assert messages and messages[0][0] == "Ranking In Progress"
     finally:
         controller.end_heavy_task("ranking")
+        panel.close()
+
+
+def test_load_more_sets_loading_status_without_popup(monkeypatch, qapp):
+    panel, controller, period_key, _first, _second = _panel_with_memory_results(qapp)
+    monkeypatch.setattr(
+        controller,
+        "start_load_more_date_options_for_period",
+        lambda *_args, **_kwargs: (queue.Queue(), _FinishedProcess()),
+    )
+    monkeypatch.setattr(
+        panel._lm,
+        "_start_load_more_process",
+        lambda *_args, **_kwargs: None,
+    )
+
+    try:
+        panel._lm.on_load_more_dates(period_key)
+
+        assert "Loading 5,000 more date options" in panel._summary_lbl.text()
+    finally:
+        controller.end_heavy_task("loading")
         panel.close()
 
 
@@ -347,6 +374,8 @@ def test_append_loaded_schedules_marks_ranking_dirty_without_full_rerank(
         "cache_generated_results",
         lambda *_args, **_kwargs: pytest.fail("full rerank should not run"),
     )
+    rebuilt = []
+    monkeypatch.setattr(panel, "_rebuild_navigation_cache", rebuilt.append)
     extra = [_schedule("C1", 20)]
 
     try:
@@ -356,6 +385,7 @@ def test_append_loaded_schedules_marks_ranking_dirty_without_full_rerank(
         assert controller._last_results[period_key] == [first, second, extra[0]]
         assert panel._ranking_dirty is True
         assert "Re-rank" in panel._summary_lbl.text()
+        assert rebuilt == [period_key]
     finally:
         panel.close()
 

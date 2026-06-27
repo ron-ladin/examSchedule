@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.adapters.readers.schedule_file_reader import EmptyScheduleImportError
-from src.controller import DesktopController, MissingStudentCountError
+from src.controller import DesktopController, LOAD_BATCH_SIZE, MissingStudentCountError
 from src.domain.settings import Settings
 from src.ui.settings_screen import SettingsScreen
 from src.ui.generation_poller import GenerationPoller
@@ -96,6 +96,7 @@ class ConfigScreen(QWidget):
     courses_changed = pyqtSignal(list)
     periods_changed = pyqtSignal()
     results_invalidated = pyqtSignal()
+    sort_settings_changed = pyqtSignal()
     heavy_task_state_changed = pyqtSignal(str, bool)
 
     def __init__(self, controller: DesktopController, parent=None) -> None:
@@ -599,6 +600,7 @@ class ConfigScreen(QWidget):
             "Sort order updated via SettingsScreen; cached results can be "
             "re-ranked asynchronously from the results screen."
         )
+        self.sort_settings_changed.emit()
 
     def _on_settings_changed(self, new_settings: Settings) -> None:
         """Persist settings and invalidate generated results only for threshold changes."""
@@ -650,6 +652,7 @@ class ConfigScreen(QWidget):
             self._update_gen_btn()
             return
         self.heavy_task_state_changed.emit("generation", True)
+        self._controller.performance_metrics.start_generation(LOAD_BATCH_SIZE)
 
         self.generation_started.emit((selected, color_map))
 
@@ -665,6 +668,7 @@ class ConfigScreen(QWidget):
         try:
             self._poller.start(selected, color_map, self._allow_unassigned_generation)
         except Exception:
+            self._controller.performance_metrics.finish_generation()
             if self._controller.end_heavy_task("generation"):
                 self.heavy_task_state_changed.emit("generation", False)
             raise
@@ -803,6 +807,9 @@ class ConfigScreen(QWidget):
         # here — just restore controls and status.
         if self._controller.end_heavy_task("generation"):
             self.heavy_task_state_changed.emit("generation", False)
+        self._controller.performance_metrics.finish_generation(
+            total_generated_schedules=self._controller.cached_schedule_count(),
+        )
         self._notify_settings_state(False)
         self._update_gen_btn()
         self._set_status("✓  Schedule generated.", ok=True)
@@ -813,6 +820,7 @@ class ConfigScreen(QWidget):
         self._poller.stop()
         if self._controller.end_heavy_task("generation"):
             self.heavy_task_state_changed.emit("generation", False)
+        self._controller.performance_metrics.finish_generation()
         logger.error("Generation failed: %s", msg)
         self._update_gen_btn()
         self.generation_failed.emit(msg)

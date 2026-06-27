@@ -4,6 +4,7 @@ Unit Tests: ScheduleGenerator
 Tests for backtracking schedule generation logic.
 """
 import itertools
+import random
 from datetime import date
 from typing import List
 
@@ -332,6 +333,35 @@ def test_all_threshold_criteria_off_matches_unfiltered_bruteforce():
         _schedule_signature(schedule) for schedule in brute_force
     }
     assert gen.last_metrics.threshold_prunes == 0
+
+
+def test_randomized_small_cases_match_bruteforce_without_duplicates():
+    rng = random.Random(20260627)
+    selected_programs = ["83101", "83102"]
+
+    for case_index in range(8):
+        courses = []
+        for course_index in range(3):
+            courses.append(
+                _make_course(
+                    f"{case_index}{course_index}",
+                    rng.choice(selected_programs),
+                    rng.choice([1, 2]),
+                    "FALL",
+                    rng.choice(["Obligatory", "Elective"]),
+                )
+            )
+        period = _make_period(date(2026, 1, 5), date(2026, 1, 7))
+        gen = _generator(selected_programs)
+
+        optimized = list(gen.generate_schedules(courses, period))
+        brute_force = _brute_force_schedules(courses, period, selected_programs)
+        optimized_signatures = [_schedule_signature(schedule) for schedule in optimized]
+
+        assert set(optimized_signatures) == {
+            _schedule_signature(schedule) for schedule in brute_force
+        }
+        assert len(optimized_signatures) == len(set(optimized_signatures))
 
 
 def test_exam_period_spread_remains_final_threshold_filter_only():

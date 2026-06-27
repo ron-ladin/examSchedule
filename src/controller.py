@@ -44,7 +44,9 @@ from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
 from src.domain.feature4_validator import Feature4Validator
+from src.domain.heavy_task_manager import HeavyTaskManager, HeavyTaskToken
 from src.domain.period_order import sort_period_mapping_canonically
+from src.domain.performance_metrics import PerformanceMetrics
 from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
 from src.domain.settings import Settings
@@ -134,7 +136,9 @@ class DesktopController:
 
         # UI-wide throttle: generation/loading/ranking should not compete for
         # CPU, RAM, and SQLite I/O at the same time.
-        self._heavy_task_kind: str | None = None
+        self._heavy_tasks = HeavyTaskManager()
+        self._heavy_task_token: HeavyTaskToken | None = None
+        self._performance_metrics = PerformanceMetrics()
 
     @property
     def settings(self) -> Settings:
@@ -157,22 +161,37 @@ class DesktopController:
     @property
     def heavy_task_kind(self) -> str | None:
         """Return the active CPU/disk-heavy UI task kind, if any."""
-        return self._heavy_task_kind
+        return self._heavy_tasks.active_kind
+
+    @property
+    def performance_metrics(self) -> PerformanceMetrics:
+        """Return diagnostic workload metrics for the current UI session."""
+        return self._performance_metrics
+
+    def cached_schedule_count(self) -> int:
+        """Return the number of schedules currently cached for display/export."""
+        if self._last_results is None:
+            return 0
+        return sum(len(schedules) for schedules in self._last_results.values())
 
     def begin_heavy_task(self, kind: str) -> bool:
         """Reserve the single heavy-task slot for *kind* if available."""
-        if self._heavy_task_kind is not None:
+        token = self._heavy_tasks.begin(kind)
+        if token is None:
             return False
-        self._heavy_task_kind = kind
+        self._heavy_task_token = token
         return True
 
     def end_heavy_task(self, kind: str | None = None) -> bool:
         """Release the heavy-task slot when it matches *kind* or kind is omitted."""
-        if self._heavy_task_kind is None:
+        token = self._heavy_task_token
+        if token is None:
             return False
-        if kind is not None and self._heavy_task_kind != kind:
+        if kind is not None and token.kind != kind:
             return False
-        self._heavy_task_kind = None
+        if not self._heavy_tasks.end(token):
+            return False
+        self._heavy_task_token = None
         return True
 
     def _reset_owned_schedule_store(self) -> SQLiteScheduleStore:
@@ -643,6 +662,7 @@ class DesktopController:
         self._has_more_schedules.clear()
         self._iterator_overflows.clear()
         self.clear_imported_state()
+        self._performance_metrics.start_generation(LOAD_BATCH_SIZE)
 
         data_provider = InMemoryDataProvider(
             courses=self._courses,
@@ -690,6 +710,33 @@ class DesktopController:
         )
         self._last_results = ordered_results
         self.on_generation_succeeded(set())
+
+        sqlite_count = (
+            self._schedule_store.total_count()
+            if self._schedule_store is not None
+            else sum(len(schedules) for schedules in ordered_results.values())
+        )
+        generator_metrics = generator.last_metrics
+        snapshot = self._performance_metrics.finish_generation(
+            total_generated_schedules=sum(
+                len(schedules) for schedules in ordered_results.values()
+            ),
+            schedules_stored_sqlite=sqlite_count,
+            sqlite_stored_row_count=sqlite_count,
+            domain_prunes=generator_metrics.domain_prunes,
+            threshold_rejections=generator_metrics.threshold_prunes,
+            forward_checking_rejections=generator_metrics.conflict_prunes,
+        )
+        logger.info(
+            "Generation performance summary: schedules=%s sqlite_rows=%s "
+            "domain_prunes=%s threshold_rejections=%s forward_checks=%s elapsed=%.3fs",
+            snapshot.total_generated_schedules,
+            snapshot.sqlite_stored_row_count,
+            snapshot.domain_prunes,
+            snapshot.threshold_rejections,
+            snapshot.forward_checking_rejections,
+            snapshot.generation_seconds,
+        )
 
         self._remaining_schedule_iterators.clear()
         self._has_more_schedules.clear()

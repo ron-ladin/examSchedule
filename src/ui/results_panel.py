@@ -62,6 +62,7 @@ from src.ui.period_card import PeriodCardWidgets
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
 from src.ui.load_more_controller import LoadMoreController
 from src.ui.period_navigator import PeriodNavigator
+from src.ui.result_summary_presenter import ResultSummaryPresenter
 from src.ui.widgets.calendar_view import CalendarRenderer
 from src.ui.widgets.period_card_builder import (
     build_period_card,
@@ -178,6 +179,8 @@ class _ResultsPanel(QWidget):
         self._ranking_button_text: str | None = None
         self._ranking_empty_after_exit_ticks = 0
         self._ranking_dirty = False
+        self._ranking_dirty_message: str | None = None
+        self._summary_presenter = ResultSummaryPresenter()
 
         self._navigator = PeriodNavigator(
             self._nav_model,
@@ -220,6 +223,7 @@ class _ResultsPanel(QWidget):
         self._stale_banner.setVisible(True)
         self._save_btn.setEnabled(False)
         self._proctor_btn.setEnabled(False)
+        self._update_summary()
 
     def clear_stale(self) -> None:
         """Hide the stale-data warning and re-enable Export."""
@@ -227,6 +231,7 @@ class _ResultsPanel(QWidget):
         self._stale_banner.setVisible(False)
         self._save_btn.setEnabled(True)
         self._proctor_btn.setEnabled(True)
+        self._update_summary()
 
     def _is_stale(self) -> bool:
         """True if displayed results are stale per the panel OR the controller.
@@ -256,7 +261,7 @@ class _ResultsPanel(QWidget):
         self._lm.reset()
         self._cleanup_ranking_worker(terminate=True)
         self._set_ranking_busy(False)
-        self._ranking_dirty = False
+        self._clear_ranking_dirty()
 
         # Stop idle persistent load-more workers from the previous result set.
         # They will be recreated lazily if the user clicks Load More / Auto again.
@@ -379,7 +384,7 @@ class _ResultsPanel(QWidget):
         """
         self._cleanup_ranking_worker(terminate=True)
         self._set_ranking_busy(False)
-        self._ranking_dirty = False
+        self._clear_ranking_dirty()
         self._streaming_run_active = False
 
     def append_period(
@@ -541,7 +546,7 @@ class _ResultsPanel(QWidget):
             self._controller.settings.sorting.criteria_in_order()
             and not isinstance(period_schedules, StoredScheduleList)
         ):
-            self._ranking_dirty = True
+            self.mark_ranking_dirty("New results loaded. Re-rank to apply sorting.")
         self._period_indices[period_key] = min(
             self._period_indices.get(period_key, 0),
             max(0, len(self._schedules_by_period[period_key]) - 1),
@@ -605,6 +610,33 @@ class _ResultsPanel(QWidget):
     def get_schedules(self, period_key: str) -> list[Schedule]:
         """Return the loaded schedules for *period_key* or an empty list."""
         return self._schedules_by_period.get(period_key, [])
+
+    def has_results(self) -> bool:
+        """Return True when at least one displayed period has schedules."""
+        return any(bool(schedules) for schedules in self._schedules_by_period.values())
+
+    def mark_ranking_dirty(self, message: str) -> None:
+        """Show that current results need explicit async Result Ranking."""
+        if not self.has_results():
+            return
+        self._summary_presenter.mark_ranking_dirty(message)
+        self._sync_ranking_dirty_state()
+        self._update_summary()
+
+    def show_workload_status(self, message: str) -> None:
+        """Show a non-popup status for normal background workload progress."""
+        self._summary_lbl.setStyleSheet(
+            "color: #64748B; font-weight: 600; font-size: 12px;"
+        )
+        self._summary_lbl.setText(message)
+
+    def _clear_ranking_dirty(self) -> None:
+        self._summary_presenter.clear_ranking_dirty()
+        self._sync_ranking_dirty_state()
+
+    def _sync_ranking_dirty_state(self) -> None:
+        self._ranking_dirty = self._summary_presenter.ranking_dirty
+        self._ranking_dirty_message = self._summary_presenter.ranking_dirty_message
 
     def total_in_memory_schedule_count(self) -> int:
         """Return loaded schedule count kept by the active result container.
@@ -679,6 +711,7 @@ class _ResultsPanel(QWidget):
         self._cleanup_ranking_worker(terminate=True)
         if self._controller.heavy_task_kind == "ranking":
             self._controller.end_heavy_task("ranking")
+            self._finish_ranking_metrics()
             self.heavy_task_state_changed.emit("ranking", False)
         if self._schedule_store is not None:
             self._schedule_store.close(delete=True)
@@ -988,62 +1021,36 @@ class _ResultsPanel(QWidget):
         if not self._schedules_by_period:
             return
 
-        if self._ranking_dirty:
-            self._summary_lbl.setStyleSheet(
-                "color: #B45309; font-weight: 600; font-size: 12px;"
-            )
-            self._summary_lbl.setText("New results loaded. Re-rank to apply sorting.")
-            return
-
         non_empty = {
             key: value
             for key, value in self._schedules_by_period.items()
             if value
         }
 
-        if not non_empty:
-            self._summary_lbl.setStyleSheet(
-                "color: #DC2626; font-weight: 600; font-size: 12px;"
-            )
-            self._summary_lbl.setText("⚠  No valid schedules found.")
-            return
-
         period_schedules_total = sum(
             len(schedules)
             for schedules in non_empty.values()
         )
-
-        combined_options_total = self._controller.get_combined_schedule_count(
-            non_empty
-        )
-
-        self._summary_lbl.setStyleSheet(
-            "color: #059669; font-weight: 600; font-size: 12px;"
-        )
-
-        if self._is_imported_schedule:
-            self._summary_lbl.setText(
-                f"✓  Imported schedule loaded "
-                f"({period_schedules_total:,} period schedules in view)"
-            )
-            return
 
         has_more = any(
             self._controller.has_more_schedules(period_key)
             or period_key in self._truncated_periods
             for period_key in non_empty
         )
+        summary = self._summary_presenter.build(
+            has_any_periods=bool(self._schedules_by_period),
+            has_results=bool(non_empty),
+            is_stale=self._is_stale(),
+            is_imported_schedule=self._is_imported_schedule,
+            combined_options_total=self._controller.get_combined_schedule_count(non_empty),
+            period_schedules_total=period_schedules_total,
+            has_more=has_more,
+        )
+        if summary is None:
+            return
 
-        if has_more:
-            self._summary_lbl.setText(
-                f"✓  {combined_options_total:,} combined schedule options available "
-                f"({period_schedules_total:,} period schedules loaded so far)"
-            )
-        else:
-            self._summary_lbl.setText(
-                f"✓  {combined_options_total:,} combined schedule options available "
-                f"({period_schedules_total:,} period schedules loaded in total)"
-            )
+        self._summary_lbl.setStyleSheet(summary.style)
+        self._summary_lbl.setText(summary.text)
 
     def _on_cell_clicked(
         self,
@@ -1373,7 +1380,7 @@ class _ResultsPanel(QWidget):
             self._period_indices[period_key] = 0
 
         self._nav_model.clear()
-        self._ranking_dirty = False
+        self._clear_ranking_dirty()
 
         has_proctor_report = any(
             self._has_classroom_feature_results(period_key)
@@ -1451,6 +1458,7 @@ class _ResultsPanel(QWidget):
                 close()
 
         if terminate and self._controller.end_heavy_task("ranking"):
+            self._finish_ranking_metrics()
             self.heavy_task_state_changed.emit("ranking", False)
 
     def is_ranking_active(self) -> bool:
@@ -1461,6 +1469,8 @@ class _ResultsPanel(QWidget):
         """Reserve the shared heavy-task slot and refresh visible controls."""
         if not self._controller.begin_heavy_task(kind):
             return False
+        if kind == "ranking":
+            self._controller.performance_metrics.start_ranking()
         self.heavy_task_state_changed.emit(kind, True)
         self._refresh_heavy_task_controls()
         return True
@@ -1468,8 +1478,23 @@ class _ResultsPanel(QWidget):
     def _end_heavy_task(self, kind: str) -> None:
         """Release the shared heavy-task slot and refresh visible controls."""
         if self._controller.end_heavy_task(kind):
+            if kind == "ranking":
+                self._finish_ranking_metrics()
             self.heavy_task_state_changed.emit(kind, False)
         self._refresh_heavy_task_controls()
+
+    def _finish_ranking_metrics(self) -> None:
+        """Finalize ranking timing metrics."""
+        try:
+            snapshot = self._controller.performance_metrics.finish_ranking()
+            logger.info(
+                "Ranking performance summary: elapsed=%.3fs schedules=%s sqlite_rows=%s",
+                snapshot.ranking_seconds,
+                self._controller.cached_schedule_count(),
+                snapshot.sqlite_stored_row_count,
+            )
+        except Exception:
+            logger.debug("Failed recording ranking metrics", exc_info=True)
 
     def _refresh_heavy_task_controls(self) -> None:
         """Refresh ranking/load controls after heavy-task state changes."""
