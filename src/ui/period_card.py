@@ -42,7 +42,6 @@ class PeriodCardWidgets:
     load_more_btn: QPushButton
     auto_date_btn: QPushButton
     auto_variant_btn: QPushButton
-
     @property
     def auto_load_btn(self) -> QPushButton:
         """Backward-compatible alias: the date auto-load button."""

@@ -136,4 +136,4 @@ def test_sort_settings_change_marks_loaded_results_as_needing_rerank(qapp):
     assert ctrl.results_stale is False
     assert panel._is_stale() is False
     assert panel._ranking_dirty is True
-    assert "Click Result Ranking" in panel._summary_lbl.text()
+    assert "Click Result Ranking" not in panel._summary_lbl.text()

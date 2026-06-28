@@ -48,6 +48,7 @@ from src.ui.exam_detail_dialog import ExamDetailDialog
 from src.ui.results_panel import _ResultsPanel
 from src.ui.settings_screen import SettingsScreen
 from src.ui.input_screen import InputScreen, ResultsScreen
+from src.ui.widgets.period_card_builder import CALENDAR_HOVER_TEXT_ROLE
 
 
 def _get_qapp() -> QApplication:
@@ -70,6 +71,19 @@ def test_app_uses_logo_png_as_window_icon():
     assert not window.windowIcon().isNull()
     logo_path = Path(__file__).parent.parent.parent / "src" / "ui" / "assets" / "logo.png"
     assert logo_path.exists(), "logo.png asset must exist"
+
+    window.close()
+
+
+def test_app_applies_tooltip_style_to_qapplication():
+    """Qt tooltips are top-level widgets, so the app stylesheet must own them."""
+    app = _get_qapp()
+    window = ExamSchedulerApp()
+
+    assert "QToolTip" in app.styleSheet()
+    assert "background-color: #F8FAFC" in app.styleSheet()
+    assert app.palette().toolTipBase().color().name().lower() == "#f8fafc"
+    assert app.palette().toolTipText().color().name().lower() == "#172033"
 
     window.close()
 
@@ -297,6 +311,128 @@ def test_results_panel_includes_standard_period_tabs_even_when_empty():
         "SUMMER — Gimel",
     ]
 
+    assert panel._period_tabs.tabBar().isHidden() is True
+    assert panel._period_selector.isHidden() is False
+    assert [
+        panel._semester_combo.itemText(i)
+        for i in range(panel._semester_combo.count())
+    ] == ["FALL", "SPRING", "SUMMER"]
+    assert [
+        panel._moed_combo.itemText(i)
+        for i in range(panel._moed_combo.count())
+    ] == ["Aleph", "Bet", "Gimel"]
+
+    panel._semester_combo.setCurrentIndex(1)
+    panel._moed_combo.setCurrentIndex(1)
+    app.processEvents()
+
+    assert panel._current_period_key() == "SPRI - Bet"
+
+    panel.close()
+
+
+def test_results_panel_opens_first_period_that_has_schedules():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod(
+        "SPRI",
+        "Bet",
+        [(date(2026, 4, 10), date(2026, 4, 10))],
+    )
+    schedule = Schedule(period, {"10001": date(2026, 4, 10)})
+
+    panel.load({"SPRI - Bet": [schedule]}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    assert panel._current_period_key() == "SPRI - Bet"
+    assert panel._semester_combo.currentText() == "SPRING"
+    assert panel._moed_combo.currentText() == "Bet"
+    assert panel._semester_combo.count() == 3
+    assert panel._moed_combo.count() == 3
+    assert panel._cards["SPRI - Bet"].cal_table.isVisible() is True
+
+    panel._moed_combo.setCurrentText("Aleph")
+    app.processEvents()
+
+    assert panel._current_period_key() == "SPRI - Aleph"
+    assert panel._cards["SPRI - Aleph"].empty_label.isVisible() is True
+    empty_text = panel._cards["SPRI - Aleph"].empty_label.text()
+    assert "No schedules were generated" in empty_text
+    assert "SPRING" in empty_text
+    assert "Aleph" in empty_text
+
+    panel.close()
+
+
+def test_results_panel_can_save_current_schedule_as_favorite():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod(
+        "FALL",
+        "Aleph",
+        [(date(2026, 1, 29), date(2026, 2, 5))],
+    )
+    schedules = [
+        Schedule(period, {"10001": date(2026, 1, 29)}),
+        Schedule(period, {"10001": date(2026, 2, 5)}),
+    ]
+
+    panel.load({"FALL - Aleph": schedules}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    assert panel._favorites_btn.text() == "My Favorites (0)"
+    assert panel._favorites_btn.isEnabled() is False
+
+    panel._period_indices["FALL - Aleph"] = 1
+    panel._refresh_period_card("FALL - Aleph")
+    panel._save_visible_favorite()
+    app.processEvents()
+
+    assert len(panel._favorite_schedules) == 1
+    assert panel._favorite_schedules[0]["period_key"] == "FALL - Aleph"
+    assert panel._favorite_schedules[0]["index"] == 1
+    assert panel._favorites_btn.text() == "My Favorites (1)"
+    assert panel._favorites_btn.isEnabled() is True
+
+    panel._save_current_favorite("FALL - Aleph")
+    assert len(panel._favorite_schedules) == 1
+    assert panel._cards["FALL - Aleph"].auto_date_btn.text() == "Auto Dates"
+    assert panel._cards["FALL - Aleph"].auto_variant_btn.text() == "Auto Variants"
+    assert panel._cards["FALL - Aleph"].date_jump_input.toolTip() == ""
+    assert panel._cards["FALL - Aleph"].variant_jump_input.toolTip() == ""
+
+    assert panel._delete_favorite_at(0) is True
+    assert len(panel._favorite_schedules) == 0
+    assert panel._favorites_btn.text() == "My Favorites (0)"
+    assert panel._favorites_btn.isEnabled() is False
+
+    panel.close()
+
+
+def test_streaming_results_switch_selector_to_ready_period():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod(
+        "SUMMER",
+        "Gimel",
+        [(date(2026, 8, 1), date(2026, 8, 1))],
+    )
+    schedule = Schedule(period, {"10001": date(2026, 8, 1)})
+
+    panel.begin_streaming()
+    panel.append_period({"SUMMER - Gimel": [schedule]}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    assert panel._current_period_key() == "SUMMER - Gimel"
+    assert panel._semester_combo.currentText() == "SUMMER"
+    assert panel._moed_combo.currentText() == "Gimel"
+
     panel.close()
 
 
@@ -429,6 +565,10 @@ def test_background_loading_control_is_hidden():
     app.processEvents()
 
     assert panel._cards["FALL - Aleph"].load_more_btn.isVisible() is False
+    assert panel._cards["FALL - Aleph"].auto_date_btn.toolTip() == ""
+    assert panel._cards["FALL - Aleph"].auto_variant_btn.toolTip() == ""
+    assert hasattr(panel._cards["FALL - Aleph"].auto_date_btn, "_light_hover_help")
+    assert hasattr(panel._cards["FALL - Aleph"].auto_variant_btn, "_light_hover_help")
     panel.close()
 
 
@@ -667,6 +807,37 @@ def test_unassigned_feature4_exam_is_visible_in_calendar_and_detail_dialog():
     assert table.item(0, 7).text() == "UNASSIGNED"
 
     dialog.close()
+    panel.close()
+
+
+def test_calendar_program_backgrounds_are_soft_enough_for_warm_colours():
+    app = _get_qapp()
+    period = ExamPeriod(
+        "FALL",
+        "Aleph",
+        [(date(2026, 1, 5), date(2026, 1, 5))],
+    )
+    offering = CourseOffering("83109", 1, "FALL", "Obligatory", 50)
+    course = Course("10004", "Advanced Materials", "Dr. Cohen", "Exam", [offering])
+    schedule = Schedule(period, {"10004": date(2026, 1, 5)})
+    controller = DesktopController()
+    controller.update_exam_periods([period])
+    panel = _ResultsPanel(controller)
+
+    panel.load(
+        {"FALL - Aleph": [schedule]},
+        {"10004": course},
+        {"83109": "#F59E0B"},
+        set(),
+    )
+    panel.show()
+    app.processEvents()
+
+    item = panel._cards["FALL - Aleph"].cal_table.item(0, 1)
+    assert item.background().color().alpha() == 32
+    assert item.toolTip() == ""
+    assert "click to view details" in item.data(CALENDAR_HOVER_TEXT_ROLE)
+
     panel.close()
 
 def test_edit_exam_periods_dialog_does_not_add_missing_periods_to_controller_until_edited():

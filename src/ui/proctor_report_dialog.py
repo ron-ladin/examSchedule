@@ -9,71 +9,37 @@ controller (src.engine.proctor_report); this dialog is presentation only.
 import re
 from pathlib import Path
 
-from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QSyntaxHighlighter
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QDialog,
     QFileDialog,
     QFrame,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 _PERIOD_HEADER_RE = re.compile(r"===.*===")
 _DATE_LINE_RE = re.compile(r"\d{2}-\d{2}-\d{4}")
 _TIME_LINE_RE = re.compile(r"\d{2}:\d{2}")
 _PROCTOR_COUNT_RE = re.compile(r"Proctors:\s*(\d+)")
+_ROOM_LINE_RE = re.compile(
+    r"^(?P<room>.+):\s*(?P<assigned>\d+)/(?P<capacity>\d+)\s*\|\s*"
+    r"Proctors:\s*(?P<proctors>\d+)$"
+)
 
 _PRIMARY_COLOR = "#0755B5"
 _TEXT_COLOR = "#172033"
-
-
-class _ReportHighlighter(QSyntaxHighlighter):
-    """Add visual hierarchy without changing the exportable text."""
-
-    def __init__(self, document) -> None:
-        super().__init__(document)
-        self._period = self._format(_PRIMARY_COLOR, bold=True, background="#EAF2FF")
-        self._date = self._format(_TEXT_COLOR, bold=True)
-        self._time = self._format("#7C3AED", bold=True)
-        self._course = self._format("#334155", bold=True)
-        self._room = self._format("#047857")
-        self._proctors = self._format("#B45309", bold=True)
-
-    @staticmethod
-    def _format(
-        colour: str, *, bold: bool = False, background: str | None = None
-    ) -> QTextCharFormat:
-        text_format = QTextCharFormat()
-        text_format.setForeground(QColor(colour))
-        if bold:
-            text_format.setFontWeight(QFont.Weight.Bold)
-        if background:
-            text_format.setBackground(QColor(background))
-        return text_format
-
-    def highlightBlock(self, text: str) -> None:
-        stripped = text.strip()
-        if _PERIOD_HEADER_RE.fullmatch(stripped):
-            self.setFormat(0, len(text), self._period)
-        elif _DATE_LINE_RE.fullmatch(stripped):
-            self.setFormat(0, len(text), self._date)
-        elif _TIME_LINE_RE.fullmatch(stripped):
-            self.setFormat(0, len(text), self._time)
-        elif text.startswith("      ") and "| Proctors:" in text:
-            self.setFormat(0, len(text), self._room)
-            match = _PROCTOR_COUNT_RE.search(text)
-            if match:
-                self.setFormat(
-                    match.start(),
-                    match.end() - match.start(),
-                    self._proctors,
-                )
-        elif text.startswith("    "):
-            self.setFormat(0, len(text), self._course)
 
 
 class ProctorReportDialog(QDialog):
@@ -95,6 +61,29 @@ class ProctorReportDialog(QDialog):
             QFrame#summaryCard {
                 background: #EFF6FF; border: 1px solid #BFDBFE;
                 border-radius: 10px;
+            }
+            QFrame#periodCard {
+                background: #FFFFFF; border: 1px solid #DCE5F0;
+                border-radius: 12px;
+            }
+            QScrollArea {
+                background: transparent; border: none;
+            }
+            QTableWidget {
+                background: #FFFFFF; color: $TEXT_COLOR;
+                border: 1px solid #E2E8F0; border-radius: 8px;
+                gridline-color: #E8EEF7;
+                selection-background-color: #DBEAFE;
+                selection-color: $TEXT_COLOR;
+            }
+            QHeaderView::section {
+                background: #F8FAFC; color: #475569;
+                border: none; border-right: 1px solid #E2E8F0;
+                border-bottom: 1px solid #E2E8F0;
+                padding: 7px 6px; font-size: 11px; font-weight: 700;
+            }
+            QTableWidget::item {
+                padding: 5px; border-bottom: 1px solid #F1F5F9;
             }
             QPlainTextEdit {
                 background: #FFFFFF; color: $TEXT_COLOR;
@@ -155,13 +144,10 @@ class ProctorReportDialog(QDialog):
         self._view = QPlainTextEdit()
         self._view.setReadOnly(True)
         self._view.setPlainText(report_text)
-        self._view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        font = QFont("Consolas")
-        font.setStyleHint(QFont.StyleHint.Monospace)
-        font.setPointSize(10)
-        self._view.setFont(font)
-        self._highlighter = _ReportHighlighter(self._view.document())
-        layout.addWidget(self._view, 1)
+        self._view.setVisible(False)
+
+        self._report_area = self._build_visual_report(report_text)
+        layout.addWidget(self._report_area, 1)
 
         buttons = QHBoxLayout()
         hint = QLabel("The downloaded file contains the complete report.")
@@ -183,6 +169,182 @@ class ProctorReportDialog(QDialog):
         buttons.addWidget(close_btn)
 
         layout.addLayout(buttons)
+
+    @staticmethod
+    def _parse_report(report_text: str) -> list[dict]:
+        periods: list[dict] = []
+        current_period: dict | None = None
+        current_date = ""
+        current_time = ""
+        current_course = ""
+
+        for raw_line in report_text.splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+
+            if _PERIOD_HEADER_RE.fullmatch(stripped):
+                title = stripped.strip("= ").strip()
+                current_period = {"title": title, "rows": []}
+                periods.append(current_period)
+                current_date = ""
+                current_time = ""
+                current_course = ""
+                continue
+
+            if current_period is None:
+                current_period = {"title": "Selected schedule", "rows": []}
+                periods.append(current_period)
+
+            if _DATE_LINE_RE.fullmatch(stripped):
+                current_date = stripped
+                current_time = ""
+                current_course = ""
+                continue
+
+            if _TIME_LINE_RE.fullmatch(stripped):
+                current_time = stripped
+                current_course = ""
+                continue
+
+            room_match = _ROOM_LINE_RE.fullmatch(stripped)
+            if room_match:
+                assigned = int(room_match.group("assigned"))
+                capacity = int(room_match.group("capacity"))
+                proctors = int(room_match.group("proctors"))
+                current_period["rows"].append(
+                    {
+                        "date": current_date,
+                        "time": current_time,
+                        "course": current_course,
+                        "room": room_match.group("room"),
+                        "assigned": assigned,
+                        "capacity": capacity,
+                        "usage": f"{assigned}/{capacity}",
+                        "proctors": proctors,
+                    }
+                )
+                continue
+
+            if current_time:
+                current_course = stripped
+
+        return periods
+
+    def _build_visual_report(self, report_text: str) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+
+        periods = self._parse_report(report_text)
+        rendered_any = False
+        for period in periods:
+            rows = period["rows"]
+            if not rows:
+                continue
+            content_layout.addWidget(self._period_table_card(period["title"], rows))
+            rendered_any = True
+
+        if not rendered_any:
+            empty = QLabel(
+                "No room assignments are available for the selected schedule.\n"
+                "Generate with classroom assignments to review proctor coverage here."
+            )
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setWordWrap(True)
+            empty.setStyleSheet(
+                "background:#FFFFFF; color:#64748B; border:1px solid #DCE5F0;"
+                "border-radius:12px; padding:32px; font-size:13px;"
+            )
+            content_layout.addWidget(empty)
+
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        return scroll
+
+    def _period_table_card(self, title: str, rows: list[dict]) -> QFrame:
+        card = QFrame()
+        card.setObjectName("periodCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(10)
+
+        total_proctors = sum(row["proctors"] for row in rows)
+        total_students = sum(row["assigned"] for row in rows)
+        date_count = len({row["date"] for row in rows})
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet(
+            f"font-size:16px; font-weight:800; color:{_PRIMARY_COLOR}; border:none;"
+        )
+        layout.addWidget(title_label)
+
+        helper = QLabel(
+            f"{date_count} exam date(s), {len(rows)} room assignment(s), "
+            f"{total_students} seated student(s), {total_proctors} proctor position(s)."
+        )
+        helper.setWordWrap(True)
+        helper.setStyleSheet("font-size:12px; color:#64748B; border:none;")
+        layout.addWidget(helper)
+
+        table = QTableWidget(len(rows), 8)
+        table.setHorizontalHeaderLabels(
+            [
+                "Date",
+                "Time",
+                "Course",
+                "Room",
+                "Students",
+                "Capacity",
+                "Usage",
+                "Proctors",
+            ]
+        )
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.verticalHeader().setVisible(False)
+        table.setAlternatingRowColors(True)
+        table.setMinimumHeight(min(360, 70 + len(rows) * 34))
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        for col in (4, 5, 6, 7):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+
+        for row_index, row in enumerate(rows):
+            values = [
+                row["date"],
+                row["time"],
+                row["course"],
+                row["room"],
+                str(row["assigned"]),
+                str(row["capacity"]),
+                row["usage"],
+                str(row["proctors"]),
+            ]
+            for col_index, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if col_index in (4, 5, 6, 7):
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+                    )
+                if col_index == 7:
+                    item.setForeground(QColor(_PRIMARY_COLOR))
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                table.setItem(row_index, col_index, item)
+
+        table.resizeRowsToContents()
+        layout.addWidget(table)
+        return card
 
     @staticmethod
     def _report_summary(report_text: str) -> tuple[tuple[str, str], ...]:

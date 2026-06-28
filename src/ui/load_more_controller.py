@@ -245,9 +245,14 @@ class LoadMoreController(QObject):
         enabled: bool,
     ) -> None:
         button.setStyleSheet(
+            "QPushButton {"
             f"color: {color}; border: 2px solid {color}; border-radius: 8px;"
             "padding: 6px 12px; font-size: 11px; font-weight: 700;"
             f"background: {background};"
+            "}"
+            f"QPushButton:hover {{ background: {background}; }}"
+            "QPushButton:disabled { color: #94A3B8; background: #F8FAFC;"
+            "border-color: #CBD5E1; }"
         )
         button.setEnabled(enabled)
 
@@ -274,17 +279,17 @@ class LoadMoreController(QObject):
 
         if date_btn is not None:
             if pending_mode == _AUTO_MODE_DATES:
-                date_btn.setText("⏳  Dates Next")
+                date_btn.setText("Dates queued")
                 self._style_auto_button(
-                    date_btn, "#B45309", "rgba(180, 83, 9, 0.07)", False
+                    date_btn, "#475569", "#F1F5F9", False
                 )
             elif mode == _AUTO_MODE_DATES:
-                date_btn.setText("⏹  Stop Dates")
+                date_btn.setText("Stop Dates")
                 self._style_auto_button(
-                    date_btn, "#B91C1C", "rgba(185, 28, 28, 0.07)", True
+                    date_btn, "#7F1D1D", "#FEF2F2", True
                 )
             else:
-                date_btn.setText("⚡  Auto Load Dates")
+                date_btn.setText("Auto Dates")
                 self._style_auto_button(
                     date_btn,
                     "#047857",
@@ -297,17 +302,17 @@ class LoadMoreController(QObject):
 
         if variant_btn is not None:
             if pending_mode == _AUTO_MODE_VARIANTS:
-                variant_btn.setText("⏳  Variants Next")
+                variant_btn.setText("Variants queued")
                 self._style_auto_button(
-                    variant_btn, "#B45309", "rgba(180, 83, 9, 0.07)", False
+                    variant_btn, "#475569", "#F1F5F9", False
                 )
             elif mode == _AUTO_MODE_VARIANTS:
-                variant_btn.setText("⏹  Stop Variants")
+                variant_btn.setText("Stop Variants")
                 self._style_auto_button(
-                    variant_btn, "#B91C1C", "rgba(185, 28, 28, 0.07)", True
+                    variant_btn, "#7F1D1D", "#FEF2F2", True
                 )
             else:
-                variant_btn.setText("⚡  Auto Load Classes Variants")
+                variant_btn.setText("Auto Variants")
                 self._style_auto_button(
                     variant_btn,
                     "#7C3AED",

@@ -12,10 +12,9 @@ class SummaryView:
 
 
 class ResultSummaryPresenter:
-    """Own summary text decisions, including dirty-ranking messaging."""
+    """Own summary text decisions for the results panel."""
 
     _OK_STYLE = "color: #059669; font-weight: 600; font-size: 12px;"
-    _WARN_STYLE = "color: #B45309; font-weight: 600; font-size: 12px;"
     _ERROR_STYLE = "color: #DC2626; font-weight: 600; font-size: 12px;"
 
     def __init__(self) -> None:
@@ -52,9 +51,6 @@ class ResultSummaryPresenter:
 
         if is_stale:
             return SummaryView("Results stale - regenerate required.", self._ERROR_STYLE)
-
-        if self._ranking_dirty_message is not None:
-            return SummaryView(self._ranking_dirty_message, self._WARN_STYLE)
 
         if not has_results:
             return SummaryView("⚠  No valid schedules found.", self._ERROR_STYLE)

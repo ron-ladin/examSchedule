@@ -363,7 +363,7 @@ def test_ranking_button_text_restores_after_loading_finishes(qapp):
         panel.close()
 
 
-def test_append_loaded_schedules_marks_ranking_dirty_without_full_rerank(
+def test_append_loaded_schedules_does_not_show_ranking_dirty_message(
     monkeypatch,
     qapp,
 ):
@@ -383,8 +383,8 @@ def test_append_loaded_schedules_marks_ranking_dirty_without_full_rerank(
 
         assert panel.get_schedules(period_key) == [first, second, extra[0]]
         assert controller._last_results[period_key] == [first, second, extra[0]]
-        assert panel._ranking_dirty is True
-        assert "Re-rank" in panel._summary_lbl.text()
+        assert panel._ranking_dirty is False
+        assert "Re-rank" not in panel._summary_lbl.text()
         assert rebuilt == [period_key]
     finally:
         panel.close()

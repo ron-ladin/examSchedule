@@ -33,6 +33,7 @@ Qt = QtCore.Qt
 QApplication = QtWidgets.QApplication
 QFileDialog = QtWidgets.QFileDialog
 QMessageBox = QtWidgets.QMessageBox
+QTableWidget = QtWidgets.QTableWidget
 
 from src.controller import DesktopController
 from src.domain.classroom import Classroom
@@ -434,9 +435,24 @@ def test_heavy_load_many_courses_sorts_survivors_without_crashing():
 
 def test_proctor_report_dialog_renders_report_text():
     _get_qapp()
-    dialog = ProctorReportDialog("PROCTOR REPORT\nRoom 101: 2 proctors")
-    assert dialog._view.toPlainText() == "PROCTOR REPORT\nRoom 101: 2 proctors"
+    report = (
+        "=== FALL - Aleph ===\n"
+        "29-01-2026\n"
+        "  09:00\n"
+        "    Physics 1 (83102)\n"
+        "      Room 101: 150/250 | Proctors: 8"
+    )
+    dialog = ProctorReportDialog(report)
+    table = dialog.findChild(QTableWidget)
+    assert table is not None
+    assert table.item(0, 0).text() == "29-01-2026"
+    assert table.item(0, 2).text() == "Physics 1 (83102)"
+    assert table.item(0, 3).text() == "Room 101"
+    assert table.item(0, 6).text() == "150/250"
+    assert table.item(0, 7).text() == "8"
+    assert dialog._view.toPlainText() == report
     assert dialog._view.isReadOnly()
+    assert dialog._view.isHidden()
     dialog.close()
 
 

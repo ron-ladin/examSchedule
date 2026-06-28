@@ -187,9 +187,7 @@ class ResultsScreen(QWidget):
     def mark_sort_dirty(self) -> None:
         """Show that sort settings changed and current results need ranking."""
         if self._results_loaded:
-            self._results_panel.mark_ranking_dirty(
-                "Sort settings changed. Click Result Ranking to apply to current results."
-            )
+            self._results_panel.mark_ranking_dirty("")
 
     def refresh_periods(self) -> None:
         self._periods_tabs.clear()

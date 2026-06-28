@@ -137,3 +137,78 @@ def test_sorting_only_change_does_not_mark_panel_stale(qapp):
 
     assert ctrl.results_stale is False
     assert panel._is_stale() is False
+
+
+def test_active_scheduling_limits_show_enabled_thresholds_only(qapp):
+    ctrl = DesktopController()
+    ctrl.apply_settings(
+        Settings(
+            ThresholdSettings(
+                entries=(
+                    ThresholdEntry(
+                        criterion=Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS,
+                        enabled=True,
+                        k=3,
+                    ),
+                    ThresholdEntry(
+                        criterion=Criterion.MAX_EXAMS_PER_DAY,
+                        enabled=False,
+                        k=2,
+                    ),
+                )
+            ),
+            _sorting(),
+        )
+    )
+    panel = _ResultsPanel(ctrl)
+
+    panel.load({}, {}, {}, set())
+    qapp.processEvents()
+
+    assert panel._limits_panel.isHidden() is False
+    assert panel._limits_toggle.text() == "Active scheduling limits (1)"
+    assert panel._limits_details.isHidden() is True
+    assert "Any exam gap: at least 3 day(s)" in panel._limits_details.text()
+    assert "Exams per day" not in panel._limits_details.text()
+
+    panel._limits_toggle.setChecked(True)
+    qapp.processEvents()
+
+    assert panel._limits_details.isHidden() is False
+
+
+def test_active_scheduling_limits_hidden_when_no_rules_enabled(qapp):
+    ctrl = DesktopController()
+    ctrl.apply_settings(
+        Settings(
+            ThresholdSettings(
+                entries=(
+                    ThresholdEntry(
+                        criterion=Criterion.MAX_EXAMS_PER_DAY,
+                        enabled=False,
+                        k=2,
+                    ),
+                )
+            ),
+            _sorting(),
+        )
+    )
+    panel = _ResultsPanel(ctrl)
+
+    panel.load({}, {}, {}, set())
+    qapp.processEvents()
+
+    assert panel._limits_panel.isHidden() is True
+
+
+def test_active_scheduling_limits_use_generation_snapshot(qapp):
+    ctrl = DesktopController()
+    ctrl.apply_settings(Settings(_thresholds(k=2), _sorting()))
+    panel = _ResultsPanel(ctrl)
+
+    panel.load({}, {}, {}, set())
+    ctrl.apply_settings(Settings(_thresholds(k=5), _sorting()))
+    panel._refresh_active_limits_panel()
+
+    assert "at most 2 exam(s)" in panel._limits_details.text()
+    assert "at most 5 exam(s)" not in panel._limits_details.text()
