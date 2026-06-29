@@ -34,9 +34,6 @@ from src.domain.sorting_engine import SortingEngine
 from src.interfaces.i_output_exporter import IOutputExporter
 from src.interfaces.i_schedule_store import IScheduleStore
 
-# Disk is not infinite.  This is intentionally much higher than the RAM cap but
-# still bounded so an accidental Auto Load cannot fill the user's drive.
-ABSOLUTE_MAX_STORED_SCHEDULES = 1_000_000
 _OBJECT_CACHE_MAX_SIZE = 4096
 
 _SCORE_COLUMNS: dict[SortCriterion, str] = {
@@ -142,6 +139,23 @@ class StoredScheduleList:
         """
         return self._store.navigation_entries(self._period_key, sorting=self._sorting)
 
+    def navigation_entries_range(
+        self,
+        start_index: int,
+        count: int,
+    ) -> list[tuple[tuple[tuple[str, object], ...], int]] | None:
+        """Return compact navigation metadata for a newly appended index range.
+
+        ``None`` means the current display order is not append-contiguous and
+        callers must rebuild to preserve exact navigation semantics.
+        """
+        return self._store.navigation_entries_range(
+            self._period_key,
+            start_index,
+            count,
+            sorting=self._sorting,
+        )
+
     def has_classroom_data(self) -> bool:
         """True if this period has at least one schedule with Feature-4 data."""
         return self._store.has_classroom_data(self._period_key)
@@ -240,9 +254,12 @@ class SQLiteScheduleStore(IScheduleStore):
 
         self._conn = sqlite3.connect(self.path)
         self._object_cache: OrderedDict[int, Schedule] = OrderedDict()
+        self._period_counts: dict[str, int] = {}
+        self._total_count = 0
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._create_schema()
+        self._load_counts()
 
     def _create_schema(self) -> None:
         self._conn.executescript(
@@ -277,6 +294,18 @@ class SQLiteScheduleStore(IScheduleStore):
             """
         )
         self._conn.commit()
+
+    def _load_counts(self) -> None:
+        """Initialize cached row counts once for a new or existing database."""
+        rows = self._conn.execute(
+            """
+            SELECT period_key, COUNT(*)
+            FROM schedules
+            GROUP BY period_key
+            """
+        ).fetchall()
+        self._period_counts = {str(row[0]): int(row[1]) for row in rows}
+        self._total_count = sum(self._period_counts.values())
 
     def as_sequence(
         self,
@@ -314,11 +343,6 @@ class SQLiteScheduleStore(IScheduleStore):
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
 
-        current_total = self.total_count()
-        if current_total >= ABSOLUTE_MAX_STORED_SCHEDULES:
-            return 0
-
-        headroom = ABSOLUTE_MAX_STORED_SCHEDULES - current_total
         next_position = self.count(period_key)
         course_list = list(courses or [])
         prog_set = set(selected_programs or [])
@@ -349,9 +373,6 @@ class SQLiteScheduleStore(IScheduleStore):
 
         with self._conn:
             for schedule in schedules:
-                if stored >= headroom:
-                    break
-
                 scores = self._scores(schedule, course_list, prog_set)
                 rows.append(
                     (
@@ -372,6 +393,10 @@ class SQLiteScheduleStore(IScheduleStore):
                 if len(rows) >= chunk_size:
                     flush()
             flush()
+
+        if stored:
+            self._period_counts[period_key] = next_position + stored
+            self._total_count += stored
 
         return stored
 
@@ -408,6 +433,28 @@ class SQLiteScheduleStore(IScheduleStore):
         if limit == 0:
             return []
 
+        if not (sorting or SortingConfig()).criteria_in_order():
+            if limit == 1:
+                rows = self._conn.execute(
+                    """
+                    SELECT id, schedule_blob
+                    FROM schedules
+                    WHERE period_key = ? AND position = ?
+                    """,
+                    (period_key, offset),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """
+                    SELECT id, schedule_blob
+                    FROM schedules
+                    WHERE period_key = ? AND position >= ? AND position < ?
+                    ORDER BY position ASC
+                    """,
+                    (period_key, offset, offset + limit),
+                ).fetchall()
+            return [self._schedule_from_row(row[0], row[1]) for row in rows]
+
         order_by = self._order_by(sorting)
         rows = self._conn.execute(
             f"""
@@ -437,23 +484,15 @@ class SQLiteScheduleStore(IScheduleStore):
 
     def count(self, period_key: str) -> int:
         self._ensure_open()
-        row = self._conn.execute(
-            "SELECT COUNT(*) FROM schedules WHERE period_key = ?",
-            (period_key,),
-        ).fetchone()
-        return int(row[0])
+        return self._period_counts.get(period_key, 0)
 
     def total_count(self) -> int:
         self._ensure_open()
-        row = self._conn.execute("SELECT COUNT(*) FROM schedules").fetchone()
-        return int(row[0])
+        return self._total_count
 
     def period_keys(self) -> list[str]:
         self._ensure_open()
-        rows = self._conn.execute(
-            "SELECT DISTINCT period_key FROM schedules ORDER BY period_key"
-        ).fetchall()
-        return [row[0] for row in rows]
+        return sorted(self._period_counts)
 
     def navigation_entries(
         self,
@@ -478,6 +517,43 @@ class SQLiteScheduleStore(IScheduleStore):
         ).fetchall()
         return [(pickle.loads(row[0]), idx) for idx, row in enumerate(rows)]
 
+    def navigation_entries_range(
+        self,
+        period_key: str,
+        start_index: int,
+        count: int,
+        sorting: SortingConfig | None = None,
+    ) -> list[tuple[tuple[tuple[str, object], ...], int]] | None:
+        """Return date signatures for an append-contiguous display range.
+
+        For the default position order, the newly inserted SQLite rows are also
+        the next visible rows, so a bounded ``position`` query is sufficient.
+        With active score sorting, new rows can rank before existing rows; in
+        that case an incremental tail append would be incorrect, so ``None``
+        tells NavigationModel to fall back to a full rebuild.
+        """
+        self._ensure_open()
+        if start_index < 0:
+            raise ValueError("start_index must be non-negative")
+        if count < 0:
+            raise ValueError("count must be non-negative")
+        if count == 0:
+            return []
+
+        if (sorting or SortingConfig()).criteria_in_order():
+            return None
+
+        rows = self._conn.execute(
+            """
+            SELECT date_signature_blob, position
+            FROM schedules
+            WHERE period_key = ? AND position >= ? AND position < ?
+            ORDER BY position ASC
+            """,
+            (period_key, start_index, start_index + count),
+        ).fetchall()
+        return [(pickle.loads(row[0]), int(row[1])) for row in rows]
+
     def warm_order(self, period_key: str, sorting: SortingConfig | None = None) -> None:
         """Exercise the SQL ranking order without unpickling schedule blobs."""
         self._ensure_open()
@@ -492,6 +568,27 @@ class SQLiteScheduleStore(IScheduleStore):
             """,
             (period_key,),
         ).fetchone()
+
+    def explain_order_query(
+        self,
+        period_key: str,
+        sorting: SortingConfig | None = None,
+    ) -> list[str]:
+        """Return SQLite's plan for the lightweight ranking ORDER BY probe."""
+        self._ensure_open()
+        order_by = self._order_by(sorting)
+        rows = self._conn.execute(
+            f"""
+            EXPLAIN QUERY PLAN
+            SELECT id
+            FROM schedules
+            WHERE period_key = ?
+            ORDER BY {order_by}
+            LIMIT 1
+            """,
+            (period_key,),
+        ).fetchall()
+        return [" ".join(str(part) for part in row) for row in rows]
 
     def has_classroom_data(self, period_key: str | None = None) -> bool:
         """Return True if any stored schedule has Feature-4 classroom data."""
@@ -514,21 +611,26 @@ class SQLiteScheduleStore(IScheduleStore):
 
     def clear_period(self, period_key: str) -> None:
         self._ensure_open()
+        removed = self._period_counts.get(period_key, 0)
         with self._conn:
             self._conn.execute("DELETE FROM schedules WHERE period_key = ?", (period_key,))
+        if removed:
+            self._period_counts.pop(period_key, None)
+            self._total_count -= removed
         self._object_cache.clear()
 
     def clear(self) -> None:
         self._ensure_open()
         with self._conn:
             self._conn.execute("DELETE FROM schedules")
+        self._period_counts.clear()
+        self._total_count = 0
         self._object_cache.clear()
 
     def close(self, *, delete: bool | None = None) -> None:
-        if self._closed:
-            return
-        self._conn.close()
-        self._closed = True
+        if not self._closed:
+            self._conn.close()
+            self._closed = True
 
         should_delete = self._delete_on_close if delete is None else delete
         if should_delete:
