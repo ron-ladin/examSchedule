@@ -126,6 +126,16 @@ class ResultsScreen(QWidget):
         """Reset the results panel before a new streaming generation run."""
         self._results_panel.begin_streaming()
 
+    def has_results_loaded(self) -> bool:
+        """Return True when this screen owns generated/imported results."""
+        return self._results_loaded
+
+    def discard_results(self, *, delete_db: bool = True) -> None:
+        """Release result-panel resources and reset result-loaded state."""
+        self.hide_loading()
+        self._results_panel.release_results(delete_db=delete_db)
+        self._results_loaded = False
+
     def sync_heavy_task_state(self) -> None:
         """Refresh result controls after another screen changes heavy-task state."""
         self._results_panel.sync_heavy_task_state()
@@ -434,7 +444,7 @@ class InputScreen(QWidget):
         self._config.periods_changed.connect(self._results.refresh_periods)
         self._config.results_invalidated.connect(self._results.mark_stale)
         self._config.sort_settings_changed.connect(self._results.mark_sort_dirty)
-        self._results.back_requested.connect(lambda: self._stacked.setCurrentIndex(0))
+        self._results.back_requested.connect(self._on_back_requested)
         self._config.heavy_task_state_changed.connect(
             lambda _kind, _active: self._results.sync_heavy_task_state()
         )
@@ -490,10 +500,47 @@ class InputScreen(QWidget):
         self._stacked.setCurrentIndex(0)
         QMessageBox.critical(self, "Generation Error", error_msg)
 
+    def _on_back_requested(self) -> None:
+        if self._controller.heavy_task_kind == "generation":
+            QMessageBox.information(
+                self,
+                "Generation In Progress",
+                "Wait for generation to finish before returning to Input.",
+            )
+            return
+
+        if self._results.has_results_loaded():
+            response = QMessageBox.question(
+                self,
+                "Discard Results?",
+                "Going back to Input will clear generated results and delete "
+                "the temporary database. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if response != QMessageBox.StandardButton.Yes:
+                return
+            self.discard_results(delete_db=True)
+
+        self._stacked.setCurrentIndex(0)
+
+    def discard_results(self, *, delete_db: bool = True) -> None:
+        """Release result resources from both the UI and controller cache."""
+        self._results.discard_results(delete_db=delete_db)
+        self._controller.discard_results(delete_db=delete_db)
+        self._streaming_active = False
+
     def shutdown_background_workers(self) -> None:
         """Stop all background workers owned by the UI tree."""
         self._config.shutdown_background_workers()
-        self._controller.shutdown_load_workers()
+        results = getattr(self, "_results", None)
+        if results is not None:
+            results.discard_results(delete_db=True)
+        shutdown = getattr(self._controller, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+        else:
+            self._controller.shutdown_load_workers()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
         self.shutdown_background_workers()

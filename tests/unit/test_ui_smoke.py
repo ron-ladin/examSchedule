@@ -32,6 +32,7 @@ QPushButton = QtWidgets.QPushButton
 QListWidget = QtWidgets.QListWidget
 
 from src.controller import DesktopController
+from src.adapters.sqlite_schedule_store import StoredScheduleList
 from src.domain.classroom import Classroom
 from src.domain.classroom_assignment import ClassroomAssignment
 from src.domain.course import Course
@@ -507,6 +508,7 @@ def test_streaming_results_switch_selector_to_ready_period():
     panel.show()
     app.processEvents()
 
+    assert isinstance(panel.get_schedules("SUMMER - Gimel"), StoredScheduleList)
     assert panel._current_period_key() == "SUMMER - Gimel"
     assert panel._semester_combo.currentText() == "SUMMER"
     assert panel._moed_combo.currentText() == "Gimel"

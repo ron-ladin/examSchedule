@@ -7,10 +7,12 @@ resort behaviour, and engine-level §4.4 schedule rejection.
 """
 
 import logging
+import sqlite3
 from datetime import date
 
 import pytest
 
+from src.adapters.sqlite_schedule_store import SQLiteScheduleStore
 from src.controller import DesktopController
 from src.domain.course import Course
 
@@ -89,6 +91,33 @@ def test_generate_records_sqlite_performance_metrics_without_changing_results(tm
     assert snapshot.total_generated_schedules == produced
     assert snapshot.schedules_stored_sqlite == produced
     assert snapshot.sqlite_stored_row_count == produced
+
+
+def test_generate_storage_failure_deletes_partial_sqlite_store(monkeypatch, tmp_path):
+    cp = tmp_path / "courses.txt"
+    dp = tmp_path / "dates.txt"
+
+    _write_courses(cp)
+    _write_periods(dp)
+
+    ctrl = DesktopController()
+    ctrl.load_courses(cp)
+    ctrl.load_periods(dp)
+    ctrl.set_selected_programs(["83101"])
+    paths = []
+
+    def fail_append_many(self, *_args, **_kwargs):
+        paths.append(self.path)
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(SQLiteScheduleStore, "append_many", fail_append_many)
+
+    with pytest.raises(RuntimeError, match="Could not store generated schedules"):
+        ctrl.generate()
+
+    assert ctrl._schedule_store is None
+    assert ctrl._last_results is None
+    assert paths and not paths[0].exists()
 
 
 def test_generate_returns_all_period_schedules_without_truncation(tmp_path):
@@ -450,3 +479,24 @@ def test_rapid_generate_back_generate_again_does_not_corrupt_state(tmp_path):
 #
 # cache_generated_results / resort (C2) and the engine-level §4.4 rejection path
 # (M4) live in tests/unit/test_controller_caching.py.
+def test_controller_shutdown_deletes_owned_sqlite_store_and_is_idempotent(tmp_path):
+    ctrl = DesktopController()
+    store = SQLiteScheduleStore(tmp_path / "owned.sqlite3", delete_on_close=False)
+    store.append_many("FALL - Aleph", [])
+    ctrl._schedule_store = store
+    ctrl._last_results = {"FALL - Aleph": store.as_sequence("FALL - Aleph")}
+    db_path = store.path
+    wal_path = db_path.with_name(db_path.name + "-wal")
+    shm_path = db_path.with_name(db_path.name + "-shm")
+    store.close(delete=False)
+    wal_path.write_bytes(b"wal")
+    shm_path.write_bytes(b"shm")
+
+    ctrl.shutdown()
+    ctrl.shutdown()
+
+    assert ctrl._schedule_store is None
+    assert ctrl._last_results is None
+    assert not db_path.exists()
+    assert not wal_path.exists()
+    assert not shm_path.exists()
