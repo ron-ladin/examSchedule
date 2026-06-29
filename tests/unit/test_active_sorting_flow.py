@@ -15,7 +15,6 @@ from src.domain.exam_period import ExamPeriod
 from src.domain.schedule import Schedule
 from src.domain.settings import Settings
 from src.domain.sorting import SortCriterion, SortingConfig, SortRule
-from src.domain.sorting_engine import SortingEngine
 from src.domain.threshold import ThresholdSettings
 from src.engine.generation_workers import _run_date_options_from_state
 
@@ -80,15 +79,6 @@ def _settings_with_sort(*criteria: SortCriterion) -> Settings:
 
 def _single_sort(criterion: SortCriterion) -> SortingConfig:
     return SortingConfig(rules=(SortRule(priority=1, criterion=criterion),))
-
-
-def _min_gap_score(schedule: Schedule, courses: list[Course]) -> float:
-    return SortingEngine.score(
-        schedule,
-        courses,
-        SortCriterion.SORT_MIN_DAYS_MANDATORY,
-        selected_programs=[PROGRAM],
-    )
 
 
 def test_resort_can_switch_between_sort_criteria_without_regeneration():
@@ -174,21 +164,21 @@ def test_incremental_generation_batches_use_current_active_sort():
     assert second_partial["FALL - Bet"] == [dense_day, spread_out]
 
 
-def test_stateful_date_options_sort_each_loaded_batch_with_active_rules():
-    """Auto Dates / Load More batches should be sorted after each page is taken.
+def test_stateful_date_options_keep_append_order_until_explicit_ranking():
+    """Auto Dates / Load More batches should not auto-apply ranking.
 
-    The worker should continue generation with its cursor, then apply the active
-    sorting config to the newly loaded page. This pins the behaviour where a sort
-    chosen by the user stays active for later generated batches.
+    The worker should continue generation with its cursor and return the next
+    raw page. The UI marks ranking dirty; explicit Result Ranking later applies
+    the selected sort to the accumulated result set.
     """
     courses = _two_course_generation_courses()
     period = ExamPeriod(SEMESTER, "Aleph", [(date(2026, 1, 5), date(2026, 1, 8))])
-    settings = _settings_with_sort(SortCriterion.SORT_MIN_DAYS_MANDATORY)
-    states = {}
-    result_queue = _SimpleQueue()
-    offset = 0
+    sorted_settings = _settings_with_sort(SortCriterion.SORT_MIN_DAYS_MANDATORY)
+    unsorted_settings = Settings(thresholds=ThresholdSettings(), sorting=SortingConfig())
 
-    for _ in range(2):
+    def first_batch_signatures(settings: Settings):
+        states = {}
+        result_queue = _SimpleQueue()
         _run_date_options_from_state(
             result_queue,
             states,
@@ -198,16 +188,15 @@ def test_stateful_date_options_sort_each_loaded_batch_with_active_rules():
             settings=settings,
             cap=4,
             period_key=PERIOD_KEY,
-            offset=offset,
+            offset=0,
         )
         result = result_queue.get()
         assert result.success, result.error
+        return [
+            tuple(sorted(schedule.assignments.items()))
+            for schedule in result.schedules_by_period[PERIOD_KEY]
+        ]
 
-        batch = result.schedules_by_period[PERIOD_KEY]
-        assert batch
-        scores = [_min_gap_score(schedule, courses) for schedule in batch]
-        assert scores == sorted(scores, reverse=True)
-
-        offset += len(batch)
-        if PERIOD_KEY not in result.truncated_periods:
-            break
+    assert first_batch_signatures(sorted_settings) == first_batch_signatures(
+        unsorted_settings
+    )

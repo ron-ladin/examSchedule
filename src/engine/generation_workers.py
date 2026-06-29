@@ -433,16 +433,23 @@ def _course_signature(course: Course) -> tuple:
     )
 
 
-def _settings_signature(settings: Settings) -> tuple:
+def _generation_settings_signature(settings: Settings) -> tuple:
+    """Settings signature for generation-affecting options only.
+
+    Sorting changes display/ranking order but do not change which date options or
+    classroom variants are generated, so persistent Load More cursors must not
+    include sorting in their reuse key.
+    """
     threshold_key = tuple(
         (entry.criterion.value, entry.enabled, entry.k)
         for entry in settings.thresholds.entries
     )
-    sorting_key = tuple(
-        (rule.priority, rule.criterion.value)
-        for rule in settings.sorting.rules
-    )
-    return threshold_key, sorting_key
+    return threshold_key
+
+
+def _settings_signature(settings: Settings) -> tuple:
+    """Backward-compatible alias for generation-only settings signatures."""
+    return _generation_settings_signature(settings)
 
 
 def _period_signature(period: ExamPeriod) -> tuple:
@@ -471,7 +478,7 @@ def _date_request_key(
         tuple(sorted(_course_signature(course) for course in courses)),
         tuple(_period_signature(period) for period in exam_periods),
         tuple(selected_programs),
-        _settings_signature(settings),
+        _generation_settings_signature(settings),
         tuple((room.room_id, room.capacity) for room in classrooms),
         tuple(slot.time for slot in time_slots),
         None if proctor_config is None else proctor_config.students_per_proctor,
@@ -636,6 +643,7 @@ def _run_date_options_from_state(
 ) -> None:
     """Stateful Auto Dates implementation used by the persistent worker."""
     started = time.monotonic()
+    skip_seconds = 0.0
     active_settings = settings or Settings(
         thresholds=ThresholdSettings(),
         sorting=SortingConfig(),
@@ -708,10 +716,24 @@ def _run_date_options_from_state(
             date_states[request_key] = cursor
 
             if offset:
+                skip_started = time.monotonic()
                 skipped = _skip_date_options(cursor, offset)
+                skip_seconds = time.monotonic() - skip_started
                 if skipped < offset:
                     cursor.exhausted = True
                     date_states.pop(request_key, None)
+                    logger.info(
+                        "Load worker cursor metrics: period=%s mode=date_options "
+                        "cursor_reused=%s expected_offset=%s "
+                        "actual_cursor_offset=%s skip_seconds=%.3fs "
+                        "generation_seconds=%.3fs",
+                        period_key,
+                        reused_cursor,
+                        offset,
+                        cursor.emitted_count,
+                        skip_seconds,
+                        time.monotonic() - started,
+                    )
                     _put_generation_message(
                         result_queue,
                         GenerationResult.ok(
@@ -723,12 +745,6 @@ def _run_date_options_from_state(
                     return
 
         batch, still_more = _take_date_page(cursor, cap)
-        sorted_batch = _sort_schedule_batch(
-            batch,
-            cursor.courses_for_sorting,
-            active_settings,
-            selected_programs,
-        )
 
         if cursor.exhausted:
             date_states.pop(request_key, None)
@@ -736,7 +752,7 @@ def _run_date_options_from_state(
         _put_generation_message(
             result_queue,
             GenerationResult.ok(
-                {period_key: sorted_batch},
+                {period_key: batch},
                 cursor.courses_by_id,
                 {period_key} if still_more else set(),
             )
@@ -746,7 +762,8 @@ def _run_date_options_from_state(
         logger.info(
             "Generation batch metrics: period=%s nodes=%s schedules=%s "
             "domain_prunes=%s conflict_prunes=%s threshold_prunes=%s "
-            "prefilter_removed=%s reused_cursor=%s emitted=%s elapsed=%.3fs",
+            "prefilter_removed=%s cursor_reused=%s expected_offset=%s "
+            "actual_cursor_offset=%s skip_seconds=%.3fs generation_seconds=%.3fs",
             period_key,
             getattr(metrics, "nodes_visited", 0),
             getattr(metrics, "schedules_produced", 0),
@@ -755,7 +772,9 @@ def _run_date_options_from_state(
             getattr(metrics, "threshold_prunes", 0),
             getattr(metrics, "prefiltered_candidates_removed", 0),
             reused_cursor,
+            offset,
             cursor.emitted_count,
+            skip_seconds,
             time.monotonic() - started,
         )
     except Exception as exc:
@@ -764,22 +783,6 @@ def _run_date_options_from_state(
             result_queue.put(GenerationResult.failure(str(exc)))
         except Exception:
             logger.exception("Could not send stateful date-options failure")
-
-
-def _sort_schedule_batch(
-    schedules: list[Schedule],
-    courses: list[Course],
-    settings: Settings,
-    selected_programs: list[str],
-) -> list[Schedule]:
-    if settings.sorting.rules:
-        return SortingEngine.sort(
-            schedules,
-            courses,
-            settings.sorting,
-            selected_programs,
-        )
-    return schedules
 
 
 def _variant_request_key(
@@ -800,20 +803,16 @@ def _variant_request_key(
     exactly where the previous block stopped instead of rebuilding and skipping
     all earlier classroom combinations again.
     """
-    sorting_key = tuple(
-        (rule.priority, rule.criterion.value)
-        for rule in settings.sorting.rules
-    )
     return (
         period_key,
         tuple(sorted(schedule.assignments.items())),
         tuple(sorted(_course_signature(course) for course in courses)),
         tuple(selected_programs),
+        _generation_settings_signature(settings),
         tuple((room.room_id, room.capacity) for room in classrooms),
         tuple(slot.time for slot in time_slots),
         proctor_config.students_per_proctor,
         allow_unassigned_classrooms,
-        sorting_key,
     )
 
 
@@ -908,6 +907,8 @@ def _run_classroom_variants_from_state(
     allow_unassigned_classrooms: bool = False,
 ) -> None:
     """Stateful Auto Variants implementation used by the persistent worker."""
+    started = time.monotonic()
+    skip_seconds = 0.0
     try:
         active_settings = settings or Settings(
             thresholds=ThresholdSettings(),
@@ -936,6 +937,7 @@ def _run_classroom_variants_from_state(
         )
 
         state = variant_states.get(request_key)
+        reused_cursor = state is not None and state.get("emitted") == offset
         if state is not None and state.get("emitted") != offset:
             logger.warning(
                 "Stale classroom variant pagination state detected for %s: "
@@ -955,7 +957,9 @@ def _run_classroom_variants_from_state(
                 proctor_config,
                 allow_unassigned_classrooms,
             )
+            skip_started = time.monotonic()
             skipped = _skip_variants(iterator, offset)
+            skip_seconds = time.monotonic() - skip_started
             state = {
                 "iterator": iterator,
                 "overflow": [],
@@ -968,6 +972,17 @@ def _run_classroom_variants_from_state(
 
             if skipped < offset:
                 courses_by_id = {course.id: course for course in courses}
+                logger.info(
+                    "Load worker cursor metrics: period=%s mode=variants "
+                    "cursor_reused=%s expected_offset=%s actual_cursor_offset=%s "
+                    "skip_seconds=%.3fs generation_seconds=%.3fs",
+                    period_key,
+                    reused_cursor,
+                    offset,
+                    state["emitted"],
+                    skip_seconds,
+                    time.monotonic() - started,
+                )
                 _put_generation_message(
                     result_queue,
                     GenerationResult.ok({period_key: []}, courses_by_id, set())
@@ -977,14 +992,6 @@ def _run_classroom_variants_from_state(
         batch, still_more = _take_variant_page(state, cap)
 
         courses_by_id = {course.id: course for course in courses}
-        if active_settings.sorting.rules:
-            batch = SortingEngine.sort(
-                batch,
-                courses,
-                active_settings.sorting,
-                selected_programs,
-            )
-
         _put_generation_message(
             result_queue,
             GenerationResult.ok(
@@ -992,6 +999,17 @@ def _run_classroom_variants_from_state(
                 courses_by_id,
                 {period_key} if still_more else set(),
             )
+        )
+        logger.info(
+            "Load worker cursor metrics: period=%s mode=variants cursor_reused=%s "
+            "expected_offset=%s actual_cursor_offset=%s skip_seconds=%.3fs "
+            "generation_seconds=%.3fs",
+            period_key,
+            reused_cursor,
+            offset,
+            state["emitted"],
+            skip_seconds,
+            time.monotonic() - started,
         )
     except Exception as exc:
         logger.exception("Stateful classroom variant process failed")

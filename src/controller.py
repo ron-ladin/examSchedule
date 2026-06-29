@@ -18,8 +18,10 @@ Notes:
 """
 
 import copy
+import gc
 import logging
 import multiprocessing
+import sqlite3
 from collections.abc import Iterator
 from itertools import chain, islice
 from pathlib import Path
@@ -200,6 +202,46 @@ class DesktopController:
             self._schedule_store.close(delete=True)
         self._schedule_store = SQLiteScheduleStore()
         return self._schedule_store
+
+    def _cached_sqlite_stores(self) -> set[SQLiteScheduleStore]:
+        """Return every SQLite store referenced by cached result facades."""
+        stores: set[SQLiteScheduleStore] = set()
+        if self._schedule_store is not None:
+            stores.add(self._schedule_store)
+        if self._last_results is not None:
+            for schedules in self._last_results.values():
+                if isinstance(schedules, StoredScheduleList):
+                    stores.add(schedules.store)
+        return stores
+
+    def discard_results(self, *, delete_db: bool = True) -> None:
+        """Drop generated/imported result state and close temporary SQLite DBs.
+
+        Input data and settings remain loaded. The method is intentionally
+        idempotent so app shutdown, Back-to-input cleanup, and failed runs can
+        all call it safely.
+        """
+        self.shutdown_load_workers()
+        for store in self._cached_sqlite_stores():
+            try:
+                store.close(delete=delete_db)
+            except Exception:
+                logger.debug("Failed closing cached SQLite result store", exc_info=True)
+
+        self._schedule_store = None
+        self._last_results = None
+        self._remaining_schedule_iterators.clear()
+        self._iterator_overflows.clear()
+        self._has_more_schedules.clear()
+        self._results_stale = False
+        self.clear_imported_state()
+        self.end_heavy_task()
+        if delete_db:
+            gc.collect()
+
+    def shutdown(self) -> None:
+        """Stop workers and release result resources before app teardown."""
+        self.discard_results(delete_db=True)
 
     def import_schedule(self, path: Path) -> ImportedScheduleData:
         """Parse a previously exported schedules.txt file and cache it as
@@ -703,7 +745,19 @@ class DesktopController:
             proctor_config=self.engine_proctor_config(),
             classroom_variant_mode=CLASSROOM_VARIANT_MODE_FIRST,
         )
-        engine.run()
+        try:
+            engine.run()
+        except (sqlite3.DatabaseError, OSError) as exc:
+            logger.exception("SQLite storage failed during generation")
+            if self._schedule_store is not None:
+                self._schedule_store.close(delete=True)
+                self._schedule_store = None
+            self._last_results = None
+            self._performance_metrics.finish_generation()
+            raise RuntimeError(
+                "Could not store generated schedules because the temporary "
+                "SQLite database or disk write failed."
+            ) from exc
 
         ordered_results = sort_period_mapping_canonically(
             sqlite_exporter.schedules_by_period
@@ -857,6 +911,9 @@ class DesktopController:
         schedules_by_period: dict[str, list[Schedule]],
     ) -> dict[str, list[Schedule]]:
         """Cache appended Load More results without re-sorting the full result set."""
+        for schedules in schedules_by_period.values():
+            if isinstance(schedules, StoredScheduleList):
+                schedules.set_sorting(SortingConfig())
         self._last_results = sort_period_mapping_canonically(schedules_by_period)
         return self._last_results
 
@@ -921,12 +978,16 @@ class DesktopController:
         courses = list(self._courses)
         sorting = self._settings.sorting
 
-        sorted_partial = {
-            period_key: SortingEngine.sort(
-                schedules, courses, sorting, self._selected_programs
-            )
-            for period_key, schedules in partial.items()
-        }
+        sorted_partial: dict[str, list[Schedule]] = {}
+        for period_key, schedules in partial.items():
+            if isinstance(schedules, StoredScheduleList):
+                schedules.set_scoring_context(courses, self._selected_programs)
+                schedules.set_sorting(sorting)
+                sorted_partial[period_key] = schedules
+            else:
+                sorted_partial[period_key] = SortingEngine.sort(
+                    schedules, courses, sorting, self._selected_programs
+                )
 
         if self._last_results is None:
             self._last_results = {}
