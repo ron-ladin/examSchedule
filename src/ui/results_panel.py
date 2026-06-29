@@ -1276,7 +1276,7 @@ class _ResultsPanel(QWidget):
         self._favorites_btn.clicked.connect(self._show_favorites_dialog)
         action_row.addWidget(self._favorites_btn)
 
-        self._save_btn = QPushButton("⬇  Export Schedule")
+        self._save_btn = QPushButton("⬇  Export Shortlist")
         self._save_btn.clicked.connect(self._on_save)
         action_row.addWidget(self._save_btn)
 

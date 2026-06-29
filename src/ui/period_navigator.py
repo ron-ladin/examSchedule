@@ -76,7 +76,15 @@ class PeriodNavigator(QObject):
         schedules = self._schedules(period_key)
         card = self._cards.get(period_key)
         jump_input = card.date_jump_input if card else None
-        target = self._parse_jump_number(jump_input.text() if jump_input else "")
+        text = jump_input.text() if jump_input else ""
+
+        # Empty input means the user pressed Go without typing anything.
+        # The placeholder may show the current option number, but it is not real
+        # text, so do nothing instead of showing a confusing validation popup.
+        if not text.strip():
+            return
+
+        target = self._parse_jump_number(text)
 
         if target is None:
             self.messageRequested.emit(
@@ -115,7 +123,15 @@ class PeriodNavigator(QObject):
         schedules = self._schedules(period_key)
         card = self._cards.get(period_key)
         jump_input = card.variant_jump_input if card else None
-        target = self._parse_jump_number(jump_input.text() if jump_input else "")
+        text = jump_input.text() if jump_input else ""
+
+        # Empty input means the user pressed Go without typing anything.
+        # The placeholder may show the current variant number, but it is not real
+        # text, so do nothing instead of showing a confusing validation popup.
+        if not text.strip():
+            return
+
+        target = self._parse_jump_number(text)
 
         if target is None:
             self.messageRequested.emit(
