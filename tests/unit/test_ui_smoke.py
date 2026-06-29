@@ -368,7 +368,7 @@ def test_results_panel_opens_first_period_that_has_schedules():
     panel.close()
 
 
-def test_results_panel_can_save_current_schedule_as_favorite():
+def test_results_panel_can_add_current_schedule_to_shortlist():
     app = _get_qapp()
     controller = DesktopController()
     panel = _ResultsPanel(controller)
@@ -386,7 +386,7 @@ def test_results_panel_can_save_current_schedule_as_favorite():
     panel.show()
     app.processEvents()
 
-    assert panel._favorites_btn.text() == "My Favorites (0)"
+    assert panel._favorites_btn.text() == "Shortlist (0)"
     assert panel._favorites_btn.isEnabled() is False
 
     panel._period_indices["FALL - Aleph"] = 1
@@ -397,8 +397,12 @@ def test_results_panel_can_save_current_schedule_as_favorite():
     assert len(panel._favorite_schedules) == 1
     assert panel._favorite_schedules[0].period_key == "FALL - Aleph"
     assert panel._favorite_schedules[0].signature == schedule_fingerprint(schedules[1])
-    assert panel._favorites_btn.text() == "My Favorites (1)"
+    assert "Classroom choice" not in panel._favorite_schedules[0].label
+    assert "Variant" not in panel._favorite_schedules[0].label
+    assert panel._favorites_btn.text() == "Shortlist (1)"
     assert panel._favorites_btn.isEnabled() is True
+    assert panel._save_favorite_btn.text() == "Remove from Shortlist"
+    assert "#DC2626" in panel._save_favorite_btn.styleSheet()
 
     panel._save_current_favorite("FALL - Aleph")
     assert len(panel._favorite_schedules) == 1
@@ -407,10 +411,57 @@ def test_results_panel_can_save_current_schedule_as_favorite():
     assert panel._cards["FALL - Aleph"].date_jump_input.toolTip() == ""
     assert panel._cards["FALL - Aleph"].variant_jump_input.toolTip() == ""
 
-    assert panel._delete_favorite_at(0) is True
+    panel._toggle_visible_favorite()
     assert len(panel._favorite_schedules) == 0
-    assert panel._favorites_btn.text() == "My Favorites (0)"
+    assert panel._favorites_btn.text() == "Shortlist (0)"
     assert panel._favorites_btn.isEnabled() is False
+    assert panel._save_favorite_btn.text() == "Add to Shortlist"
+
+    panel.close()
+
+
+
+def test_shortlist_label_includes_classroom_choice_only_for_feature4_options():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod(
+        "FALL",
+        "Aleph",
+        [(date(2026, 1, 29), date(2026, 1, 29))],
+    )
+    offering = CourseOffering("83101", 1, "FALL", "Obligatory", 30)
+
+    def _schedule(room_id: str, slot_time: time) -> Schedule:
+        assignment = ClassroomAssignment(
+            exam=offering,
+            room=Classroom(room_id, 40),
+            slot=TimeSlot(slot_time),
+            date=date(2026, 1, 29),
+            students_assigned=30,
+            proctor_count=2,
+        )
+        return Schedule(
+            period,
+            {"10001": date(2026, 1, 29)},
+            {"10001": [assignment]},
+        )
+
+    first = _schedule("Room 101", time(9, 0))
+    second = _schedule("Room 102", time(13, 0))
+
+    panel.load({"FALL - Aleph": [first, second]}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    panel._period_indices["FALL - Aleph"] = 1
+    panel._refresh_period_card("FALL - Aleph")
+    panel._save_visible_favorite()
+
+    assert len(panel._favorite_schedules) == 1
+    assert panel._favorite_schedules[0].signature == schedule_fingerprint(second)
+    assert "Classroom choice 2" in panel._favorite_schedules[0].label
+    assert panel._save_favorite_btn.text() == "Remove from Shortlist"
 
     panel.close()
 
@@ -460,7 +511,7 @@ def test_favorite_does_not_open_wrong_schedule_when_order_changes():
     assert panel._open_favorite_at(0) is False
     assert panel._period_indices["FALL - Aleph"] == 0
     assert panel._schedules_by_period["FALL - Aleph"][0] is replacement
-    assert messages and messages[0][0] == "Favorite Unavailable"
+    assert messages and messages[0][0] == "Shortlist Option Unavailable"
 
     panel.close()
 
@@ -485,7 +536,7 @@ def test_missing_favorite_signature_shows_clear_feedback():
 
     assert panel._open_favorite_at(0) is False
     assert messages
-    assert messages[0][0] == "Favorite Unavailable"
+    assert messages[0][0] == "Shortlist Option Unavailable"
     assert "no longer available" in messages[0][1]
 
     panel.close()

@@ -911,8 +911,8 @@ def test_ranking_refreshes_only_visible_period(monkeypatch, qapp):
         panel.close()
 
 
-def test_ranking_clears_saved_favorites(qapp):
-    """Favorites are cleared after ranking to avoid stale labels/order context."""
+def test_ranking_preserves_shortlist_by_fingerprint(qapp):
+    """Shortlist entries survive ranking because they use schedule fingerprints."""
     panel, _controller, period_key, first, second = _panel_with_memory_results(qapp)
 
     try:
@@ -920,12 +920,15 @@ def test_ranking_clears_saved_favorites(qapp):
         panel._save_current_favorite(period_key)
         assert len(panel._favorite_schedules) == 1
 
-        # Re-rank reverses the order; index 1 would now point at a different schedule.
+        # Re-rank reverses the order; the shortlist should still point at the
+        # same schedule content rather than the old positional index.
         panel._finish_ranking_success({period_key: [second, first]})
 
-        assert panel._favorite_schedules == []
-        assert panel._favorites_btn.text() == "My Favorites (0)"
-        assert panel._favorites_btn.isEnabled() is False
+        assert len(panel._favorite_schedules) == 1
+        assert panel._favorites_btn.text() == "Shortlist (1)"
+        assert panel._favorites_btn.isEnabled() is True
+        assert panel._open_favorite_at(0) is True
+        assert panel._period_indices[period_key] == 0
     finally:
         panel.close()
 
