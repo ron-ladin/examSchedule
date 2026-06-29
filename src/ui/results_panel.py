@@ -18,8 +18,11 @@ Public API:
 
 from __future__ import annotations
 
+import gc
 import logging
 import multiprocessing
+import sqlite3
+import time
 from pathlib import Path
 from queue import Empty as _QueueEmpty
 
@@ -57,7 +60,6 @@ from src.ui.tokens import (
 
 from src.controller import DesktopController, LOAD_BATCH_SIZE
 from src.adapters.sqlite_schedule_store import (
-    ABSOLUTE_MAX_STORED_SCHEDULES,
     SQLiteScheduleStore,
     StoredScheduleList,
 )
@@ -193,6 +195,9 @@ class _ResultsPanel(QWidget):
         self._lm = LoadMoreController(self)
         self._lm.messageRequested.connect(self._show_message)
         self._lm.cardRefreshRequested.connect(self._refresh_period_card)
+        self._lm.cardCountersRefreshRequested.connect(
+            self._refresh_period_card_counters
+        )
 
         self._ranking_proc: multiprocessing.Process | None = None
         self._ranking_queue: multiprocessing.Queue | None = None
@@ -232,9 +237,9 @@ class _ResultsPanel(QWidget):
         # tab scaffold. Reset by begin_streaming() at the start of each run.
         self._streaming_run_active: bool = False
 
-        # Per-period Auto Load is user-controlled. It loads one batch, waits
-        # AUTO_LOAD_DELAY_MS, then requests the next batch until there is no more
-        # data or the user presses Stop Auto Load. Never use a blocking while-loop.
+        # Per-period Auto Load is user-controlled. It loads one batch, waits an
+        # adaptive delay, then requests the next batch until there is no more data
+        # or the user presses Stop Auto Load. Never use a blocking while-loop.
         self._stale_banner: QLabel = QLabel()
         self._limits_panel: ActiveLimitsPanel = ActiveLimitsPanel()
         self._limits_toggle: QToolButton = QToolButton()
@@ -421,9 +426,7 @@ class _ResultsPanel(QWidget):
         The first ``append_period`` after this builds the tab scaffold from
         scratch, so a previous run's cards/state do not linger.
         """
-        self._cleanup_ranking_worker(terminate=True)
-        self._set_ranking_busy(False)
-        self._clear_ranking_dirty()
+        self.release_results(delete_db=True)
         self._streaming_run_active = False
 
     def append_period(
@@ -449,8 +452,64 @@ class _ResultsPanel(QWidget):
         # calendar can always resolve course names/colours.
         self._courses_by_id.update(courses_by_id)
         self._truncated_periods |= truncated
+        display_schedules_by_period = schedules_by_period
 
-        for period_key, schedules in schedules_by_period.items():
+        incoming_stores = {
+            schedules.store
+            for schedules in schedules_by_period.values()
+            if isinstance(schedules, StoredScheduleList)
+        }
+        if incoming_stores:
+            if self._schedule_store is None and len(incoming_stores) == 1:
+                self._schedule_store = next(iter(incoming_stores))
+            for schedules in schedules_by_period.values():
+                if isinstance(schedules, StoredScheduleList):
+                    schedules.set_scoring_context(
+                        list(self._courses_by_id.values()),
+                        self._controller.selected_programs,
+                    )
+                    schedules.set_sorting(self._controller.settings.sorting)
+            display_schedules_by_period = (
+                self._controller.cache_generated_results_incremental(
+                    dict(schedules_by_period)
+                )
+            )
+        else:
+            if self._schedule_store is None:
+                self._schedule_store = SQLiteScheduleStore()
+            stored_by_period: dict[str, list[Schedule]] = {}
+            try:
+                for key, scheds in schedules_by_period.items():
+                    self._schedule_store.replace_period(
+                        key,
+                        scheds,
+                        courses=list(self._courses_by_id.values()),
+                        selected_programs=self._controller.selected_programs,
+                    )
+                    stored_by_period[key] = self._schedule_store.as_sequence(
+                        key,
+                        courses=list(self._courses_by_id.values()),
+                        selected_programs=self._controller.selected_programs,
+                        sorting=self._controller.settings.sorting,
+                    )
+            except (sqlite3.DatabaseError, OSError):
+                logger.exception("Could not store streamed generation results")
+                self._show_message(
+                    "Storage Failed",
+                    "Could not store generated schedules because the temporary "
+                    "database or disk write failed. Already loaded schedules "
+                    "remain available.",
+                    QMessageBox.Icon.Warning,
+                )
+                return
+
+            display_schedules_by_period = (
+                self._controller.cache_generated_results_incremental(
+                    stored_by_period
+                )
+            )
+
+        for period_key, schedules in display_schedules_by_period.items():
             if period_key not in self._schedules_by_period:
                 # A period outside the standard scaffold (e.g. an extra loaded
                 # period): create its tab on the fly.
@@ -476,7 +535,7 @@ class _ResultsPanel(QWidget):
             self._refresh_period_card(period_key)
 
         first_ready_period = next(
-            (key for key, schedules in schedules_by_period.items() if schedules),
+            (key for key, schedules in display_schedules_by_period.items() if schedules),
             None,
         )
         if first_ready_period is not None:
@@ -551,40 +610,31 @@ class _ResultsPanel(QWidget):
         self._lm.advance_after_load.add(period_key)
         self._lm.on_load_more(period_key)
 
-    def append_loaded_schedules(self, period_key: str, extra: list[Schedule]) -> None:
+    def append_loaded_schedules(
+        self,
+        period_key: str,
+        extra: list[Schedule],
+    ) -> dict[str, float]:
         """Merge a freshly loaded batch into this period's own schedule state.
 
         Owned by the panel so the load-more controller never mutates the panel's
         private dicts directly. Keeps the navigation cache and the controller's
         cached results in sync (so a later re-sort includes the appended batch).
         """
+        timings = {
+            "sqlite_insert_seconds": 0.0,
+            "navigation_update_seconds": 0.0,
+            "summary_update_seconds": 0.0,
+        }
         if self._is_imported_schedule:
-            return
+            return timings
 
-        # Disk-backed result storage keeps only current objects in RAM and still
-        # enforces its disk-cache ceiling. Plain in-memory results append the
-        # whole returned batch; there is no artificial RAM cap.
-        if self._schedule_store is not None:
-            headroom = ABSOLUTE_MAX_STORED_SCHEDULES - self._schedule_store.total_count()
-            if headroom <= 0:
-                logger.warning(
-                    "SQLite schedule cache cap (%s) reached; refusing further load for %s.",
-                    ABSOLUTE_MAX_STORED_SCHEDULES,
-                    period_key,
-                )
-                return
-            if len(extra) > headroom:
-                logger.warning(
-                    "SQLite schedule cache cap (%s) reached; truncating batch for %s "
-                    "from %s to %s schedules.",
-                    ABSOLUTE_MAX_STORED_SCHEDULES,
-                    period_key,
-                    len(extra),
-                    headroom,
-                )
-                extra = extra[:headroom]
-
+        prev_len = len(self._schedules_by_period[period_key])
+        insert_started_at = time.perf_counter()
         self._schedules_by_period[period_key].extend(extra)
+        insert_seconds = time.perf_counter() - insert_started_at
+        if self._schedule_store is not None:
+            timings["sqlite_insert_seconds"] = insert_seconds
 
         # Keep the appended schedules cached, but do not re-sort the whole
         # result set on every Load More / Auto Load batch. Surface that the
@@ -596,9 +646,25 @@ class _ResultsPanel(QWidget):
             self._period_indices.get(period_key, 0),
             max(0, len(self._schedules_by_period[period_key]) - 1),
         )
-        self._rebuild_navigation_cache(period_key)
-        self._update_summary()
+        nav_started_at = time.perf_counter()
+        self._append_navigation_cache(period_key, prev_len, len(extra))
+        timings["navigation_update_seconds"] = time.perf_counter() - nav_started_at
+
+        summary_started_at = time.perf_counter()
         self.mark_ranking_dirty("New results loaded. Re-rank to apply sorting.")
+        timings["summary_update_seconds"] = time.perf_counter() - summary_started_at
+
+        logger.info(
+            "Load batch merge timings: period=%s batch_size=%s "
+            "sqlite_insert_seconds=%.3fs navigation_update_seconds=%.3fs "
+            "summary_update_seconds=%.3fs",
+            period_key,
+            len(extra),
+            timings["sqlite_insert_seconds"],
+            timings["navigation_update_seconds"],
+            timings["summary_update_seconds"],
+        )
+        return timings
 
     def advance_to_next_date_option(self, period_key: str, prev_len: int) -> None:
         """Move the displayed index to the next date option after a load.
@@ -648,6 +714,15 @@ class _ResultsPanel(QWidget):
     def controller(self) -> DesktopController:
         """The DesktopController backing this panel."""
         return self._controller
+
+    def active_schedule_store_path(self) -> Path | None:
+        """Return the active SQLite DB path used for resource checks."""
+        if self._schedule_store is not None:
+            return self._schedule_store.path
+        for schedules in self._schedules_by_period.values():
+            if isinstance(schedules, StoredScheduleList):
+                return schedules.store.path
+        return None
 
     def has_period(self, period_key: str) -> bool:
         """Return True if *period_key* is a known period even if empty."""
@@ -707,9 +782,7 @@ class _ResultsPanel(QWidget):
         return sum(len(scheds) for scheds in self._schedules_by_period.values())
 
     def is_at_memory_cap(self) -> bool:
-        """Return True once the active disk-backed result cache reaches its cap."""
-        if self._schedule_store is not None:
-            return self._schedule_store.total_count() >= ABSOLUTE_MAX_STORED_SCHEDULES
+        """Return True if a legacy in-memory result container reaches its cap."""
         if ABSOLUTE_MAX_IN_MEMORY_SCHEDULES is None:
             return False
         return self.total_in_memory_schedule_count() >= ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
@@ -895,16 +968,69 @@ class _ResultsPanel(QWidget):
         """Return how many loaded variants share *signature* in *period_key*."""
         return len(self._indices_for_signature(period_key, signature))
 
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
-        self._period_tip_bubble.hide()
+    def release_results(self, *, delete_db: bool = True) -> None:
+        """Release result DBs, caches, workers and generated-result UI state."""
+        if hasattr(self, "_period_tip_bubble"):
+            self._period_tip_bubble.hide()
+
+        self._lm.reset()
         self._cleanup_ranking_worker(terminate=True)
-        if self._controller.heavy_task_kind == "ranking":
-            self._controller.end_heavy_task("ranking")
-            self._finish_ranking_metrics()
-            self.heavy_task_state_changed.emit("ranking", False)
+        heavy_kind = self._controller.heavy_task_kind
+        if heavy_kind in {"loading", "ranking"}:
+            self._controller.end_heavy_task(heavy_kind)
+            if heavy_kind == "ranking":
+                self._finish_ranking_metrics()
+            self.heavy_task_state_changed.emit(heavy_kind, False)
+
+        stores: set[SQLiteScheduleStore] = set()
         if self._schedule_store is not None:
-            self._schedule_store.close(delete=True)
-            self._schedule_store = None
+            stores.add(self._schedule_store)
+        for schedules in self._schedules_by_period.values():
+            if isinstance(schedules, StoredScheduleList):
+                stores.add(schedules.store)
+        for store in stores:
+            try:
+                store.close(delete=delete_db)
+            except Exception:
+                logger.debug("Failed closing result SQLite store", exc_info=True)
+
+        self._schedule_store = None
+        self._schedules_by_period.clear()
+        self._period_indices.clear()
+        self._truncated_periods.clear()
+        self._total_by_period.clear()
+        self._cell_data.clear()
+        self._nav_model.clear()
+        self._clear_favorites()
+        self._clear_ranking_dirty()
+        self._has_stale_results = False
+        self._is_imported_schedule = False
+        self._generation_thresholds = None
+        self._streaming_run_active = False
+
+        if hasattr(self, "_period_tabs"):
+            self._period_tabs.clear()
+        self._cards.clear()
+        if hasattr(self, "_summary_lbl"):
+            self._summary_lbl.setText("")
+        if hasattr(self, "_period_selector"):
+            self._period_selector.setVisible(False)
+        if hasattr(self, "_save_btn"):
+            self._save_btn.setEnabled(False)
+        if hasattr(self, "_proctor_btn"):
+            self._proctor_btn.setVisible(False)
+            self._proctor_btn.setEnabled(False)
+        if hasattr(self, "_stale_banner"):
+            self._stale_banner.setVisible(False)
+        if hasattr(self, "_placeholder"):
+            self._placeholder.setVisible(True)
+        if hasattr(self, "_content"):
+            self._content.setVisible(False)
+        if delete_db:
+            gc.collect()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        self.release_results(delete_db=True)
         super().closeEvent(event)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt override name
@@ -1147,6 +1273,15 @@ class _ResultsPanel(QWidget):
         """Rebuild navigation indexes through NavigationModel."""
         self._nav_model.rebuild(period_key)
 
+    def _append_navigation_cache(
+        self,
+        period_key: str,
+        start_index: int,
+        count: int,
+    ) -> None:
+        """Append navigation indexes through NavigationModel."""
+        self._nav_model.append_entries(period_key, start_index, count)
+
     def _date_options_for_period(
         self,
         period_key: str,
@@ -1300,6 +1435,17 @@ class _ResultsPanel(QWidget):
         return self._nav_model.indices_for_signature(period_key, signature)
 
     def _refresh_period_card(self, period_key: str) -> None:
+        self._refresh_period_card_ui(period_key, repaint_calendar=True)
+
+    def _refresh_period_card_counters(self, period_key: str) -> None:
+        self._refresh_period_card_ui(period_key, repaint_calendar=False)
+
+    def _refresh_period_card_ui(
+        self,
+        period_key: str,
+        *,
+        repaint_calendar: bool,
+    ) -> None:
         schedules = self._schedules_by_period[period_key]
         total = len(schedules)
         has_more = (
@@ -1428,6 +1574,10 @@ class _ResultsPanel(QWidget):
         if not self._is_imported_schedule:
             self._lm.update_auto_load_button(period_key)
         self._refresh_favorite_buttons()
+
+        if not repaint_calendar:
+            self._update_summary()
+            return
 
         if schedules:
             self._cell_data[period_key] = self._calendar.populate(
@@ -1805,9 +1955,9 @@ class _ResultsPanel(QWidget):
             # best-ranked option instead of keeping an arbitrary old ordinal.
             self._period_indices[period_key] = 0
 
-        # Favorites are stored by positional index into the (now reordered) lists,
-        # so a re-rank would silently point them at different schedules. Drop them
-        # to avoid opening a schedule that no longer matches its saved label.
+        # Favorites keep a fingerprinted schedule snapshot, but their labels and
+        # surrounding order context come from the displayed result set. Ranking
+        # deliberately clears generated-result favorites to avoid stale labels.
         self._clear_favorites()
         self._nav_model.clear()
         self._clear_ranking_dirty()
@@ -1905,13 +2055,13 @@ class _ResultsPanel(QWidget):
         self._refresh_heavy_task_controls()
         return True
 
-    def _end_heavy_task(self, kind: str) -> None:
+    def _end_heavy_task(self, kind: str, *, repaint_calendar: bool = True) -> None:
         """Release the shared heavy-task slot and refresh visible controls."""
         if self._controller.end_heavy_task(kind):
             if kind == "ranking":
                 self._finish_ranking_metrics()
             self.heavy_task_state_changed.emit(kind, False)
-        self._refresh_heavy_task_controls()
+        self._refresh_heavy_task_controls(repaint_calendar=repaint_calendar)
 
     def _finish_ranking_metrics(self) -> None:
         """Finalize ranking timing metrics."""
@@ -1926,12 +2076,15 @@ class _ResultsPanel(QWidget):
         except Exception:
             logger.debug("Failed recording ranking metrics", exc_info=True)
 
-    def _refresh_heavy_task_controls(self) -> None:
+    def _refresh_heavy_task_controls(self, *, repaint_calendar: bool = True) -> None:
         """Refresh ranking/load controls after heavy-task state changes."""
         self._set_ranking_busy(self._ranking_proc is not None)
         current = self._current_period_key()
         if current is not None and current in self._cards:
-            self._refresh_period_card(current)
+            if repaint_calendar:
+                self._refresh_period_card(current)
+            else:
+                self._refresh_period_card_counters(current)
 
     def sync_heavy_task_state(self) -> None:
         """Public hook for the parent screen to refresh controls after generation."""
@@ -2039,5 +2192,3 @@ class _ResultsPanel(QWidget):
                 "Could not save the schedule file. Please check the selected path and try again.",
                 QMessageBox.Icon.Critical,
             )
-
-

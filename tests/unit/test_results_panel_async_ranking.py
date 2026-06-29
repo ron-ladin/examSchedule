@@ -1,5 +1,6 @@
 import os
 import queue
+import sqlite3
 import sys
 from datetime import date
 
@@ -18,10 +19,18 @@ from src.controller import DesktopController
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
 from src.domain.exam_period import ExamPeriod
+from src.domain.generation_result import GenerationResult
+from src.domain.resource_guard import (
+    BatchResourceDeltas,
+    ResourceBudget,
+    ResourceDecision,
+    ResourceSnapshot,
+)
 from src.domain.schedule import Schedule
 from src.domain.sorting import SortCriterion, SortingConfig
 from src.engine.ranking_worker import RankingWorkerResult, run_ranking_worker
 from src.ui.config_screen import ConfigScreen
+from src.ui.input_screen import InputScreen
 from src.ui.results_panel import _ResultsPanel
 
 QApplication = QtWidgets.QApplication
@@ -55,6 +64,52 @@ def _schedule(course_id: str, day: int) -> Schedule:
 def _sorting() -> SortingConfig:
     return SortingConfig.from_ordered_criteria(
         [SortCriterion.SORT_MIN_DAYS_MANDATORY]
+    )
+
+
+def _resource_snapshot(
+    *,
+    rss: float = 100,
+    db: float = 10,
+    wal: float = 1,
+    shm: float = 0,
+    free_disk: float = 100_000,
+) -> ResourceSnapshot:
+    return ResourceSnapshot(
+        process_rss_mb=rss,
+        system_total_ram_mb=16_000,
+        system_available_ram_mb=12_000,
+        db_size_mb=db,
+        wal_size_mb=wal,
+        shm_size_mb=shm,
+        db_total_size_mb=db + wal + shm,
+        free_disk_mb=free_disk,
+    )
+
+
+def _resource_budget() -> ResourceBudget:
+    return ResourceBudget(
+        ram_soft_limit_mb=1000,
+        ram_hard_limit_mb=2000,
+        min_free_ram_mb=500,
+        max_db_size_mb=50_000,
+        min_free_disk_mb=5000,
+    )
+
+
+def _resource_decision(
+    *,
+    can_continue: bool,
+    should_warn: bool = False,
+    reason: str | None = None,
+    snapshot: ResourceSnapshot | None = None,
+) -> ResourceDecision:
+    return ResourceDecision(
+        can_continue=can_continue,
+        should_warn=should_warn,
+        reason=reason,
+        snapshot=snapshot or _resource_snapshot(),
+        budget=_resource_budget(),
     )
 
 
@@ -343,6 +398,149 @@ def test_auto_load_is_blocked_while_ranking_is_active(monkeypatch, qapp):
         panel.close()
 
 
+def test_auto_load_pauses_before_hard_resource_limit(qapp):
+    period_key = "FALL - Aleph"
+    controller = DesktopController()
+    controller._courses = [_course()]
+    controller.set_has_more_for_period(period_key, True)
+    panel = _ResultsPanel(controller)
+    panel.load({period_key: [_schedule("C1", 5)]}, {"C1": _course()}, {}, {period_key})
+    messages = []
+
+    class _HardLimitGuard:
+        def estimate_next_batch(self, _count):
+            return {"estimated_ram_growth_mb": 0, "estimated_db_growth_mb": 0}
+
+        def evaluate(self, **_kwargs):
+            return _resource_decision(
+                can_continue=False,
+                should_warn=True,
+                reason="disk reserve",
+                snapshot=_resource_snapshot(rss=1500, db=2048, free_disk=2048),
+            )
+
+    panel._lm._resource_guard = _HardLimitGuard()
+    try:
+        panel._lm.messageRequested.disconnect()
+    except TypeError:
+        pass
+    panel._lm.messageRequested.connect(
+        lambda title, text, icon: messages.append((title, text, icon))
+    )
+
+    try:
+        panel._lm.start_auto_load(period_key, "dates")
+
+        assert period_key not in panel._lm.auto_load_periods
+        assert panel._lm.procs == {}
+        assert len(panel.get_schedules(period_key)) == 1
+        assert messages
+        assert messages[0][0] == "Resource Limit Reached"
+        assert "Auto Load was paused to protect system resources" in messages[0][1]
+        assert "Already loaded 1 schedules" in messages[0][1]
+    finally:
+        panel.close()
+
+
+def test_load_batch_records_resource_deltas(qapp):
+    period_key = "FALL - Aleph"
+    controller = DesktopController()
+    controller._courses = [_course()]
+    panel = _ResultsPanel(controller)
+    panel.load({period_key: [_schedule("C1", 5)]}, {"C1": _course()}, {}, set())
+    before = _resource_snapshot(rss=100, db=10, wal=1, free_disk=100_000)
+    after = _resource_snapshot(rss=102, db=13, wal=2, free_disk=99_996)
+    recorded = {}
+
+    class _RecordingGuard:
+        def snapshot(self):
+            return after
+
+        def record_batch(self, before_snapshot, after_snapshot, schedule_count):
+            recorded["args"] = (before_snapshot, after_snapshot, schedule_count)
+            return BatchResourceDeltas(
+                rss_delta_mb=2,
+                db_delta_mb=3,
+                wal_delta_mb=1,
+                sqlite_total_delta_mb=4,
+                ram_per_schedule_kb=2048,
+                db_per_schedule_kb=3072,
+                wal_per_schedule_kb=1024,
+                sqlite_total_per_schedule_kb=4096,
+                rolling_ram_per_schedule_kb=2048,
+                rolling_db_per_schedule_kb=3072,
+                rolling_wal_per_schedule_kb=1024,
+                rolling_sqlite_total_per_schedule_kb=4096,
+            )
+
+    result_queue = queue.Queue()
+    result_queue.put(
+        GenerationResult.ok({period_key: [_schedule("C1", 10)]}, {}, set())
+    )
+    panel._lm._resource_guard = _RecordingGuard()
+    panel._lm.resource_snapshots_before[period_key] = before
+    panel._lm.queues[period_key] = result_queue
+    panel._lm.modes[period_key] = "dates"
+    panel._lm.ticks[period_key] = 0
+
+    try:
+        panel._lm._poll_load_more_inner(period_key)
+
+        assert len(panel.get_schedules(period_key)) == 2
+        assert recorded["args"] == (before, after, 1)
+    finally:
+        panel.close()
+
+
+def test_auto_load_delay_is_adaptive(qapp):
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+
+    try:
+        assert (
+            panel._lm._next_auto_load_delay_ms(
+                total_batch_seconds=0.2,
+                resource_pressure=False,
+                resource_warning=False,
+            )
+            == 100
+        )
+        assert (
+            panel._lm._next_auto_load_delay_ms(
+                total_batch_seconds=1.0,
+                resource_pressure=False,
+                resource_warning=False,
+            )
+            == 250
+        )
+        assert (
+            panel._lm._next_auto_load_delay_ms(
+                total_batch_seconds=3.0,
+                resource_pressure=False,
+                resource_warning=False,
+            )
+            == 500
+        )
+        assert (
+            panel._lm._next_auto_load_delay_ms(
+                total_batch_seconds=0.2,
+                resource_pressure=False,
+                resource_warning=True,
+            )
+            == 500
+        )
+        assert (
+            panel._lm._next_auto_load_delay_ms(
+                total_batch_seconds=0.2,
+                resource_pressure=True,
+                resource_warning=False,
+            )
+            == 1000
+        )
+    finally:
+        panel.close()
+
+
 def test_ranking_button_text_restores_after_loading_finishes(qapp):
     panel, controller, _period_key, _first, _second = _panel_with_memory_results(qapp)
 
@@ -374,8 +572,20 @@ def test_append_loaded_schedules_marks_ranking_dirty_message(
         "cache_generated_results",
         lambda *_args, **_kwargs: pytest.fail("full rerank should not run"),
     )
-    rebuilt = []
-    monkeypatch.setattr(panel, "_rebuild_navigation_cache", rebuilt.append)
+    panel._rebuild_navigation_cache(period_key)
+    append_calls = []
+    original_append = panel._nav_model.append_entries
+
+    def record_append(period, start_index, count):
+        append_calls.append((period, start_index, count))
+        original_append(period, start_index, count)
+
+    monkeypatch.setattr(panel._nav_model, "append_entries", record_append)
+    monkeypatch.setattr(
+        panel._nav_model,
+        "rebuild",
+        lambda *_args, **_kwargs: pytest.fail("append should not rebuild nav cache"),
+    )
     extra = [_schedule("C1", 20)]
 
     try:
@@ -385,7 +595,7 @@ def test_append_loaded_schedules_marks_ranking_dirty_message(
         assert controller._last_results[period_key] == [first, second, extra[0]]
         assert panel._ranking_dirty is True
         assert "Re-rank" in panel._summary_lbl.text()
-        assert rebuilt == [period_key]
+        assert append_calls == [(period_key, 2, 1)]
     finally:
         panel.close()
 
@@ -418,6 +628,266 @@ def test_append_loaded_schedules_marks_sqlite_results_ranking_dirty(
         panel.close()
 
 
+def test_append_loaded_schedules_uses_sqlite_navigation_range_without_rebuild(
+    monkeypatch,
+    qapp,
+    tmp_path,
+):
+    panel, _controller, period_key, _first, _second = _panel_with_sqlite_results(
+        qapp,
+        tmp_path,
+    )
+    schedules = panel.get_schedules(period_key)
+    panel._rebuild_navigation_cache(period_key)
+    range_calls = []
+    original_range = schedules.navigation_entries_range
+
+    def record_range(start_index, count):
+        range_calls.append((start_index, count))
+        return original_range(start_index, count)
+
+    monkeypatch.setattr(schedules, "navigation_entries_range", record_range)
+    monkeypatch.setattr(
+        panel._nav_model,
+        "rebuild",
+        lambda *_args, **_kwargs: pytest.fail("append should not rebuild nav cache"),
+    )
+    extra = [_schedule("C1", 20)]
+
+    try:
+        panel.append_loaded_schedules(period_key, extra)
+
+        assert len(panel.get_schedules(period_key)) == 3
+        assert range_calls == [(2, 1)]
+        assert panel._nav_model.nav_position(period_key, 2) == (2, 0)
+    finally:
+        panel.close()
+
+
+def test_append_loaded_schedules_switches_sqlite_view_to_append_order_when_dirty(
+    qapp,
+    tmp_path,
+):
+    period_key = "FALL - Aleph"
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 1), date(2026, 1, 31))])
+    course_1 = _course()
+    course_2 = Course(
+        id="C2",
+        name="Data Structures",
+        instructor="Dr. Sort",
+        evaluation_type="Exam",
+        offerings=[CourseOffering("83101", 1, "FALL", "Obligatory")],
+    )
+    narrow = Schedule(
+        period,
+        {"C1": date(2026, 1, 5), "C2": date(2026, 1, 6)},
+    )
+    wide = Schedule(
+        period,
+        {"C1": date(2026, 1, 5), "C2": date(2026, 1, 20)},
+    )
+    extra = Schedule(
+        period,
+        {"C1": date(2026, 1, 5), "C2": date(2026, 1, 10)},
+    )
+
+    store = SQLiteScheduleStore(tmp_path / "schedules.sqlite3", delete_on_close=False)
+    store.append_many(
+        period_key,
+        [narrow, wide],
+        courses=[course_1, course_2],
+        selected_programs=["83101"],
+    )
+    stored = store.as_sequence(
+        period_key,
+        courses=[course_1, course_2],
+        selected_programs=["83101"],
+        sorting=_sorting(),
+    )
+    assert list(stored) == [wide, narrow]
+
+    controller = DesktopController()
+    controller._courses = [course_1, course_2]
+    controller._selected_programs = ["83101"]
+    controller.apply_sort(_sorting())
+    controller._last_results = {period_key: stored}
+    controller.clear_results_stale()
+
+    panel = _ResultsPanel(controller)
+    panel._schedule_store = store
+    panel._schedules_by_period = {period_key: stored}
+    panel._period_indices = {period_key: 0}
+
+    try:
+        panel.append_loaded_schedules(period_key, [extra])
+
+        assert panel._ranking_dirty is True
+        assert list(panel.get_schedules(period_key)) == [narrow, wide, extra]
+    finally:
+        panel.close()
+
+
+def test_sqlite_write_failure_stops_auto_load_and_keeps_existing_results(
+    monkeypatch,
+    qapp,
+    tmp_path,
+):
+    panel, _controller, period_key, _first, _second = _panel_with_sqlite_results(
+        qapp,
+        tmp_path,
+    )
+    messages = []
+    try:
+        panel._lm.messageRequested.disconnect()
+    except TypeError:
+        pass
+    panel._lm.messageRequested.connect(
+        lambda title, text, icon: messages.append((title, text, icon))
+    )
+
+    def fail_append_many(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database or disk is full")
+
+    monkeypatch.setattr(panel._schedule_store, "append_many", fail_append_many)
+
+    result_queue = queue.Queue()
+    result_queue.put(
+        GenerationResult.ok(
+            {period_key: [_schedule("C1", 20)]},
+            {},
+            {period_key},
+        )
+    )
+    panel._lm.queues[period_key] = result_queue
+    panel._lm.modes[period_key] = "dates"
+    panel._lm.ticks[period_key] = 0
+    panel._lm.auto_load_periods.add(period_key)
+    panel._lm.auto_load_modes[period_key] = "dates"
+
+    try:
+        panel._lm._poll_load_more_inner(period_key)
+
+        assert len(panel.get_schedules(period_key)) == 2
+        assert period_key not in panel._lm.auto_load_periods
+        assert messages
+        assert messages[0][0] == "Storage Failed"
+        assert "Already loaded 2 schedules" in messages[0][1]
+    finally:
+        panel.close()
+
+
+def test_results_panel_release_deletes_store_and_clears_navigation(qapp, tmp_path):
+    panel, _controller, period_key, _first, _second = _panel_with_sqlite_results(
+        qapp,
+        tmp_path,
+    )
+    db_path = panel._schedule_store.path
+    wal_path = db_path.with_name(db_path.name + "-wal")
+    shm_path = db_path.with_name(db_path.name + "-shm")
+    panel._rebuild_navigation_cache(period_key)
+    panel._cell_data[period_key] = {(0, 0): ("cell",)}
+    panel._favorite_schedules.append(object())
+    panel._schedule_store.close(delete=False)
+    wal_path.write_bytes(b"wal")
+    shm_path.write_bytes(b"shm")
+
+    panel.release_results(delete_db=True)
+    panel.release_results(delete_db=True)
+
+    assert panel._schedules_by_period == {}
+    assert panel._period_indices == {}
+    assert panel._truncated_periods == set()
+    assert panel._total_by_period == {}
+    assert panel._cell_data == {}
+    assert panel._nav_model._date_option_cache == {}
+    assert panel._nav_model._index_nav_cache == {}
+    assert panel._nav_model._signature_pos_cache == {}
+    assert panel._favorite_schedules == []
+    assert not db_path.exists()
+    assert not wal_path.exists()
+    assert not shm_path.exists()
+
+
+def test_back_to_input_discards_results_and_deletes_temp_db(
+    monkeypatch,
+    qapp,
+):
+    period_key = "FALL - Aleph"
+    controller = DesktopController()
+    controller._courses = [_course()]
+    screen = InputScreen(controller)
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+
+    try:
+        screen._results.load(
+            {period_key: [_schedule("C1", 5)]},
+            {"C1": _course()},
+            {},
+            set(),
+        )
+        db_path = screen._results._results_panel._schedule_store.path
+        wal_path = db_path.with_name(db_path.name + "-wal")
+        shm_path = db_path.with_name(db_path.name + "-shm")
+        screen._results._results_panel._schedule_store.close(delete=False)
+        wal_path.write_bytes(b"wal")
+        shm_path.write_bytes(b"shm")
+
+        screen._on_back_requested()
+
+        assert screen._stacked.currentIndex() == 0
+        assert screen._results.has_results_loaded() is False
+        assert controller._last_results is None
+        assert not db_path.exists()
+        assert not wal_path.exists()
+        assert not shm_path.exists()
+    finally:
+        screen.close()
+
+
+def test_auto_dates_background_batch_refreshes_counters_without_calendar(
+    monkeypatch,
+    qapp,
+):
+    period_key = "FALL - Aleph"
+    first = _schedule("C1", 5)
+    extra = _schedule("C1", 10)
+    controller = DesktopController()
+    controller._courses = [_course()]
+    controller.set_has_more_for_period(period_key, True)
+    panel = _ResultsPanel(controller)
+    panel.load({period_key: [first]}, {"C1": _course()}, {}, {period_key})
+
+    def fail_calendar_populate(*_args, **_kwargs):
+        raise AssertionError("background Auto Dates must not repaint the calendar")
+
+    monkeypatch.setattr(panel._calendar, "populate", fail_calendar_populate)
+    result_queue = queue.Queue()
+    result_queue.put(
+        GenerationResult.ok(
+            {period_key: [extra]},
+            {},
+            set(),
+        )
+    )
+    panel._lm.queues[period_key] = result_queue
+    panel._lm.modes[period_key] = "dates"
+    panel._lm.ticks[period_key] = 0
+    panel._lm.auto_load_periods.add(period_key)
+    panel._lm.auto_load_modes[period_key] = "dates"
+
+    try:
+        panel._lm._poll_load_more_inner(period_key)
+
+        assert len(panel.get_schedules(period_key)) == 2
+        assert "Date option:" in panel._cards[period_key].date_counter_label.text()
+    finally:
+        panel.close()
+
+
 def test_ranking_refreshes_only_visible_period(monkeypatch, qapp):
     panel, _controller, period_key, first, second = _panel_with_memory_results(qapp)
     other_key = "FALL - Bet"
@@ -442,8 +912,7 @@ def test_ranking_refreshes_only_visible_period(monkeypatch, qapp):
 
 
 def test_ranking_clears_saved_favorites(qapp):
-    """Favorites are positional indices, so a re-rank must drop them rather than
-    silently repoint them at the reordered schedules."""
+    """Favorites are cleared after ranking to avoid stale labels/order context."""
     panel, _controller, period_key, first, second = _panel_with_memory_results(qapp)
 
     try:
