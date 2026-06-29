@@ -6,13 +6,14 @@ the Settings dialog (input screen) and the Result Ranking dialog (output screen)
 so both screens present the exact same prioritization UX.
 
 Behaviour (the "dynamic UX rules"):
-  * Only *checked* (enabled) criteria can be dragged and reordered.
-  * Unchecked criteria are anchored at the bottom of the list and cannot be
-    dragged above the checked block.
-  * Checking an unchecked criterion makes it jump to the bottom of the checked
-    block — i.e. it becomes the lowest active priority, ready to be dragged up.
-  * Unchecking a criterion drops it to the top of the unchecked block.
-  * Each checked row is prefixed with its live priority number (1..N).
+  * Only *checked* (enabled) criteria can be dragged and reordered; unchecked
+    rows are not draggable.
+  * Toggling a row's checkbox keeps it in place — checking or unchecking never
+    moves a row, so checked and unchecked rows may be interleaved freely.
+  * Priority follows top-to-bottom row order: the active priority numbers count
+    only the checked rows in the order they currently appear.
+  * Each checked row is prefixed with its live priority number (1..N); unchecked
+    rows are greyed out and unnumbered.
 
 Round-trips cleanly through ``SortingConfig``:
     widget.load_config(config)   # populate from a config

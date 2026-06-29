@@ -441,6 +441,26 @@ def test_ranking_refreshes_only_visible_period(monkeypatch, qapp):
         panel.close()
 
 
+def test_ranking_clears_saved_favorites(qapp):
+    """Favorites are positional indices, so a re-rank must drop them rather than
+    silently repoint them at the reordered schedules."""
+    panel, _controller, period_key, first, second = _panel_with_memory_results(qapp)
+
+    try:
+        panel._period_indices[period_key] = 1
+        panel._save_current_favorite(period_key)
+        assert len(panel._favorite_schedules) == 1
+
+        # Re-rank reverses the order; index 1 would now point at a different schedule.
+        panel._finish_ranking_success({period_key: [second, first]})
+
+        assert panel._favorite_schedules == []
+        assert panel._favorites_btn.text() == "My Favorites (0)"
+        assert panel._favorites_btn.isEnabled() is False
+    finally:
+        panel.close()
+
+
 def test_sqlite_ranking_job_uses_store_reference_not_schedule_payload(tmp_path):
     period_key = "FALL - Aleph"
     store = SQLiteScheduleStore(tmp_path / "schedules.sqlite3", delete_on_close=False)

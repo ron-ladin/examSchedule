@@ -1805,6 +1805,10 @@ class _ResultsPanel(QWidget):
             # best-ranked option instead of keeping an arbitrary old ordinal.
             self._period_indices[period_key] = 0
 
+        # Favorites are stored by positional index into the (now reordered) lists,
+        # so a re-rank would silently point them at different schedules. Drop them
+        # to avoid opening a schedule that no longer matches its saved label.
+        self._clear_favorites()
         self._nav_model.clear()
         self._clear_ranking_dirty()
 
