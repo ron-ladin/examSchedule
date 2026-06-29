@@ -38,6 +38,19 @@ def _get_qapp() -> QApplication:
     return app
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_programme_dialogs():
+    yield
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in app.topLevelWidgets():
+        if isinstance(widget, ProgrammeCoursesDialog):
+            widget.close()
+            widget.deleteLater()
+    app.processEvents()
+
+
 def _make_controller_with_courses() -> DesktopController:
     """Build a controller pre-loaded with deterministic test courses."""
     ctrl = DesktopController()
