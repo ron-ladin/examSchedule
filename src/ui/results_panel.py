@@ -26,11 +26,9 @@ from queue import Empty as _QueueEmpty
 from PyQt6.QtCore import QEvent, QPoint, QSignalBlocker, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
-    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QMessageBox,
     QPushButton,
     QTabWidget,
@@ -46,7 +44,16 @@ from src.ui.calendar_cell_delegate import (
     _course_ids_for_click_position,
     _group_exams_by_slot,
 )
-from src.ui.tokens import PERIOD_TAB_STYLE
+from src.ui.tokens import (
+    COLOR_CAL_ACTIVE_BG,
+    COLOR_PANEL_BLUE,
+    COLOR_PRIMARY_ACTION,
+    COLOR_SURFACE_SOFT,
+    COLOR_TEXT_DARK,
+    COLOR_VIOLET,
+    COLOR_VIOLET_BORDER,
+    PERIOD_TAB_STYLE,
+)
 
 from src.controller import DesktopController, LOAD_BATCH_SIZE
 from src.adapters.sqlite_schedule_store import (
@@ -59,9 +66,16 @@ from src.domain.period_order import canonical_period_key
 from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
 from src.domain.sorting import SortingConfig
-from src.domain.threshold import Criterion, ThresholdEntry, ThresholdSettings
+from src.domain.threshold import ThresholdSettings
 from src.engine.generation_workers import ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
 from src.engine.ranking_worker import RankingWorkerResult, run_ranking_worker
+from src.ui.active_limits_panel import ActiveLimitsPanel
+from src.ui.favorite_schedules import (
+    FavoriteSchedule,
+    FavoritesDialog,
+    find_schedule_by_fingerprint,
+    schedule_fingerprint,
+)
 from src.ui.navigation_model import NavigationModel, DateSignature as _DateSignature
 from src.ui.period_card import PeriodCardWidgets
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
@@ -71,32 +85,11 @@ from src.ui.result_summary_presenter import ResultSummaryPresenter
 from src.ui.widgets.calendar_view import CalendarRenderer
 from src.ui.widgets.period_card_builder import (
     build_period_card,
+    _light_hover_bubble,
     _make_data_table,  # re-exported for input_screen / programme_courses_dialog
 )
 
 logger = logging.getLogger(__name__)
-_THRESHOLD_LABELS: dict[Criterion, tuple[str, str]] = {
-    Criterion.MIN_DAYS_BETWEEN_MANDATORY_EXAMS: (
-        "Mandatory exam gap",
-        "at least {k} day(s) between mandatory exams",
-    ),
-    Criterion.MIN_DAYS_BETWEEN_ANY_EXAMS: (
-        "Any exam gap",
-        "at least {k} day(s) between any two exams",
-    ),
-    Criterion.MAX_ELECTIVE_COLLISIONS: (
-        "Elective collisions",
-        "at most {k} same-day elective collision(s)",
-    ),
-    Criterion.MIN_DAYS_EXAM_PERIOD_SPREAD: (
-        "Exam-period spread",
-        "at least {k} day(s) from first to last mandatory exam",
-    ),
-    Criterion.MAX_EXAMS_PER_DAY: (
-        "Exams per day",
-        "at most {k} exam(s) on one day",
-    ),
-}
 _RANKING_EXIT_QUEUE_GRACE_TICKS = 3
 _RANKING_BUTTON_TEXT = "⇅  Result Ranking"
 
@@ -107,23 +100,6 @@ def _standard_period_keys() -> list[str]:
         for semester, moed in _STANDARD_PERIOD_ORDER
     ]
 
-
-def _active_threshold_entries(
-    thresholds: ThresholdSettings,
-) -> list[ThresholdEntry]:
-    """Return enabled threshold entries in the domain enum order."""
-    by_criterion = {entry.criterion: entry for entry in thresholds.entries}
-    return [
-        by_criterion[criterion]
-        for criterion in Criterion
-        if criterion in by_criterion and by_criterion[criterion].enabled
-    ]
-
-
-def _format_threshold_entry(entry: ThresholdEntry) -> str:
-    """Human-readable summary for one active scheduling limit."""
-    title, detail_template = _THRESHOLD_LABELS[entry.criterion]
-    return f"{title}: {detail_template.format(k=entry.k)}"
 
 
 def _merge_period_keys(
@@ -227,7 +203,7 @@ class _ResultsPanel(QWidget):
         self._ranking_dirty = False
         self._ranking_dirty_message: str | None = None
         self._summary_presenter = ResultSummaryPresenter()
-        self._favorite_schedules: list[dict[str, int | str]] = []
+        self._favorite_schedules: list[FavoriteSchedule] = []
 
         self._navigator = PeriodNavigator(
             self._nav_model,
@@ -260,7 +236,7 @@ class _ResultsPanel(QWidget):
         # AUTO_LOAD_DELAY_MS, then requests the next batch until there is no more
         # data or the user presses Stop Auto Load. Never use a blocking while-loop.
         self._stale_banner: QLabel = QLabel()
-        self._limits_panel: QWidget = QWidget()
+        self._limits_panel: ActiveLimitsPanel = ActiveLimitsPanel()
         self._limits_toggle: QToolButton = QToolButton()
         self._limits_details: QLabel = QLabel()
         self._save_favorite_btn: QPushButton = QPushButton()
@@ -611,8 +587,8 @@ class _ResultsPanel(QWidget):
         self._schedules_by_period[period_key].extend(extra)
 
         # Keep the appended schedules cached, but do not re-sort the whole
-        # result set on every Load More / Auto Load batch. Users can explicitly
-        # run Result Ranking once loading settles.
+        # result set on every Load More / Auto Load batch. Surface that the
+        # displayed order may now be partially unsorted until the user re-ranks.
         self._schedules_by_period = self._controller.cache_loaded_results_without_reranking(
             dict(self._schedules_by_period)
         )
@@ -622,6 +598,7 @@ class _ResultsPanel(QWidget):
         )
         self._rebuild_navigation_cache(period_key)
         self._update_summary()
+        self.mark_ranking_dirty("New results loaded. Re-rank to apply sorting.")
 
     def advance_to_next_date_option(self, period_key: str, prev_len: int) -> None:
         """Move the displayed index to the next date option after a load.
@@ -701,37 +678,16 @@ class _ResultsPanel(QWidget):
 
     def _on_limits_toggled(self, expanded: bool) -> None:
         """Expand/collapse the active generation limits details."""
-        self._limits_toggle.setArrowType(
-            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
-        )
-        self._limits_details.setVisible(expanded)
+        self._limits_panel._on_toggled(expanded)
 
     def _refresh_active_limits_panel(self) -> None:
         """Show enabled threshold rules used by the displayed generation."""
-        thresholds = self._generation_thresholds
-        active_entries = (
-            [] if thresholds is None else _active_threshold_entries(thresholds)
+        self._limits_panel.show_limits(
+            self._generation_thresholds,
+            imported_schedule=self._is_imported_schedule,
         )
-
-        if self._is_imported_schedule or not active_entries:
-            self._limits_panel.setVisible(False)
-            self._limits_toggle.setChecked(False)
-            self._limits_details.setText("")
-            return
-
-        self._limits_toggle.setChecked(False)
-        self._limits_toggle.setText(
-            f"Active scheduling limits ({len(active_entries)})"
-        )
-        self._limits_details.setText(
-            "<br>".join(
-                f"<span style='color:#7C3AED;'>•</span> "
-                f"{_format_threshold_entry(entry)}"
-                for entry in active_entries
-            )
-        )
-        self._limits_details.setTextFormat(Qt.TextFormat.RichText)
-        self._limits_panel.setVisible(True)
+        self._limits_toggle = self._limits_panel.toggle
+        self._limits_details = self._limits_panel.details
 
     def _clear_ranking_dirty(self) -> None:
         self._summary_presenter.clear_ranking_dirty()
@@ -795,17 +751,18 @@ class _ResultsPanel(QWidget):
         if index < 0 or index >= len(schedules):
             return
 
+        signature = schedule_fingerprint(schedules[index])
         for favorite in self._favorite_schedules:
-            if favorite["period_key"] == period_key and favorite["index"] == index:
+            if favorite.period_key == period_key and favorite.signature == signature:
                 self._refresh_favorite_buttons(saved_period_key=period_key)
                 return
 
         self._favorite_schedules.append(
-            {
-                "period_key": period_key,
-                "index": index,
-                "label": self._favorite_label(period_key, index),
-            }
+            FavoriteSchedule(
+                period_key=period_key,
+                signature=signature,
+                label=self._favorite_label(period_key, index),
+            )
         )
         self._refresh_favorite_buttons(saved_period_key=period_key)
 
@@ -838,81 +795,61 @@ class _ResultsPanel(QWidget):
             self._save_favorite_btn.setText("Save Favorite")
 
     def _show_favorites_dialog(self) -> None:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("My Favorite Schedules")
-        dialog.setMinimumWidth(460)
-        dialog.setStyleSheet(
-            "QDialog { background: #F8FAFC; color: #172033; }"
-            "QLabel { color: #0755B5; font-size: 14px; font-weight: 800; }"
-            "QListWidget { background: #FFFFFF; border: 1px solid #C4B5FD;"
-            " border-radius: 8px; padding: 6px; color: #172033; }"
-            "QPushButton { background: #2563EB; color: #FFFFFF; border: none;"
-            " border-radius: 8px; padding: 7px 16px; font-weight: 700; }"
-            "QPushButton:disabled { background: #CBD5E1; color: #64748B; }"
-        )
+        if not self._favorite_schedules:
+            self._show_message(
+                "No Favorites",
+                "You have not saved any favorite schedules yet.",
+                QMessageBox.Icon.Information,
+            )
+            return
 
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("My favorite schedules"))
-
-        favorites_list = QListWidget()
-        for favorite in self._favorite_schedules:
-            favorites_list.addItem(str(favorite["label"]))
-        if self._favorite_schedules:
-            favorites_list.setCurrentRow(0)
-        layout.addWidget(favorites_list)
-
-        actions = QHBoxLayout()
-        open_btn = QPushButton("Open Selected")
-        open_btn.setEnabled(bool(self._favorite_schedules))
-        delete_btn = QPushButton("Delete Selected")
-        delete_btn.setEnabled(bool(self._favorite_schedules))
-        delete_btn.setStyleSheet(
-            "background: #FFFFFF; color: #B91C1C; border: 1px solid #FCA5A5;"
-            " border-radius: 8px; padding: 7px 16px; font-weight: 700;"
-        )
-        close_btn = QPushButton("Close")
-        close_btn.setStyleSheet(
-            "background: #FFFFFF; color: #172033; border: 1px solid #CBD5E1;"
-            " border-radius: 8px; padding: 7px 16px; font-weight: 700;"
-        )
-        actions.addStretch()
-        actions.addWidget(delete_btn)
-        actions.addWidget(close_btn)
-        actions.addWidget(open_btn)
-        layout.addLayout(actions)
+        dialog = FavoritesDialog(self._favorite_schedules, self)
 
         def open_selected() -> None:
-            row = favorites_list.currentRow()
-            if row < 0 or row >= len(self._favorite_schedules):
-                return
-            favorite = self._favorite_schedules[row]
-            period_key = str(favorite["period_key"])
-            index = int(favorite["index"])
-            if period_key not in self._schedules_by_period:
-                return
-            if index >= len(self._schedules_by_period[period_key]):
-                return
-            self._period_indices[period_key] = index
-            self._select_period_key(period_key)
-            self._refresh_period_card(period_key)
-            dialog.accept()
+            row = dialog.favorites_list.currentRow()
+            self._open_favorite_at(row, close_dialog=dialog.accept)
 
         def delete_selected() -> None:
-            row = favorites_list.currentRow()
+            row = dialog.favorites_list.currentRow()
             if not self._delete_favorite_at(row):
                 return
-            favorites_list.takeItem(row)
-            has_favorites = bool(self._favorite_schedules)
-            open_btn.setEnabled(has_favorites)
-            delete_btn.setEnabled(has_favorites)
-            if has_favorites:
-                favorites_list.setCurrentRow(min(row, len(self._favorite_schedules) - 1))
+            dialog.remove_row(row, len(self._favorite_schedules))
 
-        open_btn.clicked.connect(open_selected)
-        delete_btn.clicked.connect(delete_selected)
-        close_btn.clicked.connect(dialog.reject)
-        favorites_list.itemDoubleClicked.connect(lambda _item: open_selected())
+        dialog.openRequested.connect(lambda _row: open_selected())
+        dialog.deleteRequested.connect(lambda _row: delete_selected())
         dialog.exec()
+
+    def _open_favorite_at(self, row: int, close_dialog=None) -> bool:
+        if row < 0 or row >= len(self._favorite_schedules):
+            return False
+
+        favorite = self._favorite_schedules[row]
+
+        schedules = self._schedules_by_period.get(favorite.period_key)
+        if not schedules:
+            self._show_missing_favorite_message()
+            return False
+
+        index = find_schedule_by_fingerprint(schedules, favorite.signature)
+        if index is None:
+            self._show_missing_favorite_message()
+            return False
+
+        self._period_indices[favorite.period_key] = index
+        self._select_period_key(favorite.period_key)
+        self._refresh_period_card(favorite.period_key)
+        if close_dialog is not None:
+            close_dialog()
+        return True
+
+    def _show_missing_favorite_message(self) -> None:
+        self._show_message(
+            "Favorite Unavailable",
+            "This favorite schedule is no longer available in the current results. "
+            "The generated results may have changed; generate or load the matching "
+            "results and try again.",
+            QMessageBox.Icon.Information,
+        )
 
     def get_truncated_periods(self) -> set[str]:
         """Return a copy of the periods that still have more schedules to load."""
@@ -1043,10 +980,10 @@ class _ResultsPanel(QWidget):
 
         self._save_favorite_btn = QPushButton("Save Favorite")
         self._save_favorite_btn.setStyleSheet(
-            "QPushButton { background: #EEF6FF; color: #0755B5;"
+            f"QPushButton {{ background: {COLOR_PANEL_BLUE}; color: {COLOR_PRIMARY_ACTION};"
             " border: 1px solid #93C5FD; border-radius: 8px;"
             " padding: 7px 16px; font-weight: 700; }"
-            "QPushButton:hover { background: #DBEAFE; }"
+            f"QPushButton:hover {{ background: {COLOR_CAL_ACTIVE_BG}; }}"
             "QPushButton:disabled { background: #F1F5F9; color: #94A3B8;"
             " border-color: #CBD5E1; }"
         )
@@ -1056,7 +993,7 @@ class _ResultsPanel(QWidget):
         self._favorites_btn = QPushButton("My Favorites (0)")
         self._favorites_btn.setStyleSheet(
             "QPushButton { background: #F5F3FF; color: #5B21B6;"
-            " border: 1px solid #C4B5FD; border-radius: 8px;"
+            f" border: 1px solid {COLOR_VIOLET_BORDER}; border-radius: 8px;"
             " padding: 7px 16px; font-weight: 700; }"
             "QPushButton:hover { background: #EDE9FE; }"
             "QPushButton:disabled { background: #F1F5F9; color: #94A3B8;"
@@ -1076,48 +1013,9 @@ class _ResultsPanel(QWidget):
 
         cl.addLayout(action_row)
 
-        self._limits_panel = QWidget()
-        self._limits_panel.setStyleSheet(
-            "background: #EEF6FF;"
-            " border: 1px solid #BFDBFE;"
-            " border-radius: 8px;"
-        )
-        limits_layout = QVBoxLayout(self._limits_panel)
-        limits_layout.setContentsMargins(14, 10, 14, 10)
-        limits_layout.setSpacing(8)
-
-        self._limits_toggle = QToolButton()
-        self._limits_toggle.setCheckable(True)
-        self._limits_toggle.setChecked(False)
-        self._limits_toggle.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
-        self._limits_toggle.setArrowType(Qt.ArrowType.RightArrow)
-        self._limits_toggle.setText("Active scheduling limits")
-        self._limits_toggle.setToolTip(
-            "Show the enabled threshold settings used for this generation."
-        )
-        self._limits_toggle.setStyleSheet(
-            "QToolButton {"
-            " background: transparent; color: #0755B5; border: none;"
-            " font-size: 13px; font-weight: 800; padding: 0;"
-            "}"
-            "QToolButton:hover { color: #7C3AED; }"
-        )
-        self._limits_toggle.toggled.connect(self._on_limits_toggled)
-        limits_layout.addWidget(self._limits_toggle)
-
-        self._limits_details = QLabel("")
-        self._limits_details.setWordWrap(True)
-        self._limits_details.setVisible(False)
-        self._limits_details.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.62);"
-            " color: #243044; border: 1px solid #DBEAFE;"
-            " border-radius: 8px; padding: 8px 10px;"
-            " font-size: 12px; font-weight: 600;"
-        )
-        limits_layout.addWidget(self._limits_details)
-        self._limits_panel.setVisible(False)
+        self._limits_panel = ActiveLimitsPanel(self)
+        self._limits_toggle = self._limits_panel.toggle
+        self._limits_details = self._limits_panel.details
 
         cl.addWidget(self._limits_panel)
 
@@ -1147,7 +1045,7 @@ class _ResultsPanel(QWidget):
 
         selector_title = QLabel("View period")
         selector_title.setStyleSheet(
-            "background: transparent; border: none; color: #0755B5;"
+            f"background: transparent; border: none; color: {COLOR_PRIMARY_ACTION};"
             " font-size: 13px; font-weight: 800;"
         )
         selector_layout.addWidget(selector_title)
@@ -1157,30 +1055,19 @@ class _ResultsPanel(QWidget):
         self._period_tip_btn.setCursor(Qt.CursorShape.WhatsThisCursor)
         self._period_tip_btn.setFixedSize(24, 24)
         self._period_tip_btn.setStyleSheet(
-            "QToolButton { background: #EEF6FF; color: #0755B5;"
+            f"QToolButton {{ background: {COLOR_PANEL_BLUE}; color: {COLOR_PRIMARY_ACTION};"
             " border: 1px solid #93C5FD; border-radius: 12px;"
             " font-size: 13px; font-weight: 900; }"
-            "QToolButton:hover { background: #F5F3FF; color: #7C3AED;"
-            " border-color: #C4B5FD; }"
+            f"QToolButton:hover {{ background: #F5F3FF; color: {COLOR_VIOLET};"
+            f" border-color: {COLOR_VIOLET_BORDER}; }}"
         )
         self._period_tip_btn.installEventFilter(self)
         selector_layout.addWidget(self._period_tip_btn)
 
-        self._period_tip_bubble = QLabel(
+        self._period_tip_bubble = _light_hover_bubble()
+        self._period_tip_bubble.setText(
             "Click on any scheduled exam date to view full details."
         )
-        self._period_tip_bubble.setWindowFlags(
-            Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint
-        )
-        self._period_tip_bubble.setAttribute(
-            Qt.WidgetAttribute.WA_ShowWithoutActivating, True
-        )
-        self._period_tip_bubble.setStyleSheet(
-            "QLabel { background: #F8FAFC; color: #172033;"
-            " border: 1px solid #C4B5FD; border-radius: 8px;"
-            " padding: 8px 12px; font-size: 12px; font-weight: 600; }"
-        )
-        self._period_tip_bubble.hide()
 
         semester_label = QLabel("Semester")
         semester_label.setStyleSheet(
@@ -1190,12 +1077,12 @@ class _ResultsPanel(QWidget):
         selector_layout.addWidget(semester_label)
 
         combo_style = (
-            "QComboBox { background: #F8FAFC; color: #172033;"
+            f"QComboBox {{ background: {COLOR_SURFACE_SOFT}; color: {COLOR_TEXT_DARK};"
             " border: 1px solid #CBD5E1; border-radius: 8px;"
             " padding: 6px 32px 6px 10px; font-size: 12px; font-weight: 700;"
             " min-width: 140px; }"
-            "QComboBox:hover { border-color: #7C3AED; }"
-            "QComboBox:focus { border-color: #0755B5; }"
+            f"QComboBox:hover {{ border-color: {COLOR_VIOLET}; }}"
+            f"QComboBox:focus {{ border-color: {COLOR_PRIMARY_ACTION}; }}"
             "QComboBox::drop-down { border: none; width: 26px; }"
         )
         self._semester_combo = QComboBox()
@@ -1224,7 +1111,6 @@ class _ResultsPanel(QWidget):
         self._period_tabs = QTabWidget()
         self._period_tabs.setStyleSheet(PERIOD_TAB_STYLE)
         self._period_tabs.tabBar().hide()
-        self._period_tabs.tabBar().setFixedHeight(0)
         self._period_tabs.currentChanged.connect(self._on_period_tab_changed)
         cl.addWidget(self._period_tabs)
 
@@ -2149,3 +2035,5 @@ class _ResultsPanel(QWidget):
                 "Could not save the schedule file. Please check the selected path and try again.",
                 QMessageBox.Icon.Critical,
             )
+
+

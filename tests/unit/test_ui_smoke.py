@@ -49,6 +49,7 @@ from src.ui.results_panel import _ResultsPanel
 from src.ui.settings_screen import SettingsScreen
 from src.ui.input_screen import InputScreen, ResultsScreen
 from src.ui.widgets.period_card_builder import CALENDAR_HOVER_TEXT_ROLE
+from src.ui.favorite_schedules import FavoriteSchedule, schedule_fingerprint
 
 
 def _get_qapp() -> QApplication:
@@ -393,8 +394,8 @@ def test_results_panel_can_save_current_schedule_as_favorite():
     app.processEvents()
 
     assert len(panel._favorite_schedules) == 1
-    assert panel._favorite_schedules[0]["period_key"] == "FALL - Aleph"
-    assert panel._favorite_schedules[0]["index"] == 1
+    assert panel._favorite_schedules[0].period_key == "FALL - Aleph"
+    assert panel._favorite_schedules[0].signature == schedule_fingerprint(schedules[1])
     assert panel._favorites_btn.text() == "My Favorites (1)"
     assert panel._favorites_btn.isEnabled() is True
 
@@ -411,6 +412,83 @@ def test_results_panel_can_save_current_schedule_as_favorite():
     assert panel._favorites_btn.isEnabled() is False
 
     panel.close()
+
+
+def test_favorite_opens_same_schedule_after_result_ranking():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 1), date(2026, 1, 3))])
+    first = Schedule(period, {"10001": date(2026, 1, 1)})
+    favorite_schedule = Schedule(period, {"10001": date(2026, 1, 2)})
+    third = Schedule(period, {"10001": date(2026, 1, 3)})
+
+    panel.load({"FALL - Aleph": [first, favorite_schedule, third]}, {}, {}, set())
+    panel._period_indices["FALL - Aleph"] = 1
+    panel._save_current_favorite("FALL - Aleph")
+
+    panel._schedules_by_period["FALL - Aleph"] = [third, first, favorite_schedule]
+    panel._period_indices["FALL - Aleph"] = 0
+    panel._rebuild_navigation_cache("FALL - Aleph")
+
+    assert panel._open_favorite_at(0) is True
+    assert panel._period_indices["FALL - Aleph"] == 2
+    assert panel._schedules_by_period["FALL - Aleph"][2] is favorite_schedule
+
+    panel.close()
+
+
+def test_favorite_does_not_open_wrong_schedule_when_order_changes():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 1), date(2026, 1, 3))])
+    saved = Schedule(period, {"10001": date(2026, 1, 2)})
+    replacement = Schedule(period, {"10001": date(2026, 1, 3)})
+
+    panel.load({"FALL - Aleph": [Schedule(period, {"10001": date(2026, 1, 1)}), saved]}, {}, {}, set())
+    panel._period_indices["FALL - Aleph"] = 1
+    panel._save_current_favorite("FALL - Aleph")
+
+    messages = []
+    panel._show_message = lambda title, text, icon: messages.append((title, text, icon))
+    panel._schedules_by_period["FALL - Aleph"] = [replacement]
+    panel._period_indices["FALL - Aleph"] = 0
+    panel._rebuild_navigation_cache("FALL - Aleph")
+
+    assert panel._open_favorite_at(0) is False
+    assert panel._period_indices["FALL - Aleph"] == 0
+    assert panel._schedules_by_period["FALL - Aleph"][0] is replacement
+    assert messages and messages[0][0] == "Favorite Unavailable"
+
+    panel.close()
+
+
+def test_missing_favorite_signature_shows_clear_feedback():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 1), date(2026, 1, 2))])
+    missing = Schedule(period, {"10001": date(2026, 1, 2)})
+
+    panel.load({"FALL - Aleph": [Schedule(period, {"10001": date(2026, 1, 1)})]}, {}, {}, set())
+    panel._favorite_schedules.append(
+        FavoriteSchedule(
+            period_key="FALL - Aleph",
+            signature=schedule_fingerprint(missing),
+            label="Missing schedule",
+        )
+    )
+    messages = []
+    panel._show_message = lambda title, text, icon: messages.append((title, text, icon))
+
+    assert panel._open_favorite_at(0) is False
+    assert messages
+    assert messages[0][0] == "Favorite Unavailable"
+    assert "no longer available" in messages[0][1]
+
+    panel.close()
+    app.processEvents()
 
 
 def test_streaming_results_switch_selector_to_ready_period():

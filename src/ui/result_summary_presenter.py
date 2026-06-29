@@ -16,6 +16,7 @@ class ResultSummaryPresenter:
 
     _OK_STYLE = "color: #059669; font-weight: 600; font-size: 12px;"
     _ERROR_STYLE = "color: #DC2626; font-weight: 600; font-size: 12px;"
+    _WARNING_STYLE = "color: #D97706; font-weight: 700; font-size: 12px;"
 
     def __init__(self) -> None:
         self._ranking_dirty_message: str | None = None
@@ -55,6 +56,9 @@ class ResultSummaryPresenter:
         if not has_results:
             return SummaryView("⚠  No valid schedules found.", self._ERROR_STYLE)
 
+        if self._ranking_dirty_message is not None:
+            return SummaryView(self._ranking_dirty_message, self._WARNING_STYLE)
+
         if is_imported_schedule:
             return SummaryView(
                 "✓  Imported schedule loaded "
@@ -68,3 +72,5 @@ class ResultSummaryPresenter:
             f"({period_schedules_total:,} period schedules {loaded_text})",
             self._OK_STYLE,
         )
+
+

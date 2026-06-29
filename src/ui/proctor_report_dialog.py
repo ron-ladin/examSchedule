@@ -28,6 +28,13 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from src.ui.tokens import (
+    COLOR_CAL_ACTIVE_BG,
+    COLOR_PANEL_BLUE_BORDER,
+    COLOR_SURFACE_SOFT,
+    COLOR_PRIMARY_ACTION,
+    COLOR_TEXT_DARK,
+)
 
 _PERIOD_HEADER_RE = re.compile(r"===.*===")
 _DATE_LINE_RE = re.compile(r"\d{2}-\d{2}-\d{4}")
@@ -38,8 +45,8 @@ _ROOM_LINE_RE = re.compile(
     r"Proctors:\s*(?P<proctors>\d+)$"
 )
 
-_PRIMARY_COLOR = "#0755B5"
-_TEXT_COLOR = "#172033"
+_PRIMARY_COLOR = COLOR_PRIMARY_ACTION
+_TEXT_COLOR = COLOR_TEXT_DARK
 
 
 class ProctorReportDialog(QDialog):
@@ -59,7 +66,7 @@ class ProctorReportDialog(QDialog):
                 border-radius: 14px;
             }
             QFrame#summaryCard {
-                background: #EFF6FF; border: 1px solid #BFDBFE;
+                background: #EFF6FF; border: 1px solid $PANEL_BLUE_BORDER;
                 border-radius: 10px;
             }
             QFrame#periodCard {
@@ -73,11 +80,11 @@ class ProctorReportDialog(QDialog):
                 background: #FFFFFF; color: $TEXT_COLOR;
                 border: 1px solid #E2E8F0; border-radius: 8px;
                 gridline-color: #E8EEF7;
-                selection-background-color: #DBEAFE;
+                selection-background-color: $ACTIVE_BLUE;
                 selection-color: $TEXT_COLOR;
             }
             QHeaderView::section {
-                background: #F8FAFC; color: #475569;
+                background: $SURFACE_SOFT; color: #475569;
                 border: none; border-right: 1px solid #E2E8F0;
                 border-bottom: 1px solid #E2E8F0;
                 padding: 7px 6px; font-size: 11px; font-weight: 700;
@@ -88,7 +95,7 @@ class ProctorReportDialog(QDialog):
             QPlainTextEdit {
                 background: #FFFFFF; color: $TEXT_COLOR;
                 border: 1px solid #DCE5F0; border-radius: 12px;
-                padding: 14px; selection-background-color: #BFDBFE;
+                padding: 14px; selection-background-color: $PANEL_BLUE_BORDER;
                 selection-color: $TEXT_COLOR;
             }
             QPushButton {
@@ -104,10 +111,13 @@ class ProctorReportDialog(QDialog):
                 background: #FFFFFF; color: #475569;
                 border: 1px solid #CBD5E1;
             }
-            QPushButton#closeButton:hover { background: #F8FAFC; }
+            QPushButton#closeButton:hover { background: $SURFACE_SOFT; }
             """
             .replace("$PRIMARY_COLOR", _PRIMARY_COLOR)
             .replace("$TEXT_COLOR", _TEXT_COLOR)
+            .replace("$PANEL_BLUE_BORDER", COLOR_PANEL_BLUE_BORDER)
+            .replace("$ACTIVE_BLUE", COLOR_CAL_ACTIVE_BG)
+            .replace("$SURFACE_SOFT", COLOR_SURFACE_SOFT)
         )
 
         layout = QVBoxLayout(self)
@@ -148,6 +158,10 @@ class ProctorReportDialog(QDialog):
 
         self._report_area = self._build_visual_report(report_text)
         layout.addWidget(self._report_area, 1)
+        layout.addWidget(self._view, 1)
+        self._view.setVisible(
+            bool(report_text.strip()) and not self._visual_report_rendered
+        )
 
         buttons = QHBoxLayout()
         hint = QLabel("The downloaded file contains the complete report.")
@@ -262,6 +276,7 @@ class ProctorReportDialog(QDialog):
             )
             content_layout.addWidget(empty)
 
+        self._visual_report_rendered = rendered_any
         content_layout.addStretch()
         scroll.setWidget(content)
         return scroll

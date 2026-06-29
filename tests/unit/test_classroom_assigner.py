@@ -657,6 +657,67 @@ def test_assign_variants_samples_large_classroom_file_lazily(monkeypatch):
     )
 
 
+def test_assign_variants_defaults_bound_large_room_variant_enumeration(monkeypatch):
+    """SCRUM-454: default variant generation must cap day and schedule output."""
+    _set_occupancy(monkeypatch, 1.0)
+    rooms = [Classroom(f"Room {index:02d}", 1) for index in range(50)]
+    slots = [TimeSlot(time(9, 0))]
+    proctors = ProctorConfig(20)
+
+    one_day_period = ExamPeriod(
+        "FALL",
+        "Aleph",
+        [(date(2026, 1, 5), date(2026, 1, 5))],
+    )
+    one_day_course = _course("11111", 20)
+    one_day_schedule = Schedule(one_day_period, {"11111": date(2026, 1, 5)})
+
+    one_day_variants = list(
+        ClassroomAssigner.assign_variants(
+            one_day_schedule,
+            [one_day_course],
+            ["83101"],
+            rooms,
+            slots,
+            proctors,
+        )
+    )
+
+    assert len(one_day_variants) <= 20
+
+    multi_day_period = ExamPeriod(
+        "FALL",
+        "Aleph",
+        [(date(2026, 1, 5), date(2026, 1, 7))],
+    )
+    multi_day_courses = [
+        _course("11111", 20),
+        _course("22222", 20),
+        _course("33333", 20),
+    ]
+    multi_day_schedule = Schedule(
+        multi_day_period,
+        {
+            "11111": date(2026, 1, 5),
+            "22222": date(2026, 1, 6),
+            "33333": date(2026, 1, 7),
+        },
+    )
+
+    schedule_variants = list(
+        ClassroomAssigner.assign_variants(
+            multi_day_schedule,
+            multi_day_courses,
+            ["83101"],
+            rooms,
+            slots,
+            proctors,
+        )
+    )
+
+    assert len(schedule_variants) <= 500
+
+
 def test_stateful_variant_worker_continues_next_block_without_rebuild(monkeypatch):
     """Auto Variants block 2 should continue from block 1, not restart + skip."""
     _set_occupancy(monkeypatch, 1.0)

@@ -363,7 +363,7 @@ def test_ranking_button_text_restores_after_loading_finishes(qapp):
         panel.close()
 
 
-def test_append_loaded_schedules_does_not_show_ranking_dirty_message(
+def test_append_loaded_schedules_marks_ranking_dirty_message(
     monkeypatch,
     qapp,
 ):
@@ -383,14 +383,14 @@ def test_append_loaded_schedules_does_not_show_ranking_dirty_message(
 
         assert panel.get_schedules(period_key) == [first, second, extra[0]]
         assert controller._last_results[period_key] == [first, second, extra[0]]
-        assert panel._ranking_dirty is False
-        assert "Re-rank" not in panel._summary_lbl.text()
+        assert panel._ranking_dirty is True
+        assert "Re-rank" in panel._summary_lbl.text()
         assert rebuilt == [period_key]
     finally:
         panel.close()
 
 
-def test_append_loaded_schedules_does_not_mark_sqlite_results_ranking_dirty(
+def test_append_loaded_schedules_marks_sqlite_results_ranking_dirty(
     monkeypatch,
     qapp,
     tmp_path,
@@ -412,8 +412,8 @@ def test_append_loaded_schedules_does_not_mark_sqlite_results_ranking_dirty(
 
         assert len(panel.get_schedules(period_key)) == 3
         assert len(controller._last_results[period_key]) == 3
-        assert panel._ranking_dirty is False
-        assert "Re-rank" not in panel._summary_lbl.text()
+        assert panel._ranking_dirty is True
+        assert "Re-rank" in panel._summary_lbl.text()
     finally:
         panel.close()
 

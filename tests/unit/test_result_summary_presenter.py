@@ -1,7 +1,7 @@
 from src.ui.result_summary_presenter import ResultSummaryPresenter
 
 
-def test_summary_presenter_keeps_dirty_message_out_of_summary():
+def test_summary_presenter_shows_dirty_message_until_cleared():
     presenter = ResultSummaryPresenter()
 
     presenter.mark_ranking_dirty(
@@ -18,8 +18,9 @@ def test_summary_presenter_keeps_dirty_message_out_of_summary():
     )
 
     assert dirty is not None
-    assert "Click Result Ranking" not in dirty.text
-    assert "combined schedule options available" in dirty.text
+    assert dirty.text == (
+        "Sort settings changed. Click Result Ranking to apply to current results."
+    )
     assert presenter.ranking_dirty is True
 
     presenter.clear_ranking_dirty()
