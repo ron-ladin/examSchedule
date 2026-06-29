@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import gc
 import logging
+from dataclasses import replace
 import multiprocessing
 import sqlite3
 import time
@@ -94,6 +95,22 @@ from src.ui.widgets.period_card_builder import (
 logger = logging.getLogger(__name__)
 _RANKING_EXIT_QUEUE_GRACE_TICKS = 3
 _RANKING_BUTTON_TEXT = "⇅  Result Ranking"
+_SHORTLIST_ADD_BUTTON_STYLE = (
+    f"QPushButton {{ background: {COLOR_PANEL_BLUE}; color: {COLOR_PRIMARY_ACTION};"
+    " border: 1px solid #93C5FD; border-radius: 8px;"
+    " padding: 7px 16px; font-weight: 700; }"
+    f"QPushButton:hover {{ background: {COLOR_CAL_ACTIVE_BG}; }}"
+    "QPushButton:disabled { background: #F1F5F9; color: #94A3B8;"
+    " border-color: #CBD5E1; }"
+)
+_SHORTLIST_REMOVE_BUTTON_STYLE = (
+    "QPushButton { background: #DC2626; color: #FFFFFF;"
+    " border: 1px solid #B91C1C; border-radius: 8px;"
+    " padding: 7px 16px; font-weight: 700; }"
+    "QPushButton:hover { background: #B91C1C; }"
+    "QPushButton:disabled { background: #F1F5F9; color: #94A3B8;"
+    " border-color: #CBD5E1; }"
+)
 
 
 def _standard_period_keys() -> list[str]:
@@ -158,8 +175,9 @@ class _ResultsPanel(QWidget):
     "Load More" button that fires a background subprocess to fetch the full set.
 
     When results are loaded from an exported schedule file, the panel switches
-    into read-only imported mode. In that mode, navigation/load-more controls are
-    hidden by the period-card builder and no additional schedules are fetched.
+    into read-only imported mode. In that mode, users can browse the imported
+    options, but Load More / Auto Load controls are hidden and no additional
+    schedules are fetched.
     """
 
     heavy_task_state_changed = pyqtSignal(str, bool)
@@ -799,6 +817,36 @@ class _ResultsPanel(QWidget):
         self._favorite_schedules.clear()
         self._refresh_favorite_buttons()
 
+    def _refresh_shortlist_labels(self) -> None:
+        """Keep shortlist labels accurate after ranking/load-order changes.
+
+        Shortlist entries are identified by a content fingerprint, not by their
+        old list index.  After ranking or loading more results, the same schedule
+        can move to a new Date option / Variant position, so refresh labels
+        instead of clearing the user's shortlist.
+        """
+        updated: list[FavoriteSchedule] = []
+        for favorite in self._favorite_schedules:
+            schedules = self._schedules_by_period.get(favorite.period_key)
+            if not schedules:
+                updated.append(favorite)
+                continue
+
+            index = find_schedule_by_fingerprint(schedules, favorite.signature)
+            if index is None:
+                updated.append(favorite)
+                continue
+
+            updated.append(
+                replace(
+                    favorite,
+                    label=self._favorite_label(favorite.period_key, index),
+                )
+            )
+
+        self._favorite_schedules = updated
+        self._refresh_favorite_buttons()
+
     def _favorite_label(self, period_key: str, index: int) -> str:
         index_nav = self._nav_model.index_nav(period_key)
         nav_pos = index_nav.get(index)
@@ -810,10 +858,48 @@ class _ResultsPanel(QWidget):
             return f"{_display_period_key(period_key)} | Schedule {index + 1:,}"
 
         date_pos, variant_pos = nav_pos
-        return (
-            f"{_display_period_key(period_key)} | "
-            f"Date option {date_pos + 1:,} | Variant {variant_pos + 1:,}"
-        )
+        label_parts = [
+            _display_period_key(period_key),
+            f"Date option {date_pos + 1:,}",
+        ]
+
+        # Feature 4 schedules can have multiple classroom/time-slot choices for
+        # the same date option.  Show that choice only when classroom data is
+        # actually present, so regular date-only schedules do not display a
+        # confusing Variant 1/1 label.
+        schedules = self._schedules_by_period.get(period_key, [])
+        schedule = schedules[index] if 0 <= index < len(schedules) else None
+        if schedule is not None and self._schedule_has_classroom_data(schedule):
+            label_parts.append(f"Classroom choice {variant_pos + 1:,}")
+
+        return " | ".join(label_parts)
+
+    def _current_shortlist_row(self) -> int | None:
+        period_key = self._current_period_key()
+        if period_key is None:
+            return None
+
+        schedules = self._schedules_by_period.get(period_key, [])
+        if not schedules:
+            return None
+
+        index = self._period_indices.get(period_key, 0)
+        if index < 0 or index >= len(schedules):
+            return None
+
+        signature = schedule_fingerprint(schedules[index])
+        for row, favorite in enumerate(self._favorite_schedules):
+            if favorite.period_key == period_key and favorite.signature == signature:
+                return row
+        return None
+
+    def _toggle_current_favorite(self, period_key: str) -> None:
+        row = self._current_shortlist_row()
+        if row is not None:
+            self._delete_favorite_at(row)
+            return
+
+        self._save_current_favorite(period_key)
 
     def _save_current_favorite(self, period_key: str) -> None:
         schedules = self._schedules_by_period.get(period_key, [])
@@ -827,7 +913,7 @@ class _ResultsPanel(QWidget):
         signature = schedule_fingerprint(schedules[index])
         for favorite in self._favorite_schedules:
             if favorite.period_key == period_key and favorite.signature == signature:
-                self._refresh_favorite_buttons(saved_period_key=period_key)
+                self._refresh_favorite_buttons()
                 return
 
         self._favorite_schedules.append(
@@ -837,12 +923,17 @@ class _ResultsPanel(QWidget):
                 label=self._favorite_label(period_key, index),
             )
         )
-        self._refresh_favorite_buttons(saved_period_key=period_key)
+        self._refresh_favorite_buttons()
 
     def _save_visible_favorite(self) -> None:
         period_key = self._current_period_key()
         if period_key is not None:
             self._save_current_favorite(period_key)
+
+    def _toggle_visible_favorite(self) -> None:
+        period_key = self._current_period_key()
+        if period_key is not None:
+            self._toggle_current_favorite(period_key)
 
     def _delete_favorite_at(self, row: int) -> bool:
         if row < 0 or row >= len(self._favorite_schedules):
@@ -857,21 +948,25 @@ class _ResultsPanel(QWidget):
         has_current_schedule = bool(
             current is not None and self._schedules_by_period.get(current)
         )
+        current_is_shortlisted = self._current_shortlist_row() is not None
+
         self._save_favorite_btn.setVisible(not self._is_imported_schedule)
         self._save_favorite_btn.setEnabled(has_current_schedule)
         self._favorites_btn.setEnabled(count > 0)
-        self._favorites_btn.setText(f"My Favorites ({count})")
-        if saved_period_key is not None and saved_period_key == current:
-            self._save_favorite_btn.setText("Saved")
-            QTimer.singleShot(1400, lambda: self._save_favorite_btn.setText("Save Favorite"))
+        self._favorites_btn.setText(f"Shortlist ({count})")
+
+        if current_is_shortlisted:
+            self._save_favorite_btn.setText("Remove from Shortlist")
+            self._save_favorite_btn.setStyleSheet(_SHORTLIST_REMOVE_BUTTON_STYLE)
         else:
-            self._save_favorite_btn.setText("Save Favorite")
+            self._save_favorite_btn.setText("Add to Shortlist")
+            self._save_favorite_btn.setStyleSheet(_SHORTLIST_ADD_BUTTON_STYLE)
 
     def _show_favorites_dialog(self) -> None:
         if not self._favorite_schedules:
             self._show_message(
-                "No Favorites",
-                "You have not saved any favorite schedules yet.",
+                "Shortlist Empty",
+                "Add one or more schedule options to the Shortlist before choosing a final export.",
                 QMessageBox.Icon.Information,
             )
             return
@@ -882,6 +977,9 @@ class _ResultsPanel(QWidget):
             row = dialog.favorites_list.currentRow()
             self._open_favorite_at(row, close_dialog=dialog.accept)
 
+        def export_selected() -> None:
+            self._export_shortlisted_schedules(close_dialog=dialog.accept)
+
         def delete_selected() -> None:
             row = dialog.favorites_list.currentRow()
             if not self._delete_favorite_at(row):
@@ -889,6 +987,7 @@ class _ResultsPanel(QWidget):
             dialog.remove_row(row, len(self._favorite_schedules))
 
         dialog.openRequested.connect(lambda _row: open_selected())
+        dialog.exportRequested.connect(lambda _row: export_selected())
         dialog.deleteRequested.connect(lambda _row: delete_selected())
         dialog.exec()
 
@@ -915,10 +1014,66 @@ class _ResultsPanel(QWidget):
             close_dialog()
         return True
 
+    def _schedule_for_shortlist_row(self, row: int) -> tuple[FavoriteSchedule, Schedule] | None:
+        if row < 0 or row >= len(self._favorite_schedules):
+            return None
+
+        favorite = self._favorite_schedules[row]
+        schedules = self._schedules_by_period.get(favorite.period_key)
+        if not schedules:
+            return None
+
+        index = find_schedule_by_fingerprint(schedules, favorite.signature)
+        if index is None:
+            return None
+
+        return favorite, schedules[index]
+
+    def _shortlisted_schedule_selection(self) -> dict[str, list[Schedule]] | None:
+        selected: dict[str, list[Schedule]] = {}
+
+        for favorite in self._favorite_schedules:
+            schedules = self._schedules_by_period.get(favorite.period_key)
+            if not schedules:
+                return None
+
+            index = find_schedule_by_fingerprint(schedules, favorite.signature)
+            if index is None:
+                return None
+
+            selected.setdefault(favorite.period_key, []).append(schedules[index])
+
+        return selected
+
+    def _export_shortlisted_schedules(self, close_dialog=None) -> bool:
+        selected = self._shortlisted_schedule_selection()
+        if not selected:
+            self._show_missing_favorite_message()
+            return False
+
+        if self._export_schedule_selection(selected):
+            if close_dialog is not None:
+                close_dialog()
+            return True
+        return False
+
+    def _export_favorite_at(self, row: int, close_dialog=None) -> bool:
+        shortlist_item = self._schedule_for_shortlist_row(row)
+        if shortlist_item is None:
+            self._show_missing_favorite_message()
+            return False
+
+        favorite, schedule = shortlist_item
+        if self._export_schedule_selection({favorite.period_key: [schedule]}):
+            if close_dialog is not None:
+                close_dialog()
+            return True
+        return False
+
     def _show_missing_favorite_message(self) -> None:
         self._show_message(
-            "Favorite Unavailable",
-            "This favorite schedule is no longer available in the current results. "
+            "Shortlist Option Unavailable",
+            "This shortlisted schedule is no longer available in the current results. "
             "The generated results may have changed; generate or load the matching "
             "results and try again.",
             QMessageBox.Icon.Information,
@@ -1104,19 +1259,12 @@ class _ResultsPanel(QWidget):
         self._ranking_btn.clicked.connect(self._on_result_ranking)
         action_row.addWidget(self._ranking_btn)
 
-        self._save_favorite_btn = QPushButton("Save Favorite")
-        self._save_favorite_btn.setStyleSheet(
-            f"QPushButton {{ background: {COLOR_PANEL_BLUE}; color: {COLOR_PRIMARY_ACTION};"
-            " border: 1px solid #93C5FD; border-radius: 8px;"
-            " padding: 7px 16px; font-weight: 700; }"
-            f"QPushButton:hover {{ background: {COLOR_CAL_ACTIVE_BG}; }}"
-            "QPushButton:disabled { background: #F1F5F9; color: #94A3B8;"
-            " border-color: #CBD5E1; }"
-        )
-        self._save_favorite_btn.clicked.connect(self._save_visible_favorite)
+        self._save_favorite_btn = QPushButton("Add to Shortlist")
+        self._save_favorite_btn.setStyleSheet(_SHORTLIST_ADD_BUTTON_STYLE)
+        self._save_favorite_btn.clicked.connect(self._toggle_visible_favorite)
         action_row.addWidget(self._save_favorite_btn)
 
-        self._favorites_btn = QPushButton("My Favorites (0)")
+        self._favorites_btn = QPushButton("Shortlist (0)")
         self._favorites_btn.setStyleSheet(
             "QPushButton { background: #F5F3FF; color: #5B21B6;"
             f" border: 1px solid {COLOR_VIOLET_BORDER}; border-radius: 8px;"
@@ -1559,9 +1707,10 @@ class _ResultsPanel(QWidget):
             self._lm.stop_auto_load(period_key, refresh=False)
 
         has_classroom_variants = self._has_classroom_feature_results(period_key)
-        card.variant_navigation.setVisible(
-            not self._is_imported_schedule and has_classroom_variants
-        )
+        # Imported shortlist files are read-only, but they may still contain
+        # multiple classroom/time-slot choices. Allow browsing those imported
+        # variants; only Load More / Auto controls stay hidden for imports.
+        card.variant_navigation.setVisible(has_classroom_variants)
         card.auto_date_btn.setVisible(
             not self._is_imported_schedule
             and (has_more or active_mode == _AUTO_MODE_DATES)
@@ -1955,11 +2104,12 @@ class _ResultsPanel(QWidget):
             # best-ranked option instead of keeping an arbitrary old ordinal.
             self._period_indices[period_key] = 0
 
-        # Favorites keep a fingerprinted schedule snapshot, but their labels and
-        # surrounding order context come from the displayed result set. Ranking
-        # deliberately clears generated-result favorites to avoid stale labels.
-        self._clear_favorites()
+        # Shortlist entries use content fingerprints, so keep the user's saved
+        # candidates across ranking and refresh their labels to the new order.
         self._nav_model.clear()
+        for period_key in resorted:
+            self._rebuild_navigation_cache(period_key)
+        self._refresh_shortlist_labels()
         self._clear_ranking_dirty()
 
         has_proctor_report = any(
@@ -2132,6 +2282,51 @@ class _ResultsPanel(QWidget):
         dialog = ProctorReportDialog(report_text, parent=self)
         dialog.exec()
 
+    def _export_schedule_selection(self, selected_by_period: dict[str, list[Schedule]]) -> bool:
+        selected = {
+            period_key: list(schedules)
+            for period_key, schedules in selected_by_period.items()
+            if schedules
+        }
+        if not selected:
+            self._show_message(
+                "Nothing to Save",
+                "No shortlisted schedules are currently available for export.",
+                QMessageBox.Icon.Warning,
+            )
+            return False
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Shortlisted Schedules",
+            "shortlisted_schedules.txt",
+            "Text files (*.txt);;All files (*)",
+        )
+
+        if not path:
+            return False
+
+        try:
+            self._controller.export(
+                selected,
+                Path(path),
+                courses_by_id=self._courses_by_id,
+            )
+            self._show_message(
+                "Saved",
+                f"Shortlisted schedules saved to:\n{path}",
+                QMessageBox.Icon.Information,
+            )
+            return True
+        except Exception:
+            logger.exception("Save failed")
+            self._show_message(
+                "Save Error",
+                "Could not save the schedule file. Please check the selected path and try again.",
+                QMessageBox.Icon.Critical,
+            )
+            return False
+
     def _on_save(self) -> None:
         if self._is_stale():
             self._show_message(
@@ -2150,45 +2345,13 @@ class _ResultsPanel(QWidget):
             )
             return
 
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Schedule",
-            "schedules.txt",
-            "Text files (*.txt);;All files (*)",
-        )
-
-        if not path:
-            return
-
-        selected = {
-            key: [self._schedules_by_period[key][self._period_indices[key]]]
-            for key in self._schedules_by_period
-            if self._schedules_by_period[key]
-        }
-
-        if not selected:
+        if not self._favorite_schedules:
             self._show_message(
-                "Nothing to Save",
-                "No schedules are currently displayed.",
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        try:
-            self._controller.export(
-                selected,
-                Path(path),
-                courses_by_id=self._courses_by_id,
-            )
-            self._show_message(
-                "Saved",
-                f"Schedule saved to:\n{path}",
+                "Shortlist Required",
+                "Add the current option to the Shortlist before exporting. "
+                "This makes the final export an explicit selected schedule instead of an accidental visible option.",
                 QMessageBox.Icon.Information,
             )
-        except Exception:
-            logger.exception("Save failed")
-            self._show_message(
-                "Save Error",
-                "Could not save the schedule file. Please check the selected path and try again.",
-                QMessageBox.Icon.Critical,
-            )
+            return
+
+        self._export_shortlisted_schedules()

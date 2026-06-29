@@ -303,8 +303,11 @@ def build_period_card(panel, period_key: str) -> QWidget:
     date_nav.addStretch()
     date_nav.addWidget(next_date_btn)
 
-    if not read_only_import:
-        layout.addLayout(date_nav)
+    # Imported schedule files can contain several exported shortlist options.
+    # They are read-only, but users still need to browse between the imported
+    # date options.  Hide only Load More / Auto controls for imports, not the
+    # normal Prev/Next navigation.
+    layout.addLayout(date_nav)
 
     # Bottom navigation row: Feature 4 variants for the same date schedule.
     # These buttons move between different classroom/time-slot allocations
@@ -368,7 +371,10 @@ def build_period_card(panel, period_key: str) -> QWidget:
     nav.addWidget(next_btn)
 
     layout.addWidget(variant_navigation)
-    variant_navigation.setVisible(not read_only_import)
+    # ResultsPanel decides whether classroom-variant navigation is relevant
+    # after schedules are loaded. Keep the widget available for imported
+    # shortlist files too.
+    variant_navigation.setVisible(False)
 
     has_more = period_key in panel._truncated_periods
 

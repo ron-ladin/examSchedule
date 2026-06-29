@@ -1,4 +1,4 @@
-"""Favorite schedule identity and dialog helpers."""
+"""Shortlist schedule identity and dialog helpers."""
 
 from __future__ import annotations
 
@@ -45,9 +45,20 @@ ScheduleFingerprint = tuple[
 
 @dataclass(frozen=True)
 class FavoriteSchedule:
+    """A shortlisted schedule candidate.
+
+    Kept as ``FavoriteSchedule`` for backwards-compatible tests/imports, but the
+    user-facing UI now calls these entries a shortlist because they are temporary
+    candidates for final export, not files saved to disk.
+    """
+
     period_key: str
     signature: ScheduleFingerprint
     label: str
+
+
+# Clearer alias for new code while keeping the old name import-compatible.
+ShortlistedSchedule = FavoriteSchedule
 
 
 def _date_text(value: date) -> str:
@@ -101,15 +112,16 @@ def find_schedule_by_fingerprint(
 
 
 class FavoritesDialog(QDialog):
-    """Dialog for opening and deleting favorite schedules."""
+    """Dialog for opening, deleting, and exporting shortlisted schedules."""
 
     openRequested = pyqtSignal(int)
     deleteRequested = pyqtSignal(int)
+    exportRequested = pyqtSignal(int)
 
     def __init__(self, favorites: list[FavoriteSchedule], parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("My Favorite Schedules")
-        self.setMinimumWidth(460)
+        self.setWindowTitle("Shortlisted Schedule Options")
+        self.setMinimumWidth(520)
         self.setStyleSheet(
             f"QDialog {{ background: {COLOR_SURFACE_SOFT}; color: {COLOR_TEXT_DARK}; }}"
             f"QLabel {{ color: {COLOR_PRIMARY_ACTION}; font-size: 14px; font-weight: 800; }}"
@@ -121,7 +133,7 @@ class FavoritesDialog(QDialog):
         )
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("My favorite schedules"))
+        layout.addWidget(QLabel("Shortlisted options for final export"))
 
         self.favorites_list = QListWidget()
         for favorite in favorites:
@@ -133,7 +145,9 @@ class FavoritesDialog(QDialog):
         actions = QHBoxLayout()
         self.open_btn = QPushButton("Open Selected")
         self.open_btn.setEnabled(bool(favorites))
-        self.delete_btn = QPushButton("Delete Selected")
+        self.export_btn = QPushButton("Export Shortlist")
+        self.export_btn.setEnabled(bool(favorites))
+        self.delete_btn = QPushButton("Remove Selected")
         self.delete_btn.setEnabled(bool(favorites))
         self.delete_btn.setStyleSheet(
             f"background: #FFFFFF; color: {COLOR_DANGER};"
@@ -149,20 +163,30 @@ class FavoritesDialog(QDialog):
         actions.addWidget(self.delete_btn)
         actions.addWidget(close_btn)
         actions.addWidget(self.open_btn)
+        actions.addWidget(self.export_btn)
         layout.addLayout(actions)
 
         self.open_btn.clicked.connect(self._open_selected)
+        self.export_btn.clicked.connect(self._export_selected)
         self.delete_btn.clicked.connect(self._delete_selected)
         close_btn.clicked.connect(self.reject)
         self.favorites_list.itemDoubleClicked.connect(lambda _item: self._open_selected())
 
+    def _selected_row(self) -> int:
+        return self.favorites_list.currentRow()
+
     def _open_selected(self) -> None:
-        row = self.favorites_list.currentRow()
+        row = self._selected_row()
         if row >= 0:
             self.openRequested.emit(row)
 
+    def _export_selected(self) -> None:
+        row = self._selected_row()
+        if row >= 0:
+            self.exportRequested.emit(row)
+
     def _delete_selected(self) -> None:
-        row = self.favorites_list.currentRow()
+        row = self._selected_row()
         if row >= 0:
             self.deleteRequested.emit(row)
 
@@ -170,6 +194,7 @@ class FavoritesDialog(QDialog):
         self.favorites_list.takeItem(row)
         has_favorites = remaining_count > 0
         self.open_btn.setEnabled(has_favorites)
+        self.export_btn.setEnabled(has_favorites)
         self.delete_btn.setEnabled(has_favorites)
         if has_favorites:
             self.favorites_list.setCurrentRow(min(row, remaining_count - 1))
