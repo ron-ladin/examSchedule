@@ -56,7 +56,10 @@ class ResultSummaryPresenter:
         if not has_results:
             return SummaryView("⚠  No valid schedules found.", self._ERROR_STYLE)
 
-        if self._ranking_dirty_message is not None:
+        # A non-empty dirty message is surfaced as a warning banner. An empty
+        # message still marks results dirty, but must not blank out the normal
+        # schedule-count summary.
+        if self._ranking_dirty_message:
             return SummaryView(self._ranking_dirty_message, self._WARNING_STYLE)
 
         if is_imported_schedule:
@@ -72,5 +75,3 @@ class ResultSummaryPresenter:
             f"({period_schedules_total:,} period schedules {loaded_text})",
             self._OK_STYLE,
         )
-
-
