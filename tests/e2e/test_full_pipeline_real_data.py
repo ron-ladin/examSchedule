@@ -41,7 +41,7 @@ def test_pipeline_completes_quickly_on_real_data(tmp_path):
 
 
 def test_pipeline_on_real_data_skips_empty_semester(tmp_path):
-    """SPRI has no Exam courses → skipped by controller, not in output."""
+    """All semesters (FALL, SPRING, SUMMER) have courses → all appear in output."""
     if not (REAL_COURSES.exists() and REAL_PERIODS.exists() and REAL_PROGRAMS.exists()):
         pytest.skip("Real data files missing in data/")
 
@@ -49,7 +49,7 @@ def test_pipeline_on_real_data_skips_empty_semester(tmp_path):
     _build_controller(REAL_COURSES, REAL_PERIODS, REAL_PROGRAMS, output_path).run()
     content = output_path.read_text(encoding="utf-8")
 
-    assert "SPRING" not in content
+    assert "SPRING" in content
 
 
 def test_pipeline_on_real_data_produces_period_sub_headers(tmp_path):
