@@ -35,7 +35,7 @@ University exam scheduling is a textbook **NP-Hard Constraint Satisfaction Probl
 
 ---
 
-## ✨ Features
+## Features
 
 ### Phase 3 — Multi-Level Sorting
 
@@ -63,7 +63,7 @@ When room data is supplied, every exam is assigned concrete rooms, time slots, a
 
 ---
 
-## 🏗️ Under the Hood: Architecture & Algorithms
+## Under the Hood: Architecture & Algorithms
 
 ### Data Flow
 
@@ -103,13 +103,13 @@ With *R* rooms, naïvely enumerating room combinations is $O(2^R)$ — intractab
 - **Largest-exam-first ordering** — bigger exams claim rooms first, maximising feasibility for the rest.
 - **Deduplication** — a `seen` set suppresses identical distributions produced by different room combinations.
 
-### ⚡ Aggressive Memoization Layer (new)
+### Aggressive Memoization Layer
 
 With all five sort criteria enabled across tens of thousands of candidate schedules, the metric helpers in `sorting_engine.py` (`_min_gap`, `_avg_gap`, `_count_same_day_pairs`) would otherwise re-reduce the *same* lists of exam dates to the *same* numbers millions of times — the root cause of UI freezes under extreme load.
 
 These hot helpers are now backed by an **`@lru_cache` memoization layer**. Because lists are unhashable, each public wrapper normalises its input to a **sorted tuple** before delegating to the cached core — sorting is safe (all three metrics range over unordered pairs) and it collapses differently-ordered date lists onto the same cache entry, maximising the hit rate across permutations. A combinatorial stress test ranks **10,000 schedules across all 120 priority permutations**, asserting each completes in **under 1 second**.
 
-### 🛡️ Handling Extreme Scale: Why We Don't Sort Billions
+### Handling Extreme Scale: Why We Don't Sort Billions
 
 A natural question for a long-running desktop app: what stops a user who hammers **Auto Load** hundreds of times — pulling an ever-growing pile of generated schedules into the viewer — and then clicks **Result Ranking** to re-sort them? Does the app try to sort billions of options and get OOM-killed by the operating system?
 
@@ -132,7 +132,7 @@ External merge-sort (sort RAM-sized chunks, spill to disk, k-way merge) is the t
 
 ---
 
-## 🚀 Installation
+## Installation
 
 **Prerequisites:** Python **3.10+** and `pip`.
 
@@ -154,7 +154,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🖥️ Usage
+## Usage
 
 ### GUI Mode (default)
 
@@ -217,7 +217,7 @@ python main.py \
 
 ---
 
-## ✅ Testing
+## Testing
 
 ```bash
 pip install -r requirements-dev.txt
@@ -238,7 +238,7 @@ The suite currently runs **819 tests** across unit, integration, and end-to-end 
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 examSchedule/
@@ -262,7 +262,7 @@ examSchedule/
 
 ---
 
-## 📄 License
+## License
 
 Released under the **MIT License**.
 
