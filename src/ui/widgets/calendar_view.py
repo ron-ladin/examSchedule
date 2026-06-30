@@ -109,7 +109,7 @@ class CalendarRenderer:
 
                 if first_prog and first_prog in prog_color_map:
                     color = QColor(prog_color_map[first_prog])
-                    color.setAlpha(32)
+                    color.setAlpha(75)
                     item.setBackground(color)
                 elif current_date in excluded_dates:
                     item.setBackground(QColor(_EXCLUDED_BG))
