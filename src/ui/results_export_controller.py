@@ -38,7 +38,7 @@ class ResultsExportController:
 
     def export_favorite_at(self, row: int, close_dialog=None) -> bool:
         """Backward-compatible wrapper: export all shortlisted options."""
-        if row < 0:
+        if row < 0 or row >= len(self._panel._favorite_schedules):
             self._shortlist.show_missing_favorite_message()
             return False
 

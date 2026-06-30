@@ -52,9 +52,14 @@ def worker_context() -> BaseContext:
 
     available = set(multiprocessing.get_all_start_methods())
     for method in _preferred_methods():
-        if method in available:
+        if method not in available:
+            continue
+
+        try:
             _context = multiprocessing.get_context(method)
             return _context
+        except ValueError:
+            continue
 
     # Should never happen: get_all_start_methods always returns at least one.
     _context = multiprocessing.get_context()

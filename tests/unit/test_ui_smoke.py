@@ -711,6 +711,25 @@ def test_legacy_shortlist_export_invalid_row_shows_missing_message(monkeypatch):
     app.processEvents()
 
 
+def test_shortlist_export_rejects_positive_out_of_range_row(monkeypatch):
+    app, controller, panel, _first, _second = _panel_with_two_shortlisted_options()
+    messages = []
+
+    monkeypatch.setattr(
+        controller,
+        "export",
+        lambda *args, **kwargs: pytest.fail("out-of-range row must not export"),
+    )
+    panel._show_message = lambda title, text, icon: messages.append((title, text, icon))
+
+    assert panel._export_favorite_at(10) is False
+    assert messages
+    assert messages[-1][0] == "Shortlist Option Unavailable"
+
+    panel.close()
+    app.processEvents()
+
+
 def test_streaming_results_switch_selector_to_ready_period():
     app = _get_qapp()
     controller = DesktopController()

@@ -55,6 +55,47 @@ def test_worker_context_uses_platform_preferred_available_method(monkeypatch):
         _reset_cache()
 
 
+def test_worker_context_falls_back_when_preferred_context_raises_value_error(
+    monkeypatch,
+):
+    _reset_cache()
+    calls = []
+
+    class FakeContext:
+        def __init__(self, method: str) -> None:
+            self.method = method
+
+        def get_start_method(self) -> str:
+            return self.method
+
+    monkeypatch.setattr(
+        mp_context,
+        "_preferred_methods",
+        lambda: ("forkserver", "spawn"),
+    )
+    monkeypatch.setattr(
+        mp_context.multiprocessing,
+        "get_all_start_methods",
+        lambda: ["forkserver", "spawn"],
+    )
+
+    def fake_get_context(method=None):
+        calls.append(method)
+        if method == "forkserver":
+            raise ValueError("forkserver unavailable in this environment")
+        return FakeContext(method or "default")
+
+    monkeypatch.setattr(mp_context.multiprocessing, "get_context", fake_get_context)
+
+    try:
+        ctx = mp_context.worker_context()
+
+        assert ctx.get_start_method() == "spawn"
+        assert calls == ["forkserver", "spawn"]
+    finally:
+        _reset_cache()
+
+
 def test_worker_target_modules_do_not_import_ui_code():
     worker_targets = [
         Path("src/engine/generation_workers.py"),
