@@ -23,6 +23,14 @@ except Exception:  # pragma: no cover - exercised by fallback tests.
 _MB = 1024 * 1024
 _GB_MB = 1024.0
 _EWMA_ALPHA = 0.3
+_RAM_WARNING_AVAILABLE_RATIO = 0.15
+_RAM_WARNING_AVAILABLE_MIN_MB = 1536.0
+_RAM_CRITICAL_AVAILABLE_RATIO = 0.10
+_RAM_CRITICAL_AVAILABLE_MIN_MB = 1024.0
+_RAM_HARD_AVAILABLE_RATIO = 0.06
+_RAM_HARD_AVAILABLE_MIN_MB = 768.0
+_RAM_SOFT_PROCESS_RATIO = 0.80
+_RAM_HARD_PROCESS_RATIO = 0.90
 
 
 @dataclass(frozen=True)
@@ -165,9 +173,17 @@ class ResourceGuard:
 
         snapshot = snapshot or self.snapshot()
         if snapshot.system_total_ram_mb > 0:
-            ram_hard_limit_mb = max(512.0, snapshot.system_total_ram_mb * 0.25)
-            ram_soft_limit_mb = ram_hard_limit_mb * 0.8
-            min_free_ram_mb = max(2048.0, snapshot.system_total_ram_mb * 0.15)
+            ram_hard_limit_mb = max(
+                _RAM_HARD_AVAILABLE_MIN_MB,
+                snapshot.system_total_ram_mb * _RAM_HARD_PROCESS_RATIO,
+            )
+            ram_soft_limit_mb = max(
+                _RAM_WARNING_AVAILABLE_MIN_MB,
+                snapshot.system_total_ram_mb * _RAM_SOFT_PROCESS_RATIO,
+            )
+            min_free_ram_mb = self._default_ram_available_thresholds(
+                snapshot.system_total_ram_mb
+            )[0]
         else:
             ram_hard_limit_mb = math.inf
             ram_soft_limit_mb = math.inf
@@ -232,11 +248,25 @@ class ResourceGuard:
         )
 
         hard_reasons: list[str] = []
+        (
+            warning_available_ram_mb,
+            critical_available_ram_mb,
+            hard_available_ram_mb,
+        ) = self._ram_available_thresholds(snapshot, budget)
+
+        if math.isfinite(projected_available_ram) and hard_available_ram_mb > 0:
+            if projected_available_ram < hard_available_ram_mb:
+                hard_reasons.append(
+                    "available RAM would fall below the hard reserve"
+                )
+            elif projected_available_ram < critical_available_ram_mb:
+                hard_reasons.append(
+                    "available RAM would fall below the critical reserve"
+                )
+
         if math.isfinite(budget.ram_hard_limit_mb):
             if projected_rss >= budget.ram_hard_limit_mb:
                 hard_reasons.append("process RAM would exceed the hard limit")
-            if projected_available_ram <= budget.min_free_ram_mb:
-                hard_reasons.append("available RAM reserve would be exhausted")
 
         if projected_db_total >= budget.max_db_size_mb:
             hard_reasons.append("SQLite database would exceed the size budget")
@@ -256,7 +286,10 @@ class ResourceGuard:
         if math.isfinite(budget.ram_soft_limit_mb):
             if projected_rss >= budget.ram_soft_limit_mb:
                 warn_reasons.append("process RAM is near the soft limit")
-            if projected_available_ram <= budget.min_free_ram_mb * 1.25:
+            if (
+                math.isfinite(projected_available_ram)
+                and projected_available_ram < warning_available_ram_mb
+            ):
                 warn_reasons.append("available RAM is near reserve")
         if budget.max_db_size_mb > 0 and projected_db_total >= budget.max_db_size_mb * 0.8:
             warn_reasons.append("SQLite database is near its size budget")
@@ -365,3 +398,41 @@ class ResourceGuard:
         if previous is None:
             return value
         return previous * (1.0 - _EWMA_ALPHA) + value * _EWMA_ALPHA
+
+    def _ram_available_thresholds(
+        self,
+        snapshot: ResourceSnapshot,
+        budget: ResourceBudget,
+    ) -> tuple[float, float, float]:
+        if self._budget_override is not None:
+            warning = max(0.0, budget.min_free_ram_mb)
+            critical = warning * (
+                _RAM_CRITICAL_AVAILABLE_RATIO / _RAM_WARNING_AVAILABLE_RATIO
+            )
+            hard = warning * (
+                _RAM_HARD_AVAILABLE_RATIO / _RAM_WARNING_AVAILABLE_RATIO
+            )
+            return warning, critical, hard
+
+        return self._default_ram_available_thresholds(snapshot.system_total_ram_mb)
+
+    @staticmethod
+    def _default_ram_available_thresholds(
+        total_ram_mb: float,
+    ) -> tuple[float, float, float]:
+        if total_ram_mb <= 0:
+            return 0.0, 0.0, 0.0
+
+        warning = max(
+            total_ram_mb * _RAM_WARNING_AVAILABLE_RATIO,
+            _RAM_WARNING_AVAILABLE_MIN_MB,
+        )
+        critical = max(
+            total_ram_mb * _RAM_CRITICAL_AVAILABLE_RATIO,
+            _RAM_CRITICAL_AVAILABLE_MIN_MB,
+        )
+        hard = max(
+            total_ram_mb * _RAM_HARD_AVAILABLE_RATIO,
+            _RAM_HARD_AVAILABLE_MIN_MB,
+        )
+        return warning, critical, hard
