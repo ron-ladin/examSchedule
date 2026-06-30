@@ -20,11 +20,9 @@ from __future__ import annotations
 
 import gc
 import logging
-import multiprocessing
 import sqlite3
 import time
 from pathlib import Path
-from queue import Empty as _QueueEmpty
 
 from PyQt6.QtCore import QEvent, QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -69,10 +67,9 @@ from src.domain.sorting import SortingConfig
 from src.domain.threshold import ThresholdSettings
 from src.engine.generation_workers import ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
 from src.engine.mp_context import worker_context
-from src.ui.focus_utils import restore_focus_on_macos
-from src.engine.ranking_worker import RankingWorkerResult, run_ranking_worker
 from src.ui.active_limits_panel import ActiveLimitsPanel
 from src.ui.favorite_schedules import FavoriteSchedule
+from src.ui.result_ranking_controller import ResultRankingController
 from src.ui.navigation_model import NavigationModel, DateSignature as _DateSignature
 from src.ui.period_card import PeriodCardWidgets
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
@@ -94,7 +91,6 @@ from src.ui.widgets.period_card_builder import (
 )
 
 logger = logging.getLogger(__name__)
-_RANKING_EXIT_QUEUE_GRACE_TICKS = 3
 _RANKING_BUTTON_TEXT = "⇅  Result Ranking"
 
 def _standard_period_keys() -> list[str]:
@@ -201,12 +197,11 @@ class _ResultsPanel(QWidget):
             self._refresh_period_card_counters
         )
 
-        self._ranking_proc: multiprocessing.Process | None = None
-        self._ranking_queue: multiprocessing.Queue | None = None
-        self._ranking_timer: QTimer | None = None
-        self._ranking_config: SortingConfig | None = None
-        self._ranking_button_text: str | None = None
-        self._ranking_empty_after_exit_ticks = 0
+        self._ranking_controller = ResultRankingController(
+            self,
+            worker_context_provider=lambda: worker_context(),
+            ranking_button_text=_RANKING_BUTTON_TEXT,
+        )
         self._ranking_dirty = False
         self._ranking_dirty_message: str | None = None
         self._summary_presenter = ResultSummaryPresenter()
@@ -272,6 +267,54 @@ class _ResultsPanel(QWidget):
         self._save_btn: QPushButton = QPushButton()
 
         self._setup_ui()
+
+    @property
+    def _ranking_proc(self):
+        return self._ranking_controller.proc
+
+    @_ranking_proc.setter
+    def _ranking_proc(self, value) -> None:
+        self._ranking_controller.proc = value
+
+    @property
+    def _ranking_queue(self):
+        return self._ranking_controller.queue
+
+    @_ranking_queue.setter
+    def _ranking_queue(self, value) -> None:
+        self._ranking_controller.queue = value
+
+    @property
+    def _ranking_timer(self):
+        return self._ranking_controller.timer
+
+    @_ranking_timer.setter
+    def _ranking_timer(self, value) -> None:
+        self._ranking_controller.timer = value
+
+    @property
+    def _ranking_config(self) -> SortingConfig | None:
+        return self._ranking_controller.config
+
+    @_ranking_config.setter
+    def _ranking_config(self, value: SortingConfig | None) -> None:
+        self._ranking_controller.config = value
+
+    @property
+    def _ranking_button_text(self) -> str | None:
+        return self._ranking_controller.button_text
+
+    @_ranking_button_text.setter
+    def _ranking_button_text(self, value: str | None) -> None:
+        self._ranking_controller.button_text = value
+
+    @property
+    def _ranking_empty_after_exit_ticks(self) -> int:
+        return self._ranking_controller.empty_after_exit_ticks
+
+    @_ranking_empty_after_exit_ticks.setter
+    def _ranking_empty_after_exit_ticks(self, value: int) -> None:
+        self._ranking_controller.empty_after_exit_ticks = value
 
     def mark_stale(self) -> None:
         """Show the stale-data warning and disable schedule/report exports."""
@@ -1633,278 +1676,28 @@ class _ResultsPanel(QWidget):
         return selected
 
     def _on_result_ranking(self) -> None:
-        """Open the Result Ranking dialog and re-rank cached results in place.
-
-        Re-sorts the schedules already held in memory using the new priority
-        order — it never re-runs schedule generation (spec performance rule).
-        """
-        if self._is_stale():
-            self._show_message(
-                "Stale Schedules",
-                "Settings have changed since the last generation.\n\n"
-                "Please click  ▶  Generate again before re-ranking results.",
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        if not any(self._schedules_by_period.values()):
-            self._show_message(
-                "No Schedules",
-                "Generate or load schedules before changing the result ranking.",
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        from src.ui.ranking_dialog import RankingDialog
-
-        dialog = RankingDialog(self._controller.settings.sorting, parent=self)
-        dialog.ranking_applied.connect(self._apply_ranking)
-        dialog.exec()
+        self._ranking_controller.on_result_ranking()
 
     def _apply_ranking(self, config: "SortingConfig") -> None:
-        """Start asynchronous re-ranking of cached schedules."""
-        if self._ranking_proc is not None:
-            self._show_message(
-                "Ranking In Progress",
-                "Result Ranking is already running. Please wait for it to finish.",
-                QMessageBox.Icon.Information,
-            )
-            return
-
-        if not self._begin_heavy_task("ranking"):
-            self._show_message(
-                "Ranking Unavailable",
-                "Result Ranking is available after generation/loading finishes.",
-                QMessageBox.Icon.Information,
-            )
-            self._refresh_heavy_task_controls()
-            return
-
-        try:
-            job = self._controller.build_ranking_job(config)
-        except ValueError:
-            # No cached results to re-rank; keep the new order for next generate.
-            self._controller.apply_sort(config)
-            self._end_heavy_task("ranking")
-            return
-
-        ctx = worker_context()
-        queue = ctx.Queue()
-        proc = ctx.Process(
-            target=run_ranking_worker,
-            args=(queue, job),
-            daemon=True,
-        )
-
-        self._ranking_queue = queue
-        self._ranking_proc = proc
-        self._ranking_config = config
-        self._ranking_empty_after_exit_ticks = 0
-        self._set_ranking_busy(True)
-
-        try:
-            proc.start()
-            restore_focus_on_macos(self)
-        except Exception as exc:
-            self._cleanup_ranking_worker(terminate=True)
-            self._ranking_config = None
-            self._end_heavy_task("ranking")
-            self._set_ranking_busy(False)
-            self._show_message(
-                "Ranking Failed",
-                f"Could not start Result Ranking.\n\n{exc}",
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        timer = QTimer(self)
-        timer.timeout.connect(self._poll_ranking_worker)
-        timer.start(100)
-        self._ranking_timer = timer
+        self._ranking_controller.apply_ranking(config)
 
     def _poll_ranking_worker(self) -> None:
-        """Poll the background ranking worker without blocking the UI thread."""
-        queue = self._ranking_queue
-        proc = self._ranking_proc
-        if queue is None:
-            self._cleanup_ranking_worker(terminate=True)
-            self._set_ranking_busy(False)
-            return
-
-        try:
-            result = queue.get_nowait()
-        except _QueueEmpty:
-            if proc is not None and not proc.is_alive() and proc.exitcode is not None:
-                self._ranking_empty_after_exit_ticks += 1
-                if self._ranking_empty_after_exit_ticks <= _RANKING_EXIT_QUEUE_GRACE_TICKS:
-                    return
-                exitcode = proc.exitcode
-                self._cleanup_ranking_worker(terminate=False)
-                self._ranking_config = None
-                self._end_heavy_task("ranking")
-                self._set_ranking_busy(False)
-                self._show_message(
-                    "Ranking Failed",
-                    f"Result Ranking stopped before returning a result (exit code {exitcode}).",
-                    QMessageBox.Icon.Warning,
-                )
-            return
-
-        self._ranking_empty_after_exit_ticks = 0
-        config = self._ranking_config
-        self._cleanup_ranking_worker(terminate=False)
-        self._ranking_config = None
-
-        if not isinstance(result, RankingWorkerResult):
-            self._end_heavy_task("ranking")
-            self._set_ranking_busy(False)
-            self._show_message(
-                "Ranking Failed",
-                "Result Ranking returned an unexpected response.",
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        if not result.success:
-            self._end_heavy_task("ranking")
-            self._set_ranking_busy(False)
-            self._show_message(
-                "Ranking Failed",
-                result.error or "Result Ranking failed.",
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        if config is None:
-            self._end_heavy_task("ranking")
-            self._set_ranking_busy(False)
-            self._show_message(
-                "Ranking Failed",
-                "Result Ranking finished after the ranking state was cleared.",
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        try:
-            resorted = self._controller.apply_ranked_results(
-                config,
-                result.schedules_by_period,
-            )
-        except Exception as exc:
-            self._end_heavy_task("ranking")
-            self._set_ranking_busy(False)
-            self._show_message(
-                "Ranking Failed",
-                str(exc),
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        self._finish_ranking_success(resorted)
-        self._end_heavy_task("ranking")
-        self._set_ranking_busy(False)
+        self._ranking_controller.poll_ranking_worker()
 
     def _finish_ranking_success(
         self,
         resorted: dict[str, list[Schedule]],
     ) -> None:
-        """Apply ranked results to the panel and refresh only the visible card."""
-        for period_key, schedules in resorted.items():
-            self._schedules_by_period[period_key] = schedules
-            # A changed ranking changes what schedule index 0 means; show the new
-            # best-ranked option instead of keeping an arbitrary old ordinal.
-            self._period_indices[period_key] = 0
-
-        # Shortlist entries use content fingerprints, so keep the user's saved
-        # candidates across ranking and refresh their labels to the new order.
-        self._nav_model.clear()
-        for period_key in resorted:
-            self._rebuild_navigation_cache(period_key)
-        self._refresh_shortlist_labels()
-        self._clear_ranking_dirty()
-
-        has_proctor_report = any(
-            self._has_classroom_feature_results(period_key)
-            for period_key, schedules in self._schedules_by_period.items()
-            if schedules
-        )
-        self._proctor_btn.setVisible(has_proctor_report)
-
-        visible_period_key = self._current_period_key()
-        if visible_period_key is not None and visible_period_key in self._cards:
-            self._refresh_period_card(visible_period_key)
-        else:
-            self._update_summary()
+        self._ranking_controller.finish_ranking_success(resorted)
 
     def _set_ranking_busy(self, busy: bool) -> None:
-        """Update ranking button state while a background ranking job runs."""
-        if not hasattr(self, "_ranking_btn"):
-            return
-
-        heavy_kind = self._controller.heavy_task_kind
-        if busy or heavy_kind == "ranking":
-            current_text = self._ranking_btn.text()
-            if current_text not in {
-                "Ranking results...",
-                "Ranking available after loading finishes",
-            }:
-                self._ranking_button_text = current_text
-            elif self._ranking_button_text is None:
-                self._ranking_button_text = _RANKING_BUTTON_TEXT
-            self._ranking_btn.setEnabled(False)
-            self._ranking_btn.setText("Ranking results...")
-            self._summary_lbl.setText("Ranking results...")
-            return
-
-        if heavy_kind in {"generation", "loading"}:
-            self._ranking_btn.setEnabled(False)
-            self._ranking_btn.setText("Ranking available after loading finishes")
-            self._update_summary()
-            return
-
-        self._ranking_btn.setEnabled(True)
-        self._ranking_btn.setText(self._ranking_button_text or _RANKING_BUTTON_TEXT)
-        self._ranking_button_text = None
-        self._update_summary()
+        self._ranking_controller.set_ranking_busy(busy)
 
     def _cleanup_ranking_worker(self, terminate: bool = False) -> None:
-        """Stop timers/processes for the ranking worker and release handles."""
-        timer = self._ranking_timer
-        self._ranking_timer = None
-        if timer is not None:
-            timer.stop()
-
-        proc = self._ranking_proc
-        self._ranking_proc = None
-        self._ranking_empty_after_exit_ticks = 0
-        if proc is not None:
-            try:
-                if terminate and proc.is_alive():
-                    proc.terminate()
-                    proc.join(timeout=0.2)
-                    if proc.is_alive():
-                        proc.kill()
-                        proc.join(timeout=0.2)
-                else:
-                    if not proc.is_alive():
-                        proc.join(timeout=0.2)
-            except Exception:
-                logger.debug("Failed cleaning up ranking process", exc_info=True)
-
-        queue = self._ranking_queue
-        self._ranking_queue = None
-        if queue is not None:
-            close = getattr(queue, "close", None)
-            if callable(close):
-                close()
-
-        if terminate and self._controller.end_heavy_task("ranking"):
-            self._finish_ranking_metrics()
-            self.heavy_task_state_changed.emit("ranking", False)
+        self._ranking_controller.cleanup_ranking_worker(terminate=terminate)
 
     def is_ranking_active(self) -> bool:
-        """Return True while the Result Ranking worker owns the heavy slot."""
-        return self._controller.heavy_task_kind == "ranking"
+        return self._ranking_controller.is_ranking_active()
 
     def _begin_heavy_task(self, kind: str) -> bool:
         """Reserve the shared heavy-task slot and refresh visible controls."""
@@ -1925,17 +1718,7 @@ class _ResultsPanel(QWidget):
         self._refresh_heavy_task_controls(repaint_calendar=repaint_calendar)
 
     def _finish_ranking_metrics(self) -> None:
-        """Finalize ranking timing metrics."""
-        try:
-            snapshot = self._controller.performance_metrics.finish_ranking()
-            logger.info(
-                "Ranking performance summary: elapsed=%.3fs schedules=%s sqlite_rows=%s",
-                snapshot.ranking_seconds,
-                self._controller.cached_schedule_count(),
-                snapshot.sqlite_stored_row_count,
-            )
-        except Exception:
-            logger.debug("Failed recording ranking metrics", exc_info=True)
+        self._ranking_controller.finish_ranking_metrics()
 
     def _refresh_heavy_task_controls(self, *, repaint_calendar: bool = True) -> None:
         """Refresh ranking/load controls after heavy-task state changes."""
