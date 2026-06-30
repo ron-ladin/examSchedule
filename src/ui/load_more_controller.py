@@ -527,6 +527,8 @@ class LoadMoreController(QObject):
         """Load one batch of different date options."""
         if period_key in self.procs:
             return
+        if self._loading_blocked_by_heavy_task(period_key):
+            return
         if not self._check_resources_before_batch(period_key):
             return
         if not self._begin_loading_task(period_key):
@@ -560,6 +562,8 @@ class LoadMoreController(QObject):
     ) -> None:
         """Load one batch of variants for the currently displayed date option."""
         if period_key in self.procs:
+            return
+        if self._loading_blocked_by_heavy_task(period_key):
             return
         if not self._check_resources_before_batch(period_key):
             return
@@ -598,8 +602,8 @@ class LoadMoreController(QObject):
             panel._end_heavy_task("loading")
             raise
 
-    def _begin_loading_task(self, period_key: str) -> bool:
-        """Reserve the shared heavy-task slot for one load-more batch."""
+    def _loading_blocked_by_heavy_task(self, period_key: str) -> bool:
+        """Return True if Load More cannot start while another task is active."""
         if self._panel.is_ranking_active():
             self.messageRequested.emit(
                 "Ranking In Progress",
@@ -608,6 +612,23 @@ class LoadMoreController(QObject):
             )
             self.update_auto_load_button(period_key)
             self.cardRefreshRequested.emit(period_key)
+            return True
+
+        if self._controller.heavy_task_kind is not None:
+            self.messageRequested.emit(
+                "Busy",
+                "Another heavy task is already running. Please wait for it to finish.",
+                _INFO,
+            )
+            self.update_auto_load_button(period_key)
+            self.cardRefreshRequested.emit(period_key)
+            return True
+
+        return False
+
+    def _begin_loading_task(self, period_key: str) -> bool:
+        """Reserve the shared heavy-task slot for one load-more batch."""
+        if self._loading_blocked_by_heavy_task(period_key):
             return False
 
         if not self._panel._begin_heavy_task("loading"):

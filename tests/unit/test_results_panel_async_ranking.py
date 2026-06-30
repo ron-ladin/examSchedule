@@ -342,10 +342,52 @@ def test_load_more_is_blocked_while_ranking_is_active(monkeypatch, qapp):
         "start_load_more_date_options_for_period",
         lambda *args, **kwargs: pytest.fail("load worker should not start"),
     )
+    monkeypatch.setattr(
+        panel._lm,
+        "_check_resources_before_batch",
+        lambda *_args, **_kwargs: pytest.fail(
+            "resource guard should not run while ranking is active"
+        ),
+    )
     controller.begin_heavy_task("ranking")
 
     try:
         panel._lm.on_load_more_dates(period_key)
+
+        assert panel._lm.procs == {}
+        assert messages and messages[0][0] == "Ranking In Progress"
+    finally:
+        controller.end_heavy_task("ranking")
+        panel.close()
+
+
+def test_load_more_variants_is_blocked_before_resource_guard_while_ranking(
+    monkeypatch,
+    qapp,
+):
+    panel, controller, period_key, _first, _second = _panel_with_memory_results(qapp)
+    messages = []
+    try:
+        panel._lm.messageRequested.disconnect()
+    except TypeError:
+        pass
+    panel._lm.messageRequested.connect(lambda *args: messages.append(args))
+    monkeypatch.setattr(
+        controller,
+        "start_load_variants_for_schedule",
+        lambda *args, **kwargs: pytest.fail("variant worker should not start"),
+    )
+    monkeypatch.setattr(
+        panel._lm,
+        "_check_resources_before_batch",
+        lambda *_args, **_kwargs: pytest.fail(
+            "resource guard should not run while ranking is active"
+        ),
+    )
+    controller.begin_heavy_task("ranking")
+
+    try:
+        panel._lm.on_load_more_variants(period_key)
 
         assert panel._lm.procs == {}
         assert messages and messages[0][0] == "Ranking In Progress"
