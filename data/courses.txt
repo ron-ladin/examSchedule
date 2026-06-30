@@ -1,46 +1,158 @@
 $$$$
-Physics 1
-83102
-Prof. O. Some
-83101,1,FALL,Obligatory,80
-83102,1,FALL,Obligatory,70
+Calculus I
+20001
+Dr. Ada Cohen
+83101,1,FALL,Obligatory,90
+83102,1,FALL,Obligatory,85
+83103,1,FALL,Obligatory,70
+83104,1,FALL,Obligatory,60
+83105,1,FALL,Obligatory,65
 Exam
 $$$$
-Software Project
-83533
-Dr. Terry Bell
-83101,3,SPRI,Elective,35
-83108,2,SPRI,Obligatory,40
-Project
-$$$$
-Calculus 1
-83112
-Dr. Erez Scheiner
-83101,1,FALL,Obligatory,75
-83102,1,FALL,Obligatory,65
+Introduction to Programming
+20002
+Dr. Ben Levi
+83101,1,FALL,Obligatory,95
+83102,1,FALL,Obligatory,90
+83103,1,FALL,Obligatory,75
+83104,1,FALL,Obligatory,65
+83105,1,FALL,Obligatory,70
 Exam
 $$$$
-Operating Systems
-10001
-Dr. Maya Cohen
-83103,2,FALL,Obligatory,220
+Discrete Mathematics
+20003
+Dr. Noa Shalev
+83101,1,FALL,Obligatory,88
+83102,1,FALL,Obligatory,80
+83103,1,FALL,Obligatory,70
+Exam
+$$$$
+Linear Algebra
+20004
+Dr. Erez Barak
+83101,1,FALL,Obligatory,92
+83102,1,FALL,Obligatory,85
+83103,1,FALL,Obligatory,72
+83104,1,FALL,Obligatory,58
+83105,1,FALL,Obligatory,62
+Exam
+$$$$
+Data Structures
+20005
+Dr. Maya Rosen
+83101,2,FALL,Obligatory,82
+83102,2,FALL,Obligatory,76
+83103,2,FALL,Obligatory,68
 Exam
 $$$$
 Database Systems
-10002
-Dr. Daniel Levi
-83104,2,FALL,Obligatory,35
+20006
+Dr. Daniel Amir
+83101,2,FALL,Obligatory,74
+83104,2,FALL,Obligatory,66
+Exam
+$$$$
+Operating Systems
+20007
+Dr. Yael Mizrahi
+83101,2,FALL,Obligatory,78
+83102,2,FALL,Obligatory,72
+83103,2,FALL,Obligatory,60
 Exam
 $$$$
 Computer Networks
-10003
-Dr. Noa Shalev
-83105,2,FALL,Obligatory,35
+20008
+Dr. Lior Katz
+83101,3,FALL,Obligatory,62
+83105,3,FALL,Obligatory,58
 Exam
 $$$$
-Advanced Materials Engineering
-10004
-Dr. Yael Barak
-83109,3,FALL,Obligatory,400
+Artificial Intelligence Fundamentals
+20009
+Dr. Tamar Weiss
+83103,3,FALL,Elective,55
+83104,3,FALL,Elective,48
+Exam
+$$$$
+Software Engineering
+20010
+Dr. Ron Harari
+83101,3,FALL,Obligatory,70
+83102,3,FALL,Obligatory,64
+Exam
+$$$$
+Probability and Statistics
+20011
+Dr. Dana Peretz
+83101,1,SPRI,Obligatory,85
+83102,1,SPRI,Obligatory,78
+83103,1,SPRI,Obligatory,70
+83104,1,SPRI,Obligatory,55
+83105,1,SPRI,Obligatory,58
+Exam
+$$$$
+Algorithms
+20012
+Dr. Avi Shamir
+83101,2,SPRI,Obligatory,80
+83102,2,SPRI,Obligatory,75
+83103,2,SPRI,Obligatory,66
+Exam
+$$$$
+Web Application Development
+20013
+Dr. Hila Moreno
+83101,2,SPRI,Elective,54
+83104,2,SPRI,Elective,45
+Exam
+$$$$
+Machine Learning Basics
+20014
+Dr. Omer Tal
+83103,3,SPRI,Obligatory,52
+83104,3,SPRI,Obligatory,46
+Exam
+$$$$
+Cyber Security
+20015
+Dr. Michal Naveh
+83101,3,SPRI,Elective,50
+83105,3,SPRI,Elective,44
+Exam
+$$$$
+Cloud Computing
+20016
+Dr. Gal Stein
+83101,3,SUMM,Elective,45
+83102,3,SUMM,Elective,40
+83104,3,SUMM,Elective,36
+Exam
+$$$$
+Distributed Systems
+20017
+Dr. Shira Dahan
+83101,3,SUMM,Obligatory,56
+83102,3,SUMM,Obligatory,50
+Exam
+$$$$
+Data Mining
+20018
+Dr. Itay Cohen
+83103,3,SUMM,Elective,48
+83104,3,SUMM,Elective,42
+Exam
+$$$$
+Computer Architecture
+20019
+Dr. Yoni Feldman
+83101,2,SUMM,Obligatory,70
+83105,2,SUMM,Obligatory,60
+Exam
+$$$$
+Human Computer Interaction
+20020
+Dr. Rina Azulay
+83102,2,SUMM,Elective,44
+83104,2,SUMM,Elective,38
 Exam
 $$$$
