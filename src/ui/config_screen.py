@@ -104,6 +104,8 @@ class ConfigScreen(QWidget):
         self._controller = controller
         self._settings_dialog: SettingsScreen | None = None
         self._allow_unassigned_generation = False
+        self._generation_start_token = 0
+        self._pending_generation_start_token: int | None = None
 
         self._last_courses_by_id: dict = {}
 
@@ -620,6 +622,13 @@ class ConfigScreen(QWidget):
             self._settings_dialog.set_generation_state(is_running)
 
     def _on_generate(self) -> None:
+        if self._pending_generation_start_token is not None:
+            logger.info(
+                "Generate ignored because delayed generation startup is already pending."
+            )
+            self._update_gen_btn()
+            return
+
         if self._controller.heavy_task_kind is not None:
             QMessageBox.information(
                 self,
@@ -652,6 +661,10 @@ class ConfigScreen(QWidget):
             )
             self._update_gen_btn()
             return
+        self._generation_start_token += 1
+        start_token = self._generation_start_token
+        self._pending_generation_start_token = start_token
+
         self.heavy_task_state_changed.emit("generation", True)
         self._controller.performance_metrics.start_generation(LOAD_BATCH_SIZE)
 
@@ -668,7 +681,8 @@ class ConfigScreen(QWidget):
 
         QTimer.singleShot(
             50,
-            lambda: self._start_generation_polling(
+            lambda token=start_token: self._start_generation_polling(
+                token,
                 selected,
                 color_map,
                 self._allow_unassigned_generation,
@@ -677,23 +691,56 @@ class ConfigScreen(QWidget):
 
     def _start_generation_polling(
         self,
+        start_token: int,
         selected_programs: list[str],
         color_map: dict[str, str],
         allow_unassigned_generation: bool,
     ) -> None:
+        if self._pending_generation_start_token != start_token:
+            logger.info(
+                "Ignoring stale delayed generation start: token=%s active=%s",
+                start_token,
+                self._pending_generation_start_token,
+            )
+            return
+
+        if self._controller.heavy_task_kind != "generation":
+            logger.info(
+                "Ignoring delayed generation start because generation is no longer "
+                "active: token=%s",
+                start_token,
+            )
+            self._pending_generation_start_token = None
+            return
+
+        if self._poller.is_running():
+            logger.warning(
+                "Ignoring delayed generation start because poller is already running: "
+                "token=%s",
+                start_token,
+            )
+            self._pending_generation_start_token = None
+            return
+
         try:
+            self._pending_generation_start_token = None
             self._poller.start(
                 selected_programs,
                 color_map,
                 allow_unassigned_generation,
             )
         except Exception:
+            self._pending_generation_start_token = None
             self._controller.performance_metrics.finish_generation()
             if self._controller.end_heavy_task("generation"):
                 self.heavy_task_state_changed.emit("generation", False)
             self._notify_settings_state(False)
             self._update_gen_btn()
             raise
+
+    def _cancel_pending_generation_start(self) -> None:
+        self._generation_start_token += 1
+        self._pending_generation_start_token = None
 
     def _confirm_capacity_warning(self) -> bool:
         """Show the optional Feature 4 capacity warning before generation."""
@@ -720,6 +767,18 @@ class ConfigScreen(QWidget):
         return self._allow_unassigned_generation
 
     def _import_schedule(self) -> None:
+        if (
+            self._pending_generation_start_token is not None
+            or self._controller.heavy_task_kind == "generation"
+            or self._poller.is_running()
+        ):
+            QMessageBox.information(
+                self,
+                "Generation In Progress",
+                "Wait for generation to finish before loading another schedule.",
+            )
+            return
+
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load Schedule File",
@@ -827,6 +886,7 @@ class ConfigScreen(QWidget):
         # Terminal event for streaming generation. Results were already shown
         # incrementally via period_ready, so do NOT rebuild the results panel
         # here — just restore controls and status.
+        self._pending_generation_start_token = None
         if self._controller.end_heavy_task("generation"):
             self.heavy_task_state_changed.emit("generation", False)
         self._controller.performance_metrics.finish_generation(
@@ -837,6 +897,7 @@ class ConfigScreen(QWidget):
         self._set_status("✓  Schedule generated.", ok=True)
 
     def _fail(self, msg: str) -> None:
+        self._cancel_pending_generation_start()
         self._reset_progress()
         self._notify_settings_state(False)
         self._poller.stop()
@@ -875,6 +936,7 @@ class ConfigScreen(QWidget):
 
         self._gen_btn.setEnabled(
             not running
+            and self._pending_generation_start_token is None
             and heavy_kind is None
             and self._controller.has_courses
             and self._controller.has_periods
@@ -890,6 +952,7 @@ class ConfigScreen(QWidget):
 
     def shutdown_background_workers(self) -> None:
         """Stop generation workers owned by this screen."""
+        self._cancel_pending_generation_start()
         self._poller.stop()
         if self._controller.end_heavy_task("generation"):
             self.heavy_task_state_changed.emit("generation", False)

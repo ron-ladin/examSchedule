@@ -849,10 +849,14 @@ def test_delayed_generation_start_failure_cleans_heavy_task(monkeypatch):
 
     assert controller.begin_heavy_task("generation") is True
     controller.performance_metrics.start_generation(LOAD_BATCH_SIZE)
+    screen._generation_start_token += 1
+    start_token = screen._generation_start_token
+    screen._pending_generation_start_token = start_token
     screen._gen_btn.setEnabled(False)
 
     with pytest.raises(RuntimeError, match="poller start failed"):
         screen._start_generation_polling(
+            start_token,
             ["83101"],
             {"83101": "#2563EB"},
             False,
@@ -862,6 +866,124 @@ def test_delayed_generation_start_failure_cleans_heavy_task(monkeypatch):
     assert heavy_events == [("generation", False)]
     assert settings_states == [False]
     assert screen._gen_btn.isEnabled() is True
+
+    screen.close()
+    app.processEvents()
+
+
+def test_stale_delayed_generation_start_is_ignored(monkeypatch):
+    app, _controller, screen = _generation_ready_config_screen()
+    poller_start_calls: list[tuple] = []
+    monkeypatch.setattr(
+        screen._poller,
+        "start",
+        lambda *args: poller_start_calls.append(args),
+    )
+
+    screen._on_generate()
+    screen._cancel_pending_generation_start()
+    _wait_for_qt_timers(80)
+
+    assert poller_start_calls == []
+
+    screen.close()
+    app.processEvents()
+
+
+def test_double_generate_click_does_not_start_two_generation_runs(monkeypatch):
+    app, controller, screen = _generation_ready_config_screen()
+    poller_start_calls: list[tuple] = []
+    generation_started_payloads: list[tuple] = []
+    monkeypatch.setattr(
+        screen._poller,
+        "start",
+        lambda *args: poller_start_calls.append(args),
+    )
+    screen.generation_started.connect(generation_started_payloads.append)
+
+    screen._on_generate()
+    first_token = screen._pending_generation_start_token
+    screen._on_generate()
+
+    assert screen._pending_generation_start_token == first_token
+
+    _wait_for_qt_timers(80)
+
+    assert len(poller_start_calls) == 1
+    assert len(generation_started_payloads) == 1
+    assert screen._pending_generation_start_token is None
+    assert controller.heavy_task_kind == "generation"
+
+    screen.close()
+    app.processEvents()
+
+
+def test_import_schedule_is_blocked_while_generation_start_is_pending(monkeypatch):
+    app, _controller, screen = _generation_ready_config_screen()
+    poller_start_calls: list[tuple] = []
+    messages: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        screen._poller,
+        "start",
+        lambda *args: poller_start_calls.append(args),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda _parent, title, text: messages.append((title, text)),
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: pytest.fail("file dialog should not open"),
+    )
+    monkeypatch.setattr(
+        screen._controller,
+        "import_schedule",
+        lambda _path: pytest.fail("import should not run while generation is pending"),
+    )
+
+    screen._on_generate()
+    assert screen._pending_generation_start_token is not None
+
+    screen._import_schedule()
+
+    assert messages == [
+        (
+            "Generation In Progress",
+            "Wait for generation to finish before loading another schedule.",
+        )
+    ]
+    assert screen._controller.read_only_import is False
+
+    _wait_for_qt_timers(80)
+
+    assert len(poller_start_calls) == 1
+    assert screen._pending_generation_start_token is None
+
+    screen.close()
+    app.processEvents()
+
+
+def test_shutdown_cancels_pending_delayed_generation_start(monkeypatch):
+    app, controller, screen = _generation_ready_config_screen()
+    poller_start_calls: list[tuple] = []
+    monkeypatch.setattr(
+        screen._poller,
+        "start",
+        lambda *args: poller_start_calls.append(args),
+    )
+
+    screen._on_generate()
+    assert screen._pending_generation_start_token is not None
+
+    screen.shutdown_background_workers()
+    _wait_for_qt_timers(80)
+
+    assert poller_start_calls == []
+    assert screen._pending_generation_start_token is None
+    assert controller.heavy_task_kind is None
 
     screen.close()
     app.processEvents()
