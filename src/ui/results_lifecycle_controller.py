@@ -60,6 +60,8 @@ class ResultsLifecycleController:
         panel._cleanup_ranking_worker(terminate=True)
         panel._set_ranking_busy(False)
         panel._clear_ranking_dirty()
+        panel._streaming_run_active = False
+        panel._streaming_auto_selected_period = False
 
         panel._controller.shutdown_load_workers()
 
@@ -136,6 +138,7 @@ class ResultsLifecycleController:
         panel = self._panel
         panel.release_results(delete_db=True)
         panel._streaming_run_active = False
+        panel._streaming_auto_selected_period = False
 
     def append_period(
         self,
@@ -151,6 +154,9 @@ class ResultsLifecycleController:
         if not panel._streaming_run_active:
             self.init_streaming_scaffold(courses_by_id, prog_color_map, truncated)
             panel._streaming_run_active = True
+
+        current_period_key = panel._current_period_key()
+        selector_needs_refresh = False
 
         panel._courses_by_id.update(courses_by_id)
         panel._truncated_periods |= truncated
@@ -184,7 +190,7 @@ class ResultsLifecycleController:
                     panel._build_period_card(period_key),
                     self._display_period_key(period_key),
                 )
-                panel._refresh_period_selector(preferred_key=period_key)
+                selector_needs_refresh = True
 
             panel._schedules_by_period[period_key] = schedules
             panel._period_indices.setdefault(period_key, 0)
@@ -197,16 +203,15 @@ class ResultsLifecycleController:
             panel._rebuild_navigation_cache(period_key)
             panel._refresh_period_card(period_key)
 
-        first_ready_period = next(
-            (
-                key
-                for key, schedules in display_schedules_by_period.items()
-                if schedules
-            ),
-            None,
-        )
-        if first_ready_period is not None:
-            panel._refresh_period_selector(preferred_key=first_ready_period)
+        if not panel._streaming_auto_selected_period:
+            first_ready_period = panel._first_period_with_results()
+            if first_ready_period is not None:
+                panel._refresh_period_selector(preferred_key=first_ready_period)
+                panel._streaming_auto_selected_period = True
+            elif selector_needs_refresh:
+                panel._refresh_period_selector(preferred_key=current_period_key)
+        elif selector_needs_refresh:
+            panel._refresh_period_selector(preferred_key=current_period_key)
 
         has_proctor_report = any(
             bool(getattr(schedule, "classroom_assignments", None))
@@ -230,6 +235,7 @@ class ResultsLifecycleController:
         panel._is_imported_schedule = False
         panel._clear_favorites()
         panel._generation_thresholds = panel._controller.settings.thresholds
+        panel._streaming_auto_selected_period = False
 
         panel._lm.reset()
         panel._controller.shutdown_load_workers()
@@ -295,6 +301,7 @@ class ResultsLifecycleController:
         panel._is_imported_schedule = False
         panel._generation_thresholds = None
         panel._streaming_run_active = False
+        panel._streaming_auto_selected_period = False
 
         if hasattr(panel, "_period_tabs"):
             panel._period_tabs.clear()

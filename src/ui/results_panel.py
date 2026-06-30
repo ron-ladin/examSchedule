@@ -243,6 +243,7 @@ class _ResultsPanel(QWidget):
         # True once the first streamed period of the current run has built the
         # tab scaffold. Reset by begin_streaming() at the start of each run.
         self._streaming_run_active: bool = False
+        self._streaming_auto_selected_period: bool = False
 
         # Per-period Auto Load is user-controlled. It loads one batch, waits an
         # adaptive delay, then requests the next batch until there is no more data

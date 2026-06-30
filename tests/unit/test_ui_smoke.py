@@ -730,7 +730,7 @@ def test_shortlist_export_rejects_positive_out_of_range_row(monkeypatch):
     app.processEvents()
 
 
-def test_streaming_results_switch_selector_to_ready_period():
+def test_streaming_first_batch_auto_selects_first_available_period():
     app = _get_qapp()
     controller = DesktopController()
     panel = _ResultsPanel(controller)
@@ -750,6 +750,85 @@ def test_streaming_results_switch_selector_to_ready_period():
     assert panel._current_period_key() == "SUMMER - Gimel"
     assert panel._semester_combo.currentText() == "SUMMER"
     assert panel._moed_combo.currentText() == "Gimel"
+
+    panel.close()
+
+
+def test_streaming_period_append_preserves_selected_period_after_first_batch():
+    app = _get_qapp()
+    panel = _ResultsPanel(DesktopController())
+    fall_aleph = Schedule(
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 5))]),
+        {"10001": date(2026, 1, 5)},
+    )
+    spring_aleph = Schedule(
+        ExamPeriod("SPRI", "Aleph", [(date(2026, 4, 1), date(2026, 4, 1))]),
+        {"10001": date(2026, 4, 1)},
+    )
+    summer_bet = Schedule(
+        ExamPeriod("SUMMER", "Bet", [(date(2026, 8, 1), date(2026, 8, 1))]),
+        {"10001": date(2026, 8, 1)},
+    )
+
+    panel.begin_streaming()
+    panel.append_period({"FALL - Aleph": [fall_aleph]}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    assert panel._current_period_key() == "FALL - Aleph"
+
+    panel.append_period({"SPRI - Aleph": [spring_aleph]}, {}, {}, set())
+    app.processEvents()
+
+    assert panel._current_period_key() == "FALL - Aleph"
+    assert panel._semester_combo.currentText() == "FALL"
+    assert panel._moed_combo.currentText() == "Aleph"
+
+    panel.append_period({"SUMMER - Bet": [summer_bet]}, {}, {}, set())
+    app.processEvents()
+
+    assert panel._current_period_key() == "FALL - Aleph"
+    assert panel._semester_combo.currentText() == "FALL"
+    assert panel._moed_combo.currentText() == "Aleph"
+
+    panel.close()
+
+
+def test_streaming_period_append_preserves_manual_period_selection():
+    app = _get_qapp()
+    panel = _ResultsPanel(DesktopController())
+    fall_aleph = Schedule(
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 5))]),
+        {"10001": date(2026, 1, 5)},
+    )
+    fall_bet = Schedule(
+        ExamPeriod("FALL", "Bet", [(date(2026, 2, 5), date(2026, 2, 5))]),
+        {"10001": date(2026, 2, 5)},
+    )
+    spring_aleph = Schedule(
+        ExamPeriod("SPRI", "Aleph", [(date(2026, 4, 1), date(2026, 4, 1))]),
+        {"10001": date(2026, 4, 1)},
+    )
+
+    panel.begin_streaming()
+    panel.append_period({"FALL - Aleph": [fall_aleph]}, {}, {}, set())
+    panel.append_period({"FALL - Bet": [fall_bet]}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    bet_index = panel._moed_combo.findData("FALL - Bet")
+    assert bet_index >= 0
+    panel._moed_combo.setCurrentIndex(bet_index)
+    app.processEvents()
+
+    assert panel._current_period_key() == "FALL - Bet"
+
+    panel.append_period({"SPRI - Aleph": [spring_aleph]}, {}, {}, set())
+    app.processEvents()
+
+    assert panel._current_period_key() == "FALL - Bet"
+    assert panel._semester_combo.currentText() == "FALL"
+    assert panel._moed_combo.currentText() == "Bet"
 
     panel.close()
 
