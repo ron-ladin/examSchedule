@@ -83,6 +83,7 @@ from src.ui.results_shortlist_controller import (
     ResultsShortlistController,
     _SHORTLIST_ADD_BUTTON_STYLE,
 )
+from src.ui.results_proctor_report_controller import ResultsProctorReportController
 from src.ui.result_summary_presenter import ResultSummaryPresenter
 from src.ui.widgets.calendar_view import CalendarRenderer
 from src.ui.widgets.period_card_builder import (
@@ -216,6 +217,10 @@ class _ResultsPanel(QWidget):
         self._export_controller = ResultsExportController(self, self._shortlist)
         self._shortlist.set_export_shortlisted(
             self._export_controller.export_shortlisted_schedules
+        )
+        self._proctor_report_controller = ResultsProctorReportController(
+            self,
+            display_period_key=_display_period_key,
         )
 
         self._navigator = PeriodNavigator(
@@ -2023,46 +2028,7 @@ class _ResultsPanel(QWidget):
         self._refresh_heavy_task_controls()
 
     def _on_proctor_report(self) -> None:
-        """Build and show the spec 4.6 proctor report for displayed schedules."""
-        if self._is_stale():
-            self._show_message(
-                "Stale Schedules",
-                "Exam period dates have changed since the last generation.\n\n"
-                "Please click  ▶  Generate again before viewing/exporting the proctor report.",
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        selected = self._selected_schedules()
-        if not selected:
-            self._show_message(
-                "No Schedules",
-                "Generate or load schedules before viewing the proctor report.",
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        sections: list[str] = []
-        for period_key, schedule in selected.items():
-            body = self._controller.proctor_report_text(schedule)
-            sections.append(f"=== {_display_period_key(period_key)} ===\n{body}")
-
-        report_text = "\n\n".join(sections)
-
-        if not any(s.classroom_assignments for s in selected.values()):
-            self._show_message(
-                "No Room Assignments",
-                "These schedules have no classroom assignments. Enable Feature 4 "
-                "(classrooms, slots, proctor ratio) and generate again to produce a "
-                "proctor report.",
-                QMessageBox.Icon.Information,
-            )
-            return
-
-        from src.ui.proctor_report_dialog import ProctorReportDialog
-
-        dialog = ProctorReportDialog(report_text, parent=self)
-        dialog.exec()
+        self._proctor_report_controller.on_proctor_report()
 
     def _export_schedule_selection(self, selected_by_period: dict[str, list[Schedule]]) -> bool:
         return self._export_controller.export_schedule_selection(selected_by_period)
