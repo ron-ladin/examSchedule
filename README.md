@@ -5,7 +5,7 @@
 ### *Turning an NP-Hard scheduling nightmare into ranked, conflict-free timetables.*
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![Tests](https://img.shields.io/badge/Tests-727%20passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#-testing)
+[![Tests](https://img.shields.io/badge/Tests-819%20passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#-testing)
 [![UI](https://img.shields.io/badge/UI-PyQt6-41CD52?style=for-the-badge&logo=qt&logoColor=white)](https://pypi.org/project/PyQt6/)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](#-license)
 
@@ -118,14 +118,14 @@ It does not, by design. The reasoning is a deliberate engineering trade-off.
 **1. Sorting billions requires materialising billions — and that is what causes OOM.**
 Any comparison sort (`list.sort`, Timsort, quicksort) needs *random access* to the full collection: every element must be resident in RAM simultaneously so the algorithm can compare and reorder it. A schedule is a non-trivial Python object (exam dates, room assignments, proctor data). The space of solutions is a Cartesian product — *date options × classroom variants* — which is effectively **unbounded** and can reach billions. Materialising even a few million such objects to feed a sort would exhaust process memory and trigger the OS OOM-killer long before the sort returned. The crash isn't in the sort; it's in *holding the input the sort demands*.
 
-**2. Our answer is Bounded Lazy Sampling, not exhaustive sorting.**
+**2. Our answer is Bounded Lazy Generation, not exhaustive sorting.**
 The engine never tries to enumerate the solution space. Instead:
 
 - **Generate lazily.** `ScheduleGenerator` and `ClassroomAssigner` `yield` solutions one at a time (`O(n)` memory) and keep their iterators alive between page requests. Nothing is materialised until something pages it in.
-- **Apply a hard upper bound.** The UI is allowed to accumulate at most `ABSOLUTE_MAX_IN_MEMORY_SCHEDULES` (`100_000`) schedules across *all* periods and *all* Load More / Auto Load requests combined (`src/engine/generation_workers.py`). When that ceiling is reached, the incoming batch is truncated to the remaining headroom, Auto Load halts, and the Load More button is disabled with a *“Memory limit reached”* label — a graceful stop, never an OOM kill.
-- **Rank only the collected page.** "Result Ranking" re-sorts the **bounded set already in memory**, not the theoretical billions. Sorting ≤100k cached, memoized objects is fast and safe (see the memoization layer above); sorting the full product was never on the table.
+- **Bound the work, not an arbitrary count.** No artificial fixed-number ceiling is imposed on the loading flow (`ABSOLUTE_MAX_IN_MEMORY_SCHEDULES` is `None` in `src/engine/generation_workers.py`). Instead, growth is held in check at the source: every Load More / Auto Load request is bounded by **per-request batch and time limits**, and the accumulated population only ever grows by what the user explicitly pages in. It stops on generator exhaustion, user cancellation, or actual system-resource limits — never by silently driving the generator to completion behind the user's back.
+- **Rank only what's been collected.** "Result Ranking" re-sorts the **bounded set already in memory** — the schedules the user actually paged in — not the theoretical billions. Those collected objects are cached and memoized (see the memoization layer above), so re-ranking them is fast and safe; sorting the full product was never on the table.
 
-In other words, we treat the visible, bounded population as a **sample** of the solution space and rank *that*. The user always sees a fully, correctly ranked set — it is just guaranteed to fit in RAM.
+In other words, we treat the visible, paged-in population as a **working sample** of the solution space and rank *that*. The user always sees a fully, correctly ranked set of exactly the schedules they chose to load.
 
 **3. Why we explicitly rejected External Merge-Sort.**
 External merge-sort (sort RAM-sized chunks, spill to disk, k-way merge) is the textbook fix for "data larger than memory" — and it is the *wrong* tool here. External merge-sort only helps when the dataset is **large but finite and already exists**. Our dataset is neither: the billions of schedules **do not exist yet** — they would have to be *generated* to feed the merge. Driving the lazy generator to completion to produce every chunk would hang the application (and burn unbounded CPU/disk) for a result no human will ever page through. The bottleneck is **generation cost**, not merge I/O, so a merge-sort solves a problem we don't have while leaving the real one — runaway materialisation — completely untouched. A bounded sample is the correct abstraction; an external sort is a more expensive way to still crash.
@@ -232,7 +232,7 @@ pytest tests/ -m "not slow" --cov=src --cov-report=term-missing
 pytest tests/ -m slow
 ```
 
-The suite currently runs **727 tests** across unit, integration, and end-to-end layers (excluding slow/performance tests marked `@pytest.mark.slow`, which run in a separate CI workflow).
+The suite currently runs **819 tests** across unit, integration, and end-to-end layers (excluding slow/performance tests marked `@pytest.mark.slow`, which run in a separate CI workflow).
 
 > **UI tests** run headless in CI via `QT_QPA_PLATFORM=offscreen` and system Qt libraries (CI is pinned to Python 3.11 for PyQt6 stability). Locally, `pytest.importorskip` skips those tests automatically when PyQt6 is not installed — no `QT_QPA_PLATFORM` override is needed.
 
@@ -244,6 +244,8 @@ The suite currently runs **727 tests** across unit, integration, and end-to-end 
 examSchedule/
 ├── main.py                        # Entry point — GUI or CLI dispatch
 ├── src/
+│   ├── controller.py              # Thin UI-facing desktop controller (no PyQt6 imports)
+│   ├── interfaces/                # Abstract contracts (data provider, exporter, generator, store, conflict strategy)
 │   ├── adapters/                  # File readers, exporters, conflict strategies
 │   ├── domain/                    # Pure domain models + SortingEngine (memoized)
 │   ├── engine/                    # Orchestration & core algorithms
@@ -252,6 +254,7 @@ examSchedule/
 │   │   ├── schedule_generator.py  # Backtracking CSP engine (MCV + lazy DFS)
 │   │   ├── classroom_assigner.py  # Lazy room assignment with capacity pruning
 │   │   └── proctor_report.py      # Proctor report builder (⌈students / X⌉)
+│   ├── utils/                     # Shared helpers (merge utilities)
 │   └── ui/                        # PyQt6 desktop application
 ├── tests/                         # unit · integration · e2e
 └── data/                          # Sample input files
