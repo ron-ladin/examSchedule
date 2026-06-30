@@ -41,7 +41,6 @@ from src.ui.assets.animated_widgets import AnimatedPlaceholder
 
 # _group_exams_by_slot is re-exported here for input_screen / tests.
 from src.ui.calendar_cell_delegate import (
-    _course_ids_for_click_position,
     _group_exams_by_slot,
 )
 from src.ui.tokens import (
@@ -70,6 +69,7 @@ from src.engine.mp_context import worker_context
 from src.ui.active_limits_panel import ActiveLimitsPanel
 from src.ui.favorite_schedules import FavoriteSchedule
 from src.ui.result_ranking_controller import ResultRankingController
+from src.ui.results_card_refresh_controller import ResultsCardRefreshController
 from src.ui.navigation_model import NavigationModel, DateSignature as _DateSignature
 from src.ui.period_card import PeriodCardWidgets
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
@@ -132,10 +132,6 @@ def _merge_period_keys(
             keys.append(key)
 
     return keys
-
-
-_AUTO_MODE_DATES = "dates"
-_AUTO_MODE_VARIANTS = "variants"
 
 
 def _display_period_key(period_key: str) -> str:
@@ -219,6 +215,10 @@ class _ResultsPanel(QWidget):
             display_period_key=_display_period_key,
         )
         self._period_selector_controller = ResultsPeriodSelectorController(
+            self,
+            display_period_key=_display_period_key,
+        )
+        self._card_refresh = ResultsCardRefreshController(
             self,
             display_period_key=_display_period_key,
         )
@@ -1335,10 +1335,10 @@ class _ResultsPanel(QWidget):
         return self._nav_model.indices_for_signature(period_key, signature)
 
     def _refresh_period_card(self, period_key: str) -> None:
-        self._refresh_period_card_ui(period_key, repaint_calendar=True)
+        self._card_refresh.refresh_period_card(period_key)
 
     def _refresh_period_card_counters(self, period_key: str) -> None:
-        self._refresh_period_card_ui(period_key, repaint_calendar=False)
+        self._card_refresh.refresh_period_card_counters(period_key)
 
     def _refresh_period_card_ui(
         self,
@@ -1346,153 +1346,10 @@ class _ResultsPanel(QWidget):
         *,
         repaint_calendar: bool,
     ) -> None:
-        schedules = self._schedules_by_period[period_key]
-        total = len(schedules)
-        has_more = (
-            False
-            if self._is_imported_schedule
-            else self._controller.has_more_schedules(period_key)
+        self._card_refresh.refresh_period_card_ui(
+            period_key,
+            repaint_calendar=repaint_calendar,
         )
-        card = self._cards.get(period_key)
-
-        # The navigation cache should already be current after load/load-more,
-        # but this keeps the method safe if tests mutate schedules directly.
-        options = self._date_options_for_period(period_key)
-        index_nav = self._nav_model.index_nav(period_key)
-
-        if total > 0:
-            idx = self._period_indices.get(period_key, 0)
-            if idx < 0 or idx >= total:
-                idx = 0
-                self._period_indices[period_key] = idx
-
-            nav_pos = index_nav.get(idx)
-            if nav_pos is None:
-                self._rebuild_navigation_cache(period_key)
-                options = self._date_options_for_period(period_key)
-                index_nav = self._nav_model.index_nav(period_key)
-                nav_pos = index_nav.get(idx)
-        else:
-            idx = 0
-            nav_pos = None
-
-        if total == 0 or nav_pos is None or not options:
-            date_nav_text = "Date option: 0 / 0"
-            variant_nav_text = "Variant: 0 / 0"
-            same_date_indices: list[int] = []
-            date_option_pos = -1
-            variant_pos = -1
-
-            if card is not None:
-                card.empty_label.setText(
-                    f"No schedules were generated for {_display_period_key(period_key)}."
-                )
-                card.empty_label.setVisible(True)
-                card.cal_table.setVisible(False)
-        else:
-            date_option_pos, variant_pos = nav_pos
-            same_date_indices = options[date_option_pos][1]
-
-            date_total_text = f"{len(options):,}"
-            if has_more:
-                date_total_text += "+"
-
-            date_nav_text = (
-                f"Date option: {date_option_pos + 1:,} / {date_total_text}"
-            )
-            variant_nav_text = (
-                f"Variant for these dates: {variant_pos + 1:,} / {len(same_date_indices):,}"
-            )
-
-            if card is not None:
-                card.empty_label.setVisible(False)
-                card.cal_table.setVisible(True)
-
-        if card is None:
-            self._update_summary()
-            return
-
-        card.date_counter_label.setText(date_nav_text)
-        card.counter_label.setText(variant_nav_text)
-
-        card.date_jump_input.setEnabled(total > 0)
-        card.date_jump_input.setPlaceholderText(
-            str(date_option_pos + 1)
-            if total > 0 and date_option_pos >= 0
-            else "#"
-        )
-
-        card.variant_jump_input.setEnabled(total > 0)
-        card.variant_jump_input.setPlaceholderText(
-            str(variant_pos + 1)
-            if total > 0 and variant_pos >= 0
-            else "#"
-        )
-
-        card.prev_date_btn.setEnabled(total > 0 and date_option_pos > 0)
-        card.next_date_btn.setEnabled(
-            total > 0 and (date_option_pos < len(options) - 1 or has_more)
-        )
-
-        if total > 0 and same_date_indices:
-            card.prev_btn.setEnabled(variant_pos > 0)
-            card.next_btn.setEnabled(variant_pos < len(same_date_indices) - 1)
-        else:
-            card.prev_btn.setEnabled(False)
-            card.next_btn.setEnabled(False)
-
-        card.load_more_btn.setVisible(has_more)
-        ranking_active = self.is_ranking_active()
-        card.load_more_btn.setEnabled(
-            has_more
-            and period_key not in self._lm.procs
-            and period_key not in self._lm.auto_load_periods
-            and not ranking_active
-        )
-        if ranking_active and has_more:
-            card.load_more_btn.setText("Ranking in progress")
-        elif has_more and period_key not in self._lm.procs:
-            card.load_more_btn.setText(f"⟳  +{LOAD_BATCH_SIZE:,} more options")
-
-        active_mode = self._lm.auto_load_modes.get(period_key)
-        if not has_more and active_mode == _AUTO_MODE_DATES:
-            self._lm.stop_auto_load(period_key, refresh=False)
-
-        has_classroom_variants = self._has_classroom_feature_results(period_key)
-        # Imported shortlist files are read-only, but they may still contain
-        # multiple classroom/time-slot choices. Allow browsing those imported
-        # variants; only Load More / Auto controls stay hidden for imports.
-        card.variant_navigation.setVisible(has_classroom_variants)
-        card.auto_date_btn.setVisible(
-            not self._is_imported_schedule
-            and (has_more or active_mode == _AUTO_MODE_DATES)
-        )
-        card.auto_variant_btn.setVisible(
-            not self._is_imported_schedule
-            and (has_classroom_variants or active_mode == _AUTO_MODE_VARIANTS)
-        )
-
-        if not self._is_imported_schedule:
-            self._lm.update_auto_load_button(period_key)
-        self._refresh_favorite_buttons()
-
-        if not repaint_calendar:
-            self._update_summary()
-            return
-
-        if schedules:
-            self._cell_data[period_key] = self._calendar.populate(
-                card.cal_table,
-                schedules[self._period_indices[period_key]],
-                self._courses_by_id,
-                self._prog_color_map,
-                period_key,
-            )
-        else:
-            card.cal_table.clearContents()
-            card.cal_table.setRowCount(0)
-
-        self._update_summary()
 
     def _update_summary(self) -> None:
         if not self._schedules_by_period:
@@ -1536,53 +1393,7 @@ class _ResultsPanel(QWidget):
         col: int,
         click_pos: QPoint | None = None,
     ) -> None:
-        cell_info = self._cell_data.get(period_key, {}).get((row, col))
-
-        if cell_info is None:
-            return
-
-        exam_date, course_ids, classroom_assignments, unassigned_exams, groups = (
-            cell_info
-        )
-
-        if not course_ids:
-            return
-
-        all_course_ids = list(course_ids)
-        all_classroom_assignments = classroom_assignments
-        all_unassigned_exams = unassigned_exams
-
-        # Spec 4.5: when the cell renders multiple side-by-side slot columns,
-        # open only the exams of the column the user actually clicked.
-        visible_ids = self._slot_filter_for_click(
-            period_key, row, col, groups, click_pos
-        )
-        if visible_ids is not None:
-            course_ids = visible_ids
-            classroom_assignments = {
-                cid: classroom_assignments.get(cid, []) for cid in course_ids
-            }
-            unassigned_exams = {
-                cid: unassigned_exams[cid]
-                for cid in course_ids
-                if cid in unassigned_exams
-            }
-
-        from src.ui.exam_detail_dialog import ExamDetailDialog
-
-        dialog = ExamDetailDialog(
-            exam_date,
-            course_ids,
-            self._courses_by_id,
-            self._prog_color_map,
-            classroom_assignments,
-            unassigned_exams,
-            parent=self,
-            all_course_ids=all_course_ids,
-            all_classroom_assignments=all_classroom_assignments,
-            all_unassigned_exams=all_unassigned_exams,
-        )
-        dialog.exec()
+        self._card_refresh.on_cell_clicked(period_key, row, col, click_pos)
 
     def _slot_filter_for_click(
         self,
@@ -1592,29 +1403,13 @@ class _ResultsPanel(QWidget):
         groups: "list[dict] | None",
         click_pos: QPoint | None = None,
     ) -> "list[str] | None":
-        """Return the course ids of the slot column under the cursor, or None.
-
-        None means "no per-slot narrowing" — caller shows the whole date. When
-        the cell is split into N slot columns, map the cursor's x offset within
-        the cell to the matching column and return just its course ids.
-        """
-        if not groups or click_pos is None:
-            return None
-
-        card = self._cards.get(period_key)
-        table = card.cal_table if card else None
-        if table is None:
-            return None
-
-        item = table.item(row, col)
-        if item is None:
-            return None
-
-        rect = table.visualItemRect(item)
-        if rect.width() <= 0:
-            return None
-
-        return _course_ids_for_click_position(groups, rect, click_pos)
+        return self._card_refresh.slot_filter_for_click(
+            period_key,
+            row,
+            col,
+            groups,
+            click_pos,
+        )
 
     def _show_message(
         self,
