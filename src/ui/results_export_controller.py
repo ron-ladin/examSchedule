@@ -37,17 +37,12 @@ class ResultsExportController:
         return False
 
     def export_favorite_at(self, row: int, close_dialog=None) -> bool:
-        shortlist_item = self._shortlist.schedule_for_shortlist_row(row)
-        if shortlist_item is None:
+        """Backward-compatible wrapper: export all shortlisted options."""
+        if row < 0:
             self._shortlist.show_missing_favorite_message()
             return False
 
-        favorite, schedule = shortlist_item
-        if self.export_schedule_selection({favorite.period_key: [schedule]}):
-            if close_dialog is not None:
-                close_dialog()
-            return True
-        return False
+        return self.export_shortlisted_schedules(close_dialog=close_dialog)
 
     def export_schedule_selection(
         self,

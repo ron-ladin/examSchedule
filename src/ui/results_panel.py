@@ -201,7 +201,9 @@ class _ResultsPanel(QWidget):
             display_period_key=_display_period_key,
         )
         self._export_controller = ResultsExportController(self, self._shortlist)
-        self._shortlist.set_export_favorite(self._export_favorite_at)
+        self._shortlist.set_export_shortlisted(
+            self._export_controller.export_shortlisted_schedules
+        )
         self._proctor_report_controller = ResultsProctorReportController(
             self,
             display_period_key=_display_period_key,

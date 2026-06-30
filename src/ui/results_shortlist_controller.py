@@ -54,10 +54,10 @@ class ResultsShortlistController:
     ) -> None:
         self._panel = panel
         self._display_period_key = display_period_key
-        self._export_favorite: Callable[..., bool] | None = None
+        self._export_shortlisted: Callable[..., bool] | None = None
 
-    def set_export_favorite(self, export_favorite: Callable[..., bool]) -> None:
-        self._export_favorite = export_favorite
+    def set_export_shortlisted(self, export_shortlisted: Callable[..., bool]) -> None:
+        self._export_shortlisted = export_shortlisted
 
     def clear_favorites(self) -> None:
         panel = self._panel
@@ -221,9 +221,9 @@ class ResultsShortlistController:
             row = dialog.favorites_list.currentRow()
             self.open_favorite_at(row, close_dialog=dialog.accept)
 
-        def export_selected(row: int) -> None:
-            if self._export_favorite is not None:
-                self._export_favorite(row, close_dialog=dialog.accept)
+        def export_selected() -> None:
+            if self._export_shortlisted is not None:
+                self._export_shortlisted(close_dialog=dialog.accept)
 
         def delete_selected() -> None:
             row = dialog.favorites_list.currentRow()
@@ -232,7 +232,7 @@ class ResultsShortlistController:
             dialog.remove_row(row, len(panel._favorite_schedules))
 
         dialog.openRequested.connect(lambda _row: open_selected())
-        dialog.exportRequested.connect(lambda row: export_selected(row))
+        dialog.exportRequested.connect(lambda _row: export_selected())
         dialog.deleteRequested.connect(lambda _row: delete_selected())
         dialog.exec()
 
