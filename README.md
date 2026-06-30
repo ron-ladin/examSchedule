@@ -5,7 +5,7 @@
 ### *Turning an NP-Hard scheduling nightmare into ranked, conflict-free timetables.*
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![Tests](https://img.shields.io/badge/Tests-819%20passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#-testing)
+[![Tests](https://img.shields.io/badge/Tests-821%20passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#-testing)
 [![UI](https://img.shields.io/badge/UI-PyQt6-41CD52?style=for-the-badge&logo=qt&logoColor=white)](https://pypi.org/project/PyQt6/)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](#-license)
 
@@ -232,7 +232,7 @@ pytest tests/ -m "not slow" --cov=src --cov-report=term-missing
 pytest tests/ -m slow
 ```
 
-The suite currently runs **819 tests** across unit, integration, and end-to-end layers (excluding slow/performance tests marked `@pytest.mark.slow`, which run in a separate CI workflow).
+The suite currently runs **821 tests** across unit, integration, and end-to-end layers (excluding slow/performance tests marked `@pytest.mark.slow`, which run in a separate CI workflow).
 
 > **UI tests** run headless in CI via `QT_QPA_PLATFORM=offscreen` and system Qt libraries (CI is pinned to Python 3.11 for PyQt6 stability). Locally, `pytest.importorskip` skips those tests automatically when PyQt6 is not installed — no `QT_QPA_PLATFORM` override is needed.
 

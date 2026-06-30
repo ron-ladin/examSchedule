@@ -72,6 +72,7 @@ from src.domain.sorting import SortingConfig
 from src.domain.threshold import ThresholdSettings
 from src.engine.generation_workers import ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
 from src.engine.mp_context import worker_context
+from src.ui.focus_utils import restore_focus_on_macos
 from src.engine.ranking_worker import RankingWorkerResult, run_ranking_worker
 from src.ui.active_limits_panel import ActiveLimitsPanel
 from src.ui.favorite_schedules import (
@@ -1996,6 +1997,7 @@ class _ResultsPanel(QWidget):
 
         try:
             proc.start()
+            restore_focus_on_macos(self)
         except Exception as exc:
             self._cleanup_ranking_worker(terminate=True)
             self._ranking_config = None

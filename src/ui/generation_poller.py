@@ -18,6 +18,7 @@ from queue import Empty as _QueueEmpty
 from typing import Any
 
 from src.engine.mp_context import worker_context
+from src.ui.focus_utils import restore_focus_on_macos
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -579,6 +580,7 @@ class GenerationPoller(QObject):
                 process=process,
             )
             process.start()
+            restore_focus_on_macos(self.parent())
             # Timeout budget starts only after the OS accepts this worker start;
             # pending periods do not consume any hard-timeout budget.
             state.started_at = time.monotonic()
