@@ -837,11 +837,18 @@ def test_delayed_generation_start_failure_cleans_heavy_task(monkeypatch):
     def fail_start(_selected, _color_map, _allow_unassigned):
         raise RuntimeError("poller start failed")
 
+    critical_calls: list[tuple] = []
+
     monkeypatch.setattr(screen._poller, "start", fail_start)
     monkeypatch.setattr(
         screen,
         "_notify_settings_state",
         lambda is_running: settings_states.append(is_running),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: critical_calls.append((args, kwargs)),
     )
     screen.heavy_task_state_changed.connect(
         lambda kind, active: heavy_events.append((kind, active))
@@ -851,17 +858,19 @@ def test_delayed_generation_start_failure_cleans_heavy_task(monkeypatch):
     controller.performance_metrics.start_generation(LOAD_BATCH_SIZE)
     screen._gen_btn.setEnabled(False)
 
-    with pytest.raises(RuntimeError, match="poller start failed"):
-        screen._start_generation_polling(
-            ["83101"],
-            {"83101": "#2563EB"},
-            False,
-        )
+    # Must NOT re-raise: this method runs inside a QTimer.singleShot callback,
+    # and an exception escaping a Qt slot triggers SIGABRT on macOS.
+    screen._start_generation_polling(
+        ["83101"],
+        {"83101": "#2563EB"},
+        False,
+    )
 
     assert controller.heavy_task_kind is None
     assert heavy_events == [("generation", False)]
     assert settings_states == [False]
     assert screen._gen_btn.isEnabled() is True
+    assert len(critical_calls) == 1
 
     screen.close()
     app.processEvents()
