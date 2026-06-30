@@ -229,10 +229,26 @@ def test_settings_sort_change_does_not_call_resort(monkeypatch, qapp):
 def test_apply_ranking_starts_async_and_does_not_call_resort(monkeypatch, qapp):
     panel, controller, _period_key, _first, _second = _panel_with_memory_results(qapp)
     _FakeRunningProcess.created.clear()
+    created = {"queues": [], "procs": []}
+
+    class _ContextQueue(queue.Queue):
+        def close(self):
+            pass
+
+    def fake_queue():
+        queue_obj = _ContextQueue()
+        created["queues"].append(queue_obj)
+        return queue_obj
+
+    def fake_process(*args, **kwargs):
+        proc = _FakeRunningProcess(*args, **kwargs)
+        created["procs"].append(proc)
+        return proc
+
     monkeypatch.setattr(controller, "resort", lambda _config: pytest.fail("resort called"))
     monkeypatch.setattr(
         "src.ui.results_panel.worker_context",
-        lambda: types.SimpleNamespace(Process=_FakeRunningProcess, Queue=queue.Queue),
+        lambda: types.SimpleNamespace(Process=fake_process, Queue=fake_queue),
     )
 
     try:
@@ -241,6 +257,9 @@ def test_apply_ranking_starts_async_and_does_not_call_resort(monkeypatch, qapp):
         assert len(_FakeRunningProcess.created) == 1
         proc = _FakeRunningProcess.created[0]
         assert proc.target is run_ranking_worker
+        assert created["queues"] == [panel._ranking_queue]
+        assert created["procs"] == [proc]
+        assert proc.args[0] is panel._ranking_queue
         assert proc.started is True
         assert panel._ranking_proc is proc
         assert panel._ranking_btn.isEnabled() is False

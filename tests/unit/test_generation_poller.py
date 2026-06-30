@@ -380,10 +380,11 @@ def test_start_spawns_only_bounded_period_workers(monkeypatch):
         gp._PER_WORKER_QUEUE_MAXSIZE,
     ]
 
-    for proc in created["procs"]:
+    for index, proc in enumerate(created["procs"]):
         assert proc.construct_kwargs["target"] is gp._run_generation_process
         assert proc.construct_kwargs["daemon"] is True
-        _queue, _courses, worker_periods, _selected = proc.construct_kwargs["args"]
+        queue_obj, _courses, worker_periods, _selected = proc.construct_kwargs["args"]
+        assert queue_obj is created["queues"][index]
         assert len(worker_periods) == 1
         worker_kwargs = proc.construct_kwargs["kwargs"]
         assert worker_kwargs["stream"] is True

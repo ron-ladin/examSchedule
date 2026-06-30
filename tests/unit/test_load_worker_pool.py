@@ -152,6 +152,18 @@ def test_get_or_start_starts_new_worker_for_different_period(monkeypatch):
     assert pool._procs["SPRING - Bet"] is new_proc
 
 
+def test_get_or_start_creates_queues_and_process_from_same_context(monkeypatch):
+    pool = LoadWorkerPool()
+    created = _patch_spawning(monkeypatch)
+
+    task_q, result_q, proc = pool.get_or_start("FALL - Aleph")
+
+    _args, kwargs = proc.construct_args
+    assert created["queues"] == [task_q, result_q]
+    assert created["procs"] == [proc]
+    assert kwargs["args"] == (task_q, result_q)
+
+
 def test_get_or_start_replaces_dead_worker(monkeypatch):
     pool = LoadWorkerPool()
     _task_q, _result_q, dead = _seed_worker(pool, "FALL - Aleph")
