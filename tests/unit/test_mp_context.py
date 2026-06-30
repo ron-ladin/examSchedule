@@ -96,6 +96,38 @@ def test_worker_context_falls_back_when_preferred_context_raises_value_error(
         _reset_cache()
 
 
+def test_worker_context_logs_selected_start_method(monkeypatch, caplog):
+    _reset_cache()
+
+    class FakeContext:
+        def __init__(self, method: str) -> None:
+            self.method = method
+
+        def get_start_method(self) -> str:
+            return self.method
+
+    monkeypatch.setattr(mp_context, "_preferred_methods", lambda: ("forkserver",))
+    monkeypatch.setattr(
+        mp_context.multiprocessing,
+        "get_all_start_methods",
+        lambda: ["forkserver"],
+    )
+    monkeypatch.setattr(
+        mp_context.multiprocessing,
+        "get_context",
+        lambda method=None: FakeContext(method or "default"),
+    )
+    caplog.set_level("INFO", logger=mp_context.__name__)
+
+    try:
+        ctx = mp_context.worker_context()
+
+        assert ctx.get_start_method() == "forkserver"
+        assert "Using multiprocessing start method: forkserver" in caplog.text
+    finally:
+        _reset_cache()
+
+
 def test_worker_target_modules_do_not_import_ui_code():
     worker_targets = [
         Path("src/engine/generation_workers.py"),

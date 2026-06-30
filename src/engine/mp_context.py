@@ -20,9 +20,12 @@ context, so every spawn site goes through :func:`worker_context`.
 
 from __future__ import annotations
 
+import logging
 import multiprocessing
 import sys
 from multiprocessing.context import BaseContext
+
+logger = logging.getLogger(__name__)
 
 _context: BaseContext | None = None
 
@@ -57,10 +60,15 @@ def worker_context() -> BaseContext:
 
         try:
             _context = multiprocessing.get_context(method)
+            logger.info("Using multiprocessing start method: %s", method)
             return _context
         except ValueError:
             continue
 
     # Should never happen: get_all_start_methods always returns at least one.
     _context = multiprocessing.get_context()
+    logger.info(
+        "Using multiprocessing start method: %s",
+        _context.get_start_method(),
+    )
     return _context
