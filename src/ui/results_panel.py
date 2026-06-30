@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 from queue import Empty as _QueueEmpty
 
-from PyQt6.QtCore import QEvent, QPoint, QSignalBlocker, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -83,6 +83,7 @@ from src.ui.results_shortlist_controller import (
     ResultsShortlistController,
     _SHORTLIST_ADD_BUTTON_STYLE,
 )
+from src.ui.results_period_selector_controller import ResultsPeriodSelectorController
 from src.ui.results_proctor_report_controller import ResultsProctorReportController
 from src.ui.result_summary_presenter import ResultSummaryPresenter
 from src.ui.widgets.calendar_view import CalendarRenderer
@@ -219,6 +220,10 @@ class _ResultsPanel(QWidget):
             self._export_controller.export_shortlisted_schedules
         )
         self._proctor_report_controller = ResultsProctorReportController(
+            self,
+            display_period_key=_display_period_key,
+        )
+        self._period_selector_controller = ResultsPeriodSelectorController(
             self,
             display_period_key=_display_period_key,
         )
@@ -1223,129 +1228,48 @@ class _ResultsPanel(QWidget):
         return self._nav_model.date_options(period_key)
 
     def _period_key_at_tab_index(self, index: int) -> str | None:
-        """Return the period key displayed by tab *index*, if any."""
-        period_keys = list(self._schedules_by_period)
-        if 0 <= index < len(period_keys):
-            return period_keys[index]
-        return None
+        return self._period_selector_controller.period_key_at_tab_index(index)
 
     @staticmethod
     def _period_parts(period_key: str) -> tuple[str, str]:
-        """Return (semester, moed) for a period key."""
-        if " - " in period_key:
-            semester, moed = period_key.split(" - ", 1)
-            return semester.strip(), moed.strip()
-        if " — " in period_key:
-            semester, moed = period_key.split(" — ", 1)
-            return semester.strip(), moed.strip()
-        return period_key.strip(), ""
+        return ResultsPeriodSelectorController.period_parts(period_key)
 
     def _period_keys_for_semester(self, semester: str) -> list[str]:
-        return [
-            key
-            for key in self._period_keys_for_selector()
-            if self._period_parts(key)[0] == semester
-        ]
+        return self._period_selector_controller.period_keys_for_semester(semester)
 
     def _period_keys_for_selector(self) -> list[str]:
-        """Return all periods the user can inspect, including empty ones."""
-        return list(self._schedules_by_period)
+        return self._period_selector_controller.period_keys_for_selector()
 
     def _first_period_with_results(self) -> str | None:
-        """Return the first period that currently has visible schedules."""
-        for key, schedules in self._schedules_by_period.items():
-            if schedules:
-                return key
-        return None
+        return self._period_selector_controller.first_period_with_results()
 
     def _refresh_period_selector(self, preferred_key: str | None = None) -> None:
-        """Populate the compact semester/moed selector from available periods."""
-        if not hasattr(self, "_semester_combo"):
-            return
-
-        period_keys = self._period_keys_for_selector()
-        self._period_selector.setVisible(bool(period_keys))
-        if not period_keys:
-            return
-
-        current_key = (
-            preferred_key
-            or self._first_period_with_results()
-            or self._current_period_key()
-            or period_keys[0]
-        )
-        current_semester, _ = self._period_parts(current_key)
-
-        semesters: list[str] = []
-        for key in period_keys:
-            semester, _moed = self._period_parts(key)
-            if semester not in semesters:
-                semesters.append(semester)
-
-        with QSignalBlocker(self._semester_combo):
-            self._semester_combo.clear()
-            for semester in semesters:
-                self._semester_combo.addItem(display_semester(semester), semester)
-            semester_index = max(0, self._semester_combo.findData(current_semester))
-            self._semester_combo.setCurrentIndex(semester_index)
-            current_semester = self._semester_combo.currentData()
-
-        self._populate_moed_selector(current_semester, current_key)
+        self._period_selector_controller.refresh_period_selector(preferred_key)
 
     def _populate_moed_selector(
         self,
         semester: str,
         preferred_key: str | None = None,
     ) -> None:
-        period_keys = self._period_keys_for_semester(semester)
-        with QSignalBlocker(self._moed_combo):
-            self._moed_combo.clear()
-            for key in period_keys:
-                _semester, moed = self._period_parts(key)
-                self._moed_combo.addItem(moed or _display_period_key(key), key)
-            preferred_index = (
-                self._moed_combo.findData(preferred_key)
-                if preferred_key is not None
-                else -1
-            )
-            self._moed_combo.setCurrentIndex(max(0, preferred_index))
-
-        selected_key = self._moed_combo.currentData()
-        if selected_key:
-            self._select_period_key(selected_key)
+        self._period_selector_controller.populate_moed_selector(
+            semester,
+            preferred_key,
+        )
 
     def _select_period_key(self, period_key: str) -> None:
-        period_keys = list(self._schedules_by_period)
-        try:
-            index = period_keys.index(period_key)
-        except ValueError:
-            return
-        if self._period_tabs.currentIndex() != index:
-            self._period_tabs.setCurrentIndex(index)
-        else:
-            self._on_period_tab_changed(index)
+        self._period_selector_controller.select_period_key(period_key)
 
     def _on_period_semester_changed(self, _index: int) -> None:
-        semester = self._semester_combo.currentData()
-        if semester:
-            self._populate_moed_selector(semester)
+        self._period_selector_controller.on_period_semester_changed(_index)
 
     def _on_period_moed_changed(self, _index: int) -> None:
-        period_key = self._moed_combo.currentData()
-        if period_key:
-            self._select_period_key(period_key)
+        self._period_selector_controller.on_period_moed_changed(_index)
 
     def _current_period_key(self) -> str | None:
-        """Return the period key for the currently visible tab."""
-        return self._period_key_at_tab_index(self._period_tabs.currentIndex())
+        return self._period_selector_controller.current_period_key()
 
     def _on_period_tab_changed(self, index: int) -> None:
-        """Refresh a period lazily when it becomes visible."""
-        period_key = self._period_key_at_tab_index(index)
-        if period_key is not None and period_key in self._cards:
-            if hasattr(self, "_moed_combo") and self._moed_combo.currentData() != period_key:
-                self._refresh_period_selector(preferred_key=period_key)
-            self._refresh_period_card(period_key)
+        self._period_selector_controller.on_period_tab_changed(index)
 
     def _nav_position_for_index(
         self,
