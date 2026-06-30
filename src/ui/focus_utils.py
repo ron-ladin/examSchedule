@@ -34,9 +34,9 @@ def restore_focus_on_macos(widget: QWidget | None) -> None:
         return
 
     def restore() -> None:
-        window.showNormal()
-        window.raise_()
-        window.activateWindow()
+        if window.isVisible():
+            window.raise_()
+            window.activateWindow()
 
     QTimer.singleShot(0, restore)
     QTimer.singleShot(_FOCUS_RETRY_DELAY_MS, restore)

@@ -1,6 +1,7 @@
 """Regression tests for the shared worker multiprocessing context."""
 
 import multiprocessing
+from pathlib import Path
 
 import src.engine.mp_context as mp_context
 from src.engine.mp_context import worker_context
@@ -52,3 +53,48 @@ def test_worker_context_uses_platform_preferred_available_method(monkeypatch):
         assert method == expected
     finally:
         _reset_cache()
+
+
+def test_worker_target_modules_do_not_import_ui_code():
+    worker_targets = [
+        Path("src/engine/generation_workers.py"),
+        Path("src/engine/ranking_worker.py"),
+        Path("src/engine/load_worker_pool.py"),
+    ]
+    forbidden_import_prefixes = (
+        "from PyQt6",
+        "import PyQt6",
+        "from src.ui",
+        "import src.ui",
+    )
+
+    for path in worker_targets:
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            stripped = line.strip()
+            assert not stripped.startswith(forbidden_import_prefixes), (
+                f"{path} imports UI code in worker context: {line}"
+            )
+        assert "QApplication" not in text
+        assert "ExamSchedulerApp" not in text
+
+
+def test_worker_startup_paths_use_shared_context_for_processes_and_queues():
+    startup_sources = {
+        Path("src/ui/generation_poller.py"): "worker_context()",
+        Path("src/engine/load_worker_pool.py"): "worker_context()",
+        Path("src/ui/result_ranking_controller.py"): "_worker_context_provider()",
+    }
+
+    for path, context_call in startup_sources.items():
+        text = path.read_text(encoding="utf-8")
+        assert context_call in text
+        assert "ctx.Queue(" in text
+        assert "ctx.Process(" in text
+        assert "multiprocessing.Queue(" not in text
+        assert "multiprocessing.Process(" not in text
+        assert "from multiprocessing import Queue" not in text
+        assert "from multiprocessing import Process" not in text
+
+    results_panel = Path("src/ui/results_panel.py").read_text(encoding="utf-8")
+    assert "worker_context_provider=lambda: worker_context()" in results_panel
