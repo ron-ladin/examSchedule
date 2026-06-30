@@ -1125,13 +1125,18 @@ def test_timed_out_period_is_dropped_and_run_continues():
     fast_state.queue.put(GenerationDone.done(set(), period_key="FALL - Bet"))
     fast_state.process.finish(0)
 
-    # One poll: drains fast worker's partial + done, then detects slow worker timeout.
+    # First poll drains the fast worker's partial and detects the slow timeout.
+    poller._poll(run_id)
+    assert failed == []
+    assert succeeded == []
+    assert slow_state.process.terminated == 1
+
+    # Second poll drains the fast worker's Done marker and finalises the run.
     poller._poll(run_id)
 
     assert failed == []
     assert len(succeeded) == 1
     assert any("FALL - Aleph" in w for w in warnings)
-    assert slow_state.process.terminated == 1  # timed-out worker was killed
     assert poller._active_run_id is None        # run closed cleanly
 
 
@@ -1168,15 +1173,14 @@ def test_draining_is_bounded_per_tick():
     poller = _new_poller()
     ready = _collect(poller.period_ready)
     run_id = None
-    for i in range(gp._MAX_DRAIN_PER_TICK + 3):
+    total_messages = gp._MAX_DRAIN_PER_TICK + 3
+    for i in range(total_messages):
         run_id, state = _arm_worker(poller, f"P{i}", alive=True)
         state.queue.put(GenerationResult.ok({f"P{i}": []}, {}, set()))
 
-    poller._poll(run_id)
-    assert len(ready) == gp._MAX_DRAIN_PER_TICK
-
-    poller._poll(run_id)
-    assert len(ready) == gp._MAX_DRAIN_PER_TICK + 3
+    for expected_ready in range(1, total_messages + 1):
+        poller._poll(run_id)
+        assert len(ready) == expected_ready
     poller.stop()
 
 
