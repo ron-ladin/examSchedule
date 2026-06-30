@@ -829,48 +829,95 @@ def test_generate_emits_loading_state_before_poller_starts(monkeypatch):
     app.processEvents()
 
 
-def test_delayed_generation_start_failure_cleans_heavy_task(monkeypatch):
+def test_delayed_generation_start_failure_emits_generation_failed(monkeypatch):
+    """A delayed poller-start failure must route through the failure flow.
+
+    _start_generation_polling runs inside a QTimer.singleShot callback. It must
+    not re-raise (that aborts the app on macOS); instead it routes the error
+    through _fail(), which emits generation_failed and restores state.
+    """
     app, controller, screen = _generation_ready_config_screen()
-    settings_states: list[bool] = []
+    failures: list[str] = []
     heavy_events: list[tuple[str, bool]] = []
 
     def fail_start(_selected, _color_map, _allow_unassigned):
         raise RuntimeError("poller start failed")
 
-    critical_calls: list[tuple] = []
-
     monkeypatch.setattr(screen._poller, "start", fail_start)
-    monkeypatch.setattr(
-        screen,
-        "_notify_settings_state",
-        lambda is_running: settings_states.append(is_running),
+    screen.generation_failed.connect(failures.append)
+    screen.heavy_task_state_changed.connect(
+        lambda kind, active: heavy_events.append((kind, active))
     )
+
+    screen._on_generate()
+    assert controller.heavy_task_kind == "generation"
+    assert failures == []
+
+    _wait_for_qt_timers(80)
+
+    assert len(failures) == 1
+    assert controller.heavy_task_kind is None
+    assert ("generation", False) in heavy_events
+    assert screen._gen_btn.isEnabled() is True
+
+    screen.close()
+    app.processEvents()
+
+
+def test_input_screen_returns_to_config_when_delayed_generation_start_fails(
+    monkeypatch,
+):
+    """End-to-end: a delayed start failure returns InputScreen to the config
+    screen, stops the loading spinner, and shows exactly one error dialog."""
+    app = _get_qapp()
+    controller = DesktopController()
+    controller._courses = [
+        Course(
+            id="11111",
+            name="Calculus",
+            instructor="Dr. Cohen",
+            evaluation_type="Exam",
+            offerings=[CourseOffering("83101", 1, "FALL", "Obligatory")],
+        )
+    ]
+    controller._exam_periods = [
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    ]
+    screen = InputScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    config = screen._config
+    config._refresh_programme_list()
+    _find_programme_row(config, "83101").set_checked(True)
+    config._refresh_periods_card()
+    config._update_gen_btn()
+
+    def fail_start(_selected, _color_map, _allow_unassigned):
+        raise RuntimeError("poller start failed")
+
+    critical_calls: list[tuple] = []
+    monkeypatch.setattr(config._poller, "start", fail_start)
     monkeypatch.setattr(
         QMessageBox,
         "critical",
         lambda *args, **kwargs: critical_calls.append((args, kwargs)),
     )
-    screen.heavy_task_state_changed.connect(
-        lambda kind, active: heavy_events.append((kind, active))
-    )
 
-    assert controller.begin_heavy_task("generation") is True
-    controller.performance_metrics.start_generation(LOAD_BATCH_SIZE)
-    screen._gen_btn.setEnabled(False)
+    config._on_generate()
+    app.processEvents()
+    # We are on the results/loading screen while the delayed start is pending.
+    assert screen._stacked.currentIndex() == 1
 
-    # Must NOT re-raise: this method runs inside a QTimer.singleShot callback,
-    # and an exception escaping a Qt slot triggers SIGABRT on macOS.
-    screen._start_generation_polling(
-        ["83101"],
-        {"83101": "#2563EB"},
-        False,
-    )
+    _wait_for_qt_timers(80)
 
-    assert controller.heavy_task_kind is None
-    assert heavy_events == [("generation", False)]
-    assert settings_states == [False]
-    assert screen._gen_btn.isEnabled() is True
+    assert screen._stacked.currentIndex() == 0
+    assert screen._results._spin_timer.isActive() is False
     assert len(critical_calls) == 1
+    assert controller.heavy_task_kind is None
+
+    screen.close()
+    app.processEvents()
 
     screen.close()
     app.processEvents()
