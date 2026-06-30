@@ -1,10 +1,85 @@
 $$$$
-Building 507 - Room 201
-40
+Demo Mega Hall A
+2000
 $$$$
-Building 507 - Room 202
-60
+Demo Mega Hall B
+1800
 $$$$
-Building 604 - Auditorium 101
+Central Auditorium 100
+1500
+$$$$
+Engineering Auditorium 200
+1200
+$$$$
+Science Hall 300
+1000
+$$$$
+Capacity Hall 401
+900
+$$$$
+Capacity Hall 402
+850
+$$$$
+Capacity Hall 501
+750
+$$$$
+Capacity Hall 502
+700
+$$$$
+Lecture Hall 601
+600
+$$$$
+Lecture Hall 602
+550
+$$$$
+Lecture Hall 701
+450
+$$$$
+Lecture Hall 702
+420
+$$$$
+Room 801
+350
+$$$$
+Room 802
+320
+$$$$
+Room 803
+300
+$$$$
+Room 901
 250
+$$$$
+Room 902
+240
+$$$$
+Room 903
+220
+$$$$
+Room 1001
+180
+$$$$
+Room 1002
+160
+$$$$
+Room 1003
+140
+$$$$
+Room 1101
+120
+$$$$
+Room 1102
+110
+$$$$
+Room 1103
+100
+$$$$
+Room 1201
+90
+$$$$
+Room 1202
+80
+$$$$
+Room 1203
+70
 $$$$
