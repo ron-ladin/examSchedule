@@ -678,6 +678,57 @@ class TestStatefulDateOptions:
 
         assert created["count"] == 2
 
+    def test_sorting_only_change_reuses_date_cursor(self, monkeypatch):
+        states = {}
+        result_q = _SimpleQueue()
+        created = {"count": 0}
+        real_generator = gw.ScheduleGenerator
+
+        class _CountingGenerator(real_generator):
+            def __init__(self, *args, **kwargs):
+                created["count"] += 1
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(gw, "ScheduleGenerator", _CountingGenerator)
+        courses = _date_option_courses()
+        period = _date_option_period()
+
+        _run_date_options_from_state(
+            result_q,
+            states,
+            courses=courses,
+            exam_periods=[period],
+            selected_programs=["83101"],
+            settings=_settings(),
+            cap=1,
+            period_key="FALL - Aleph",
+            offset=0,
+        )
+        first = result_q.get()
+        assert first.success
+
+        sorting_only_settings = _settings(
+            sorting=SortingConfig(
+                rules=(SortRule(1, SortCriterion.SORT_MIN_DAYS_MANDATORY),)
+            )
+        )
+        _run_date_options_from_state(
+            result_q,
+            states,
+            courses=courses,
+            exam_periods=[period],
+            selected_programs=["83101"],
+            settings=sorting_only_settings,
+            cap=1,
+            period_key="FALL - Aleph",
+            offset=1,
+        )
+        second = result_q.get()
+
+        assert second.success
+        assert created["count"] == 1
+        assert len(states) == 1
+
     def test_independent_periods_keep_independent_cursors(self):
         states = {}
         result_q = _SimpleQueue()

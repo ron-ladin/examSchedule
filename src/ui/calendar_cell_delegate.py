@@ -180,7 +180,7 @@ class _CalendarCellDelegate(QStyledItemDelegate):
 
         if has_exams and bg is not None:
             stripe_color = bg.color() if isinstance(bg, QBrush) else QColor(bg)
-            stripe_color.setAlpha(210)
+            stripe_color.setAlpha(150)
             painter.fillRect(
                 QRect(rect.left(), rect.top(), _STRIPE_W, rect.height()),
                 stripe_color,

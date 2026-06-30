@@ -32,6 +32,7 @@ QPushButton = QtWidgets.QPushButton
 QListWidget = QtWidgets.QListWidget
 
 from src.controller import DesktopController
+from src.adapters.sqlite_schedule_store import StoredScheduleList
 from src.domain.classroom import Classroom
 from src.domain.classroom_assignment import ClassroomAssignment
 from src.domain.course import Course
@@ -48,6 +49,8 @@ from src.ui.exam_detail_dialog import ExamDetailDialog
 from src.ui.results_panel import _ResultsPanel
 from src.ui.settings_screen import SettingsScreen
 from src.ui.input_screen import InputScreen, ResultsScreen
+from src.ui.widgets.period_card_builder import CALENDAR_HOVER_TEXT_ROLE
+from src.ui.favorite_schedules import FavoriteSchedule, schedule_fingerprint
 
 
 def _get_qapp() -> QApplication:
@@ -70,6 +73,19 @@ def test_app_uses_logo_png_as_window_icon():
     assert not window.windowIcon().isNull()
     logo_path = Path(__file__).parent.parent.parent / "src" / "ui" / "assets" / "logo.png"
     assert logo_path.exists(), "logo.png asset must exist"
+
+    window.close()
+
+
+def test_app_applies_tooltip_style_to_qapplication():
+    """Qt tooltips are top-level widgets, so the app stylesheet must own them."""
+    app = _get_qapp()
+    window = ExamSchedulerApp()
+
+    assert "QToolTip" in app.styleSheet()
+    assert "background-color: #F8FAFC" in app.styleSheet()
+    assert app.palette().toolTipBase().color().name().lower() == "#f8fafc"
+    assert app.palette().toolTipText().color().name().lower() == "#172033"
 
     window.close()
 
@@ -297,6 +313,257 @@ def test_results_panel_includes_standard_period_tabs_even_when_empty():
         "SUMMER — Gimel",
     ]
 
+    assert panel._period_tabs.tabBar().isHidden() is True
+    assert panel._period_selector.isHidden() is False
+    assert [
+        panel._semester_combo.itemText(i)
+        for i in range(panel._semester_combo.count())
+    ] == ["FALL", "SPRING", "SUMMER"]
+    assert [
+        panel._moed_combo.itemText(i)
+        for i in range(panel._moed_combo.count())
+    ] == ["Aleph", "Bet", "Gimel"]
+
+    panel._semester_combo.setCurrentIndex(1)
+    panel._moed_combo.setCurrentIndex(1)
+    app.processEvents()
+
+    assert panel._current_period_key() == "SPRI - Bet"
+
+    panel.close()
+
+
+def test_results_panel_opens_first_period_that_has_schedules():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod(
+        "SPRI",
+        "Bet",
+        [(date(2026, 4, 10), date(2026, 4, 10))],
+    )
+    schedule = Schedule(period, {"10001": date(2026, 4, 10)})
+
+    panel.load({"SPRI - Bet": [schedule]}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    assert panel._current_period_key() == "SPRI - Bet"
+    assert panel._semester_combo.currentText() == "SPRING"
+    assert panel._moed_combo.currentText() == "Bet"
+    assert panel._semester_combo.count() == 3
+    assert panel._moed_combo.count() == 3
+    assert panel._cards["SPRI - Bet"].cal_table.isVisible() is True
+
+    panel._moed_combo.setCurrentText("Aleph")
+    app.processEvents()
+
+    assert panel._current_period_key() == "SPRI - Aleph"
+    assert panel._cards["SPRI - Aleph"].empty_label.isVisible() is True
+    empty_text = panel._cards["SPRI - Aleph"].empty_label.text()
+    assert "No schedules were generated" in empty_text
+    assert "SPRING" in empty_text
+    assert "Aleph" in empty_text
+
+    panel.close()
+
+
+def test_results_panel_can_add_current_schedule_to_shortlist():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod(
+        "FALL",
+        "Aleph",
+        [(date(2026, 1, 29), date(2026, 2, 5))],
+    )
+    schedules = [
+        Schedule(period, {"10001": date(2026, 1, 29)}),
+        Schedule(period, {"10001": date(2026, 2, 5)}),
+    ]
+
+    panel.load({"FALL - Aleph": schedules}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    assert panel._favorites_btn.text() == "Shortlist (0)"
+    assert panel._favorites_btn.isEnabled() is False
+
+    panel._period_indices["FALL - Aleph"] = 1
+    panel._refresh_period_card("FALL - Aleph")
+    panel._save_visible_favorite()
+    app.processEvents()
+
+    assert len(panel._favorite_schedules) == 1
+    assert panel._favorite_schedules[0].period_key == "FALL - Aleph"
+    assert panel._favorite_schedules[0].signature == schedule_fingerprint(schedules[1])
+    assert "Classroom choice" not in panel._favorite_schedules[0].label
+    assert "Variant" not in panel._favorite_schedules[0].label
+    assert panel._favorites_btn.text() == "Shortlist (1)"
+    assert panel._favorites_btn.isEnabled() is True
+    assert panel._save_favorite_btn.text() == "Remove from Shortlist"
+    assert "#DC2626" in panel._save_favorite_btn.styleSheet()
+
+    panel._save_current_favorite("FALL - Aleph")
+    assert len(panel._favorite_schedules) == 1
+    assert panel._cards["FALL - Aleph"].auto_date_btn.text() == "Auto Dates"
+    assert panel._cards["FALL - Aleph"].auto_variant_btn.text() == "Auto Variants"
+    assert panel._cards["FALL - Aleph"].date_jump_input.toolTip() == ""
+    assert panel._cards["FALL - Aleph"].variant_jump_input.toolTip() == ""
+
+    panel._toggle_visible_favorite()
+    assert len(panel._favorite_schedules) == 0
+    assert panel._favorites_btn.text() == "Shortlist (0)"
+    assert panel._favorites_btn.isEnabled() is False
+    assert panel._save_favorite_btn.text() == "Add to Shortlist"
+
+    panel.close()
+
+
+
+def test_shortlist_label_includes_classroom_choice_only_for_feature4_options():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod(
+        "FALL",
+        "Aleph",
+        [(date(2026, 1, 29), date(2026, 1, 29))],
+    )
+    offering = CourseOffering("83101", 1, "FALL", "Obligatory", 30)
+
+    def _schedule(room_id: str, slot_time: time) -> Schedule:
+        assignment = ClassroomAssignment(
+            exam=offering,
+            room=Classroom(room_id, 40),
+            slot=TimeSlot(slot_time),
+            date=date(2026, 1, 29),
+            students_assigned=30,
+            proctor_count=2,
+        )
+        return Schedule(
+            period,
+            {"10001": date(2026, 1, 29)},
+            {"10001": [assignment]},
+        )
+
+    first = _schedule("Room 101", time(9, 0))
+    second = _schedule("Room 102", time(13, 0))
+
+    panel.load({"FALL - Aleph": [first, second]}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    panel._period_indices["FALL - Aleph"] = 1
+    panel._refresh_period_card("FALL - Aleph")
+    panel._save_visible_favorite()
+
+    assert len(panel._favorite_schedules) == 1
+    assert panel._favorite_schedules[0].signature == schedule_fingerprint(second)
+    assert "Classroom choice 2" in panel._favorite_schedules[0].label
+    assert panel._save_favorite_btn.text() == "Remove from Shortlist"
+
+    panel.close()
+
+
+def test_favorite_opens_same_schedule_after_result_ranking():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 1), date(2026, 1, 3))])
+    first = Schedule(period, {"10001": date(2026, 1, 1)})
+    favorite_schedule = Schedule(period, {"10001": date(2026, 1, 2)})
+    third = Schedule(period, {"10001": date(2026, 1, 3)})
+
+    panel.load({"FALL - Aleph": [first, favorite_schedule, third]}, {}, {}, set())
+    panel._period_indices["FALL - Aleph"] = 1
+    panel._save_current_favorite("FALL - Aleph")
+
+    panel._schedules_by_period["FALL - Aleph"] = [third, first, favorite_schedule]
+    panel._period_indices["FALL - Aleph"] = 0
+    panel._rebuild_navigation_cache("FALL - Aleph")
+
+    assert panel._open_favorite_at(0) is True
+    assert panel._period_indices["FALL - Aleph"] == 2
+    assert panel._schedules_by_period["FALL - Aleph"][2] is favorite_schedule
+
+    panel.close()
+
+
+def test_favorite_does_not_open_wrong_schedule_when_order_changes():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 1), date(2026, 1, 3))])
+    saved = Schedule(period, {"10001": date(2026, 1, 2)})
+    replacement = Schedule(period, {"10001": date(2026, 1, 3)})
+
+    panel.load({"FALL - Aleph": [Schedule(period, {"10001": date(2026, 1, 1)}), saved]}, {}, {}, set())
+    panel._period_indices["FALL - Aleph"] = 1
+    panel._save_current_favorite("FALL - Aleph")
+
+    messages = []
+    panel._show_message = lambda title, text, icon: messages.append((title, text, icon))
+    panel._schedules_by_period["FALL - Aleph"] = [replacement]
+    panel._period_indices["FALL - Aleph"] = 0
+    panel._rebuild_navigation_cache("FALL - Aleph")
+
+    assert panel._open_favorite_at(0) is False
+    assert panel._period_indices["FALL - Aleph"] == 0
+    assert panel._schedules_by_period["FALL - Aleph"][0] is replacement
+    assert messages and messages[0][0] == "Shortlist Option Unavailable"
+
+    panel.close()
+
+
+def test_missing_favorite_signature_shows_clear_feedback():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 1), date(2026, 1, 2))])
+    missing = Schedule(period, {"10001": date(2026, 1, 2)})
+
+    panel.load({"FALL - Aleph": [Schedule(period, {"10001": date(2026, 1, 1)})]}, {}, {}, set())
+    panel._favorite_schedules.append(
+        FavoriteSchedule(
+            period_key="FALL - Aleph",
+            signature=schedule_fingerprint(missing),
+            label="Missing schedule",
+        )
+    )
+    messages = []
+    panel._show_message = lambda title, text, icon: messages.append((title, text, icon))
+
+    assert panel._open_favorite_at(0) is False
+    assert messages
+    assert messages[0][0] == "Shortlist Option Unavailable"
+    assert "no longer available" in messages[0][1]
+
+    panel.close()
+    app.processEvents()
+
+
+def test_streaming_results_switch_selector_to_ready_period():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod(
+        "SUMMER",
+        "Gimel",
+        [(date(2026, 8, 1), date(2026, 8, 1))],
+    )
+    schedule = Schedule(period, {"10001": date(2026, 8, 1)})
+
+    panel.begin_streaming()
+    panel.append_period({"SUMMER - Gimel": [schedule]}, {}, {}, set())
+    panel.show()
+    app.processEvents()
+
+    assert isinstance(panel.get_schedules("SUMMER - Gimel"), StoredScheduleList)
+    assert panel._current_period_key() == "SUMMER - Gimel"
+    assert panel._semester_combo.currentText() == "SUMMER"
+    assert panel._moed_combo.currentText() == "Gimel"
+
     panel.close()
 
 
@@ -429,6 +696,10 @@ def test_background_loading_control_is_hidden():
     app.processEvents()
 
     assert panel._cards["FALL - Aleph"].load_more_btn.isVisible() is False
+    assert panel._cards["FALL - Aleph"].auto_date_btn.toolTip() == ""
+    assert panel._cards["FALL - Aleph"].auto_variant_btn.toolTip() == ""
+    assert hasattr(panel._cards["FALL - Aleph"].auto_date_btn, "_light_hover_help")
+    assert hasattr(panel._cards["FALL - Aleph"].auto_variant_btn, "_light_hover_help")
     panel.close()
 
 
@@ -667,6 +938,37 @@ def test_unassigned_feature4_exam_is_visible_in_calendar_and_detail_dialog():
     assert table.item(0, 7).text() == "UNASSIGNED"
 
     dialog.close()
+    panel.close()
+
+
+def test_calendar_program_backgrounds_are_soft_enough_for_warm_colours():
+    app = _get_qapp()
+    period = ExamPeriod(
+        "FALL",
+        "Aleph",
+        [(date(2026, 1, 5), date(2026, 1, 5))],
+    )
+    offering = CourseOffering("83109", 1, "FALL", "Obligatory", 50)
+    course = Course("10004", "Advanced Materials", "Dr. Cohen", "Exam", [offering])
+    schedule = Schedule(period, {"10004": date(2026, 1, 5)})
+    controller = DesktopController()
+    controller.update_exam_periods([period])
+    panel = _ResultsPanel(controller)
+
+    panel.load(
+        {"FALL - Aleph": [schedule]},
+        {"10004": course},
+        {"83109": "#F59E0B"},
+        set(),
+    )
+    panel.show()
+    app.processEvents()
+
+    item = panel._cards["FALL - Aleph"].cal_table.item(0, 1)
+    assert item.background().color().alpha() == 32
+    assert item.toolTip() == ""
+    assert "click to view details" in item.data(CALENDAR_HOVER_TEXT_ROLE)
+
     panel.close()
 
 def test_edit_exam_periods_dialog_does_not_add_missing_periods_to_controller_until_edited():

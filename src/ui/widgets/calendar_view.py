@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
 from src.domain.course import Course
 from src.domain.schedule import Schedule
 from src.ui.calendar_cell_delegate import _group_exams_by_slot
+from src.ui.widgets.period_card_builder import CALENDAR_HOVER_TEXT_ROLE
 from src.ui.tokens import (
     COLOR_CAL_EXCLUDED_BG as _EXCLUDED_BG,
     programme_display_name,
@@ -77,7 +78,8 @@ class CalendarRenderer:
                 if course_ids:
                     # SCRUM-399: hovering a day shows how many exams it holds.
                     word = "exam" if len(course_ids) == 1 else "exams"
-                    item.setToolTip(
+                    item.setData(
+                        CALENDAR_HOVER_TEXT_ROLE,
                         f"{len(course_ids)} {word} on this day"
                         " · click to view details"
                     )
@@ -103,11 +105,11 @@ class CalendarRenderer:
                             + ", ".join(group["names"])
                         )
                     tooltip_lines.append("Click a time group to view its exams.")
-                    item.setToolTip("\n".join(tooltip_lines))
+                    item.setData(CALENDAR_HOVER_TEXT_ROLE, "\n".join(tooltip_lines))
 
                 if first_prog and first_prog in prog_color_map:
                     color = QColor(prog_color_map[first_prog])
-                    color.setAlpha(75)
+                    color.setAlpha(32)
                     item.setBackground(color)
                 elif current_date in excluded_dates:
                     item.setBackground(QColor(_EXCLUDED_BG))

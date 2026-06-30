@@ -58,17 +58,6 @@ class RankingDialog(QDialog):
         )
         layout.addWidget(title)
 
-        explanation = QLabel(
-            "Tick the rules that should rank your schedules, then drag the enabled "
-            "rows to set their priority (1 = highest). Apply re-orders the "
-            "schedules already in memory — it does not regenerate them."
-        )
-        explanation.setWordWrap(True)
-        explanation.setStyleSheet(
-            "font-size:12px; color:#475569; background:#EFF6FF;"
-            " border:1px solid #BFDBFE; border-radius:8px; padding:10px;"
-        )
-        layout.addWidget(explanation)
 
         self._sort_list = SortPriorityList()
         self._sort_list.load_config(current)
@@ -87,3 +76,4 @@ class RankingDialog(QDialog):
     def _on_apply(self) -> None:
         self.ranking_applied.emit(self._sort_list.to_config())
         self.accept()
+

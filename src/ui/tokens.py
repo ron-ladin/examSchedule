@@ -9,6 +9,23 @@ COLOR_CARD_BG    = "#FFFFFF"                   # White cards
 COLOR_HOVER      = "rgba(0, 90, 194, 0.06)"   # Subtle primary hover
 COLOR_PRIMARY    = "#005ac2"                   # Brand blue (design system)
 COLOR_SECONDARY  = "#004494"                   # Darker brand blue
+COLOR_TEXT_DARK = "#172033"
+COLOR_TEXT_MUTED = "#64748B"
+COLOR_SURFACE_SOFT = "#F8FAFC"
+COLOR_PANEL_BLUE = "#EEF6FF"
+COLOR_PANEL_BLUE_BORDER = "#BFDBFE"
+COLOR_PRIMARY_ACTION = "#0755B5"
+COLOR_PRIMARY_BUTTON = "#2563EB"
+COLOR_PRIMARY_BUTTON_HOVER = "#1D4ED8"
+COLOR_VIOLET = "#7C3AED"
+COLOR_VIOLET_SOFT = "#F5F3FF"
+COLOR_VIOLET_BORDER = "#C4B5FD"
+COLOR_DISABLED_BG = "#F1F5F9"
+COLOR_DISABLED_TEXT = "#94A3B8"
+COLOR_BORDER = "#CBD5E1"
+COLOR_BORDER_SOFT = "#DCE5F0"
+COLOR_DANGER = "#B91C1C"
+COLOR_DANGER_BORDER = "#FCA5A5"
 
 # ── 2. Exam Calendar Indicators ──────────────────────────────────────────────
 COLOR_CAL_ACTIVE_BG   = "#DBEAFE"  # Blue-100 active days

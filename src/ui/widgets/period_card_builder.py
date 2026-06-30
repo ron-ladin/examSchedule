@@ -6,7 +6,7 @@ controller, registers the resulting widget bundle in ``panel._cards`` and
 returns the card widget.
 """
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIntValidator
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -26,12 +26,117 @@ from src.ui.period_card import PeriodCardWidgets
 
 _NAV_REPEAT_DELAY_MS = 450
 _NAV_REPEAT_INTERVAL_MS = 120
+_HOVER_HELP_DELAY_MS = 550
+_HOVER_HELP_DURATION_MS = 3600
+CALENDAR_HOVER_TEXT_ROLE = Qt.ItemDataRole.UserRole.value + 2
+
+
+def _light_hover_bubble() -> QLabel:
+    bubble = QLabel()
+    bubble.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+    bubble.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+    bubble.setStyleSheet(
+        "QLabel { background: #F8FAFC; color: #172033;"
+        " border: 1px solid #C4B5FD; border-radius: 8px;"
+        " padding: 8px 12px; font-size: 12px; font-weight: 600; }"
+    )
+    bubble.hide()
+    return bubble
+
+
+class _LightHoverHelp(QObject):
+    """Delayed, auto-closing hover help for controls that need a light bubble."""
+
+    def __init__(self, widget: QWidget, text: str) -> None:
+        super().__init__(widget)
+        self._widget = widget
+        self._text = text
+        self._bubble = _light_hover_bubble()
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.timeout.connect(self._show)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._hide)
+        self._shown_for_current_hover = False
+        widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt override name
+        if obj is self._widget:
+            if event.type() == QEvent.Type.Enter:
+                self._shown_for_current_hover = False
+                self._show_timer.start(_HOVER_HELP_DELAY_MS)
+            elif event.type() in (
+                QEvent.Type.Leave,
+                QEvent.Type.Hide,
+                QEvent.Type.MouseButtonPress,
+            ):
+                self._show_timer.stop()
+                self._hide()
+        return super().eventFilter(obj, event)
+
+    def _show(self) -> None:
+        if self._shown_for_current_hover or not self._widget.isVisible():
+            return
+        self._shown_for_current_hover = True
+        self._bubble.setText(self._text)
+        self._bubble.adjustSize()
+        pos = self._widget.mapToGlobal(QPoint(0, self._widget.height() + 8))
+        self._bubble.move(pos)
+        self._bubble.show()
+        self._bubble.raise_()
+        self._hide_timer.start(_HOVER_HELP_DURATION_MS)
+
+    def _hide(self) -> None:
+        self._hide_timer.stop()
+        self._bubble.hide()
+
+
+def _attach_light_hover_help(widget: QWidget, text: str) -> None:
+    widget.setToolTip("")
+    widget._light_hover_help = _LightHoverHelp(widget, text)  # type: ignore[attr-defined]
 
 
 class _CalendarTable(QTableWidget):
     """Calendar table that reports where inside a date cell the user clicked."""
 
     calendarCellClicked = pyqtSignal(int, int, QPoint)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._hover_text = ""
+        self._pending_hover_text = ""
+        self._pending_hover_pos = QPoint()
+        self._shown_index = None
+        self._dismissed_index = None
+        self._hover_bubble = _light_hover_bubble()
+        self._hover_bubble.hide()
+        self._hover_show_timer = QTimer(self)
+        self._hover_show_timer.setSingleShot(True)
+        self._hover_show_timer.timeout.connect(self._show_pending_hover_bubble)
+        self._hover_hide_timer = QTimer(self)
+        self._hover_hide_timer.setSingleShot(True)
+        self._hover_hide_timer.timeout.connect(self._dismiss_hover_bubble)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        pos = event.position().toPoint()
+        index = self.indexAt(pos)
+        item = self.itemFromIndex(index) if index.isValid() else None
+        text = item.data(CALENDAR_HOVER_TEXT_ROLE) if item is not None else None
+        if text:
+            if index == self._dismissed_index:
+                super().mouseMoveEvent(event)
+                return
+            if index != self._shown_index:
+                self._dismissed_index = None
+                self._queue_hover_bubble(index, str(text), pos)
+            else:
+                self._pending_hover_pos = pos
+                if self._hover_bubble.isVisible():
+                    self._move_hover_bubble(pos)
+        else:
+            self._hide_hover_bubble()
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         index = self.indexAt(event.position().toPoint())
@@ -42,6 +147,58 @@ class _CalendarTable(QTableWidget):
                 event.position().toPoint(),
             )
         super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        self._hide_hover_bubble()
+        super().leaveEvent(event)
+
+    def hideEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        self._hide_hover_bubble()
+        super().hideEvent(event)
+
+    def _show_hover_bubble(self, text: str, pos: QPoint) -> None:
+        if text != self._hover_text:
+            self._hover_text = text
+            self._hover_bubble.setText(text)
+            self._hover_bubble.adjustSize()
+        self._move_hover_bubble(pos)
+        self._hover_bubble.show()
+        self._hover_bubble.raise_()
+        self._hover_hide_timer.start(_HOVER_HELP_DURATION_MS)
+
+    def _move_hover_bubble(self, pos: QPoint) -> None:
+        self._hover_bubble.move(self.viewport().mapToGlobal(pos + QPoint(18, 22)))
+
+    def _hide_hover_bubble(self) -> None:
+        self._hover_show_timer.stop()
+        self._hover_hide_timer.stop()
+        self._hover_text = ""
+        self._pending_hover_text = ""
+        self._shown_index = None
+        self._dismissed_index = None
+        self._hover_bubble.hide()
+
+    def _dismiss_hover_bubble(self) -> None:
+        self._dismissed_index = self._shown_index
+        self._hover_show_timer.stop()
+        self._hover_hide_timer.stop()
+        self._hover_text = ""
+        self._pending_hover_text = ""
+        self._hover_bubble.hide()
+
+    def _queue_hover_bubble(self, index, text: str, pos: QPoint) -> None:
+        self._hover_show_timer.stop()
+        self._hover_hide_timer.stop()
+        self._hover_bubble.hide()
+        self._hover_text = ""
+        self._shown_index = index
+        self._pending_hover_text = text
+        self._pending_hover_pos = pos
+        self._hover_show_timer.start(_HOVER_HELP_DELAY_MS)
+
+    def _show_pending_hover_bubble(self) -> None:
+        if self._pending_hover_text:
+            self._show_hover_bubble(self._pending_hover_text, self._pending_hover_pos)
 
 
 def _enable_press_and_hold(button: QPushButton) -> None:
@@ -110,7 +267,10 @@ def build_period_card(panel, period_key: str) -> QWidget:
     date_jump_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
     date_jump_input.setPlaceholderText("#")
     date_jump_input.setValidator(QIntValidator(1, 999999999, panel))
-    date_jump_input.setToolTip("Enter a date-option number and press Go.")
+    _attach_light_hover_help(
+        date_jump_input,
+        "Enter a date-option number and press Go.",
+    )
     date_jump_input.setStyleSheet(
         "QLineEdit { background:white; border:1px solid #CBD5E1;"
         " border-radius:8px; padding:5px 6px; font-weight:600;"
@@ -143,8 +303,11 @@ def build_period_card(panel, period_key: str) -> QWidget:
     date_nav.addStretch()
     date_nav.addWidget(next_date_btn)
 
-    if not read_only_import:
-        layout.addLayout(date_nav)
+    # Imported schedule files can contain several exported shortlist options.
+    # They are read-only, but users still need to browse between the imported
+    # date options.  Hide only Load More / Auto controls for imports, not the
+    # normal Prev/Next navigation.
+    layout.addLayout(date_nav)
 
     # Bottom navigation row: Feature 4 variants for the same date schedule.
     # These buttons move between different classroom/time-slot allocations
@@ -173,8 +336,9 @@ def build_period_card(panel, period_key: str) -> QWidget:
     variant_jump_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
     variant_jump_input.setPlaceholderText("#")
     variant_jump_input.setValidator(QIntValidator(1, 999999999, panel))
-    variant_jump_input.setToolTip(
-        "Enter a classroom/time-slot variant number for these dates and press Go."
+    _attach_light_hover_help(
+        variant_jump_input,
+        "Enter a classroom/time-slot variant number for these dates and press Go.",
     )
     variant_jump_input.setStyleSheet(
         "QLineEdit { background:white; border:1px solid #CBD5E1;"
@@ -207,7 +371,10 @@ def build_period_card(panel, period_key: str) -> QWidget:
     nav.addWidget(next_btn)
 
     layout.addWidget(variant_navigation)
-    variant_navigation.setVisible(not read_only_import)
+    # ResultsPanel decides whether classroom-variant navigation is relevant
+    # after schedules are loaded. Keep the widget available for imported
+    # shortlist files too.
+    variant_navigation.setVisible(False)
 
     has_more = period_key in panel._truncated_periods
 
@@ -223,14 +390,15 @@ def build_period_card(panel, period_key: str) -> QWidget:
     chunk_btn.setVisible(has_more)
     chunk_btn.clicked.connect(lambda _=False, k=period_key: panel._lm.on_load_more(k))
 
-    auto_dates_btn = QPushButton("⚡  Auto Load Dates")
+    auto_dates_btn = QPushButton("Auto Dates")
     auto_dates_btn.setStyleSheet(
         "color: #047857; border: 2px solid #047857; border-radius: 8px;"
         "padding: 6px 12px; font-size: 11px; font-weight: 700;"
         "background: rgba(4, 120, 87, 0.07);"
     )
     auto_dates_btn.setVisible(has_more)
-    auto_dates_btn.setToolTip(
+    _attach_light_hover_help(
+        auto_dates_btn,
         "Automatically load more date options. Each date option uses only "
         "the first classroom/time-slot variant."
     )
@@ -238,14 +406,15 @@ def build_period_card(panel, period_key: str) -> QWidget:
         lambda _=False, k=period_key: panel._lm.toggle_auto_load_dates(k)
     )
 
-    auto_variants_btn = QPushButton("⚡  Auto Load Classes Variants")
+    auto_variants_btn = QPushButton("Auto Variants")
     auto_variants_btn.setStyleSheet(
         "color: #7C3AED; border: 2px solid #7C3AED; border-radius: 8px;"
         "padding: 6px 12px; font-size: 11px; font-weight: 700;"
         "background: rgba(124, 58, 237, 0.07);"
     )
     auto_variants_btn.setVisible(True)
-    auto_variants_btn.setToolTip(
+    _attach_light_hover_help(
+        auto_variants_btn,
         "Automatically load more classroom/time-slot variants for the "
         "currently displayed dates only."
     )

@@ -642,6 +642,7 @@ class ConfigScreen(QWidget):
             pid: PROGRAMME_COLOURS[i % len(PROGRAMME_COLOURS)]
             for i, pid in enumerate(selected)
         }
+        self._controller.discard_results(delete_db=True)
 
         if not self._controller.begin_heavy_task("generation"):
             QMessageBox.information(

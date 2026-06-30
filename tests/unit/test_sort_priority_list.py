@@ -74,7 +74,7 @@ def test_checked_rows_show_priority_numbers(qapp):
     assert not widget.item(2).text().startswith("3.")
 
 
-def test_checking_jumps_to_bottom_of_checked_block(qapp):
+def test_checking_keeps_row_in_place(qapp):
     widget = SortPriorityList()
     widget.load_config(
         SortingConfig.from_ordered_criteria([SortCriterion.SORT_MIN_DAYS_MANDATORY])
@@ -84,13 +84,13 @@ def test_checking_jumps_to_bottom_of_checked_block(qapp):
     target_criterion = _criterion_at(widget, 2)
     widget.item(2).setCheckState(Qt.CheckState.Checked)
 
-    assert _criterion_at(widget, 1) == target_criterion
+    assert _criterion_at(widget, 2) == target_criterion
     assert _checked_criteria(widget)[-1] == target_criterion
     # Re-numbered: the newly checked row is priority 2.
-    assert widget.item(1).text().startswith("2.")
+    assert widget.item(2).text().startswith("2.")
 
 
-def test_unchecking_drops_below_checked_block(qapp):
+def test_unchecking_keeps_row_in_place(qapp):
     widget = SortPriorityList()
     widget.load_config(
         SortingConfig.from_ordered_criteria(
@@ -102,14 +102,30 @@ def test_unchecking_drops_below_checked_block(qapp):
         )
     )
     # Uncheck the top priority row -> it must move below the remaining checked rows.
-    dropped = _criterion_at(widget, 0)
-    widget.item(0).setCheckState(Qt.CheckState.Unchecked)
+    dropped = _criterion_at(widget, 1)
+    widget.item(1).setCheckState(Qt.CheckState.Unchecked)
 
     checked = _checked_criteria(widget)
     assert dropped not in checked
     assert len(checked) == 2
     # First unchecked slot sits right after the checked block (index 2).
-    assert _criterion_at(widget, 2) == dropped
+    assert _criterion_at(widget, 1) == dropped
+    assert widget.item(0).text().startswith("1.")
+    assert widget.item(2).text().startswith("2.")
+
+
+def test_can_check_third_row_without_checking_rows_above_it(qapp):
+    widget = SortPriorityList()
+    widget.load_config(SortingConfig())
+
+    target = _criterion_at(widget, 2)
+    widget.item(2).setCheckState(Qt.CheckState.Checked)
+
+    assert _criterion_at(widget, 2) == target
+    assert _checked_criteria(widget) == [target]
+    assert widget.item(0).checkState() == Qt.CheckState.Unchecked
+    assert widget.item(1).checkState() == Qt.CheckState.Unchecked
+    assert widget.item(2).text().startswith("1.")
 
 
 def test_only_checked_rows_are_draggable(qapp):
@@ -171,7 +187,7 @@ def test_drag_drop_reorders_priority(qapp):
     assert widget.item(2).text().startswith("3.")
 
 
-def test_drag_drop_respects_checked_boundary(qapp):
+def test_drag_drop_preserves_manual_row_position(qapp):
     # Simulate a drag that drops a checked row into the unchecked block. The
     # widget's post-drop normalization must re-anchor it above the unchecked
     # rows, preserving the checked/unchecked boundary.
@@ -196,10 +212,7 @@ def test_drag_drop_respects_checked_boundary(qapp):
         SortCriterion.SORT_AVG_DAYS_ANY,
         SortCriterion.SORT_MIN_DAYS_MANDATORY,
     ]
-    # Every checked row precedes every unchecked row.
-    states = [
-        widget.item(i).checkState() == Qt.CheckState.Checked
-        for i in range(widget.count())
-    ]
-    assert states == sorted(states, reverse=True)
+    assert _criterion_at(widget, widget.count() - 1) == (
+        SortCriterion.SORT_MIN_DAYS_MANDATORY
+    )
     assert list(widget.to_config().enabled_criteria) == checked

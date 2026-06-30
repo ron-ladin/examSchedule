@@ -14,12 +14,10 @@ from src.domain.schedule import Schedule
 from src.domain.time_slot import TimeSlot
 
 
-# Feature 4 variant limits.
-# None means there is no total classroom-variant limit.
-# The UI/controller still request variants in pages, so Auto Variants can load
-# them gradually without freezing while trying to compute everything at once.
-MAX_CLASSROOM_OPTIONS_PER_DAY: int | None = None
-MAX_CLASSROOM_OPTIONS_PER_SCHEDULE: int | None = None
+# Feature 4 variant limits. These defaults keep large classroom files bounded
+# while still giving users meaningful date/classroom alternatives.
+MAX_CLASSROOM_OPTIONS_PER_DAY: int | None = 20
+MAX_CLASSROOM_OPTIONS_PER_SCHEDULE: int | None = 500
 
 # Safety guard for extreme classroom files. If an exam needs more rooms than
 # this threshold, return the first valid greedy allocation but do not enumerate

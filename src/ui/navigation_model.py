@@ -35,6 +35,7 @@ class NavigationModel:
         self._source = schedules_source
         self._date_option_cache: dict[str, list[tuple[DateSignature, list[int]]]] = {}
         self._index_nav_cache: dict[str, dict[int, tuple[int, int]]] = {}
+        self._signature_pos_cache: dict[str, dict[DateSignature, int]] = {}
 
     def _schedules(self, period_key: str) -> list[Schedule]:
         return self._source().get(period_key, [])
@@ -48,6 +49,7 @@ class NavigationModel:
         """Drop all cached navigation indexes."""
         self._date_option_cache.clear()
         self._index_nav_cache.clear()
+        self._signature_pos_cache.clear()
 
     def rebuild(self, period_key: str | None = None) -> None:
         """Build fast navigation indexes for loaded schedules.
@@ -89,6 +91,72 @@ class NavigationModel:
 
             self._date_option_cache[key] = options
             self._index_nav_cache[key] = index_nav
+            self._signature_pos_cache[key] = signature_to_pos
+
+    def append_entries(self, period_key: str, start_index: int, count: int) -> None:
+        """Append navigation metadata for a newly appended schedule range.
+
+        The incremental path is valid only when the existing cache is current
+        through ``start_index`` and the schedule container can expose the new
+        entries as the next visible indexes. If either condition is not true,
+        fall back to a full rebuild to preserve date/variant navigation exactly.
+        """
+        if count <= 0:
+            return
+
+        schedules = self._schedules(period_key)
+        end_index = start_index + count
+        if start_index < 0 or end_index > len(schedules):
+            self.rebuild(period_key)
+            return
+
+        options = self._date_option_cache.get(period_key)
+        index_nav = self._index_nav_cache.get(period_key)
+        signature_to_pos = self._signature_pos_cache.get(period_key)
+        if (
+            options is None
+            or index_nav is None
+            or signature_to_pos is None
+            or len(index_nav) != start_index
+        ):
+            self.rebuild(period_key)
+            return
+
+        nav_entries_range = getattr(schedules, "navigation_entries_range", None)
+        if callable(nav_entries_range):
+            entries = nav_entries_range(start_index, count)
+            if entries is None:
+                self.rebuild(period_key)
+                return
+        else:
+            entries = [
+                (self.date_signature(schedules[idx]), idx)
+                for idx in range(start_index, end_index)
+            ]
+
+        if len(entries) != count:
+            self.rebuild(period_key)
+            return
+
+        expected_indexes = range(start_index, end_index)
+        if any(
+            idx != expected_idx
+            for (_signature, idx), expected_idx in zip(entries, expected_indexes)
+        ):
+            self.rebuild(period_key)
+            return
+
+        for signature, idx in entries:
+            date_pos = signature_to_pos.get(signature)
+            if date_pos is None:
+                date_pos = len(options)
+                signature_to_pos[signature] = date_pos
+                options.append((signature, []))
+
+            variant_indices = options[date_pos][1]
+            variant_pos = len(variant_indices)
+            variant_indices.append(idx)
+            index_nav[idx] = (date_pos, variant_pos)
 
     def date_options(
         self,

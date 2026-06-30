@@ -18,19 +18,25 @@ Public API:
 
 from __future__ import annotations
 
+import gc
 import logging
+from dataclasses import replace
 import multiprocessing
+import sqlite3
+import time
 from pathlib import Path
 from queue import Empty as _QueueEmpty
 
-from PyQt6.QtCore import QPoint, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QSignalBlocker, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -42,11 +48,19 @@ from src.ui.calendar_cell_delegate import (
     _course_ids_for_click_position,
     _group_exams_by_slot,
 )
-from src.ui.tokens import PERIOD_TAB_STYLE
+from src.ui.tokens import (
+    COLOR_CAL_ACTIVE_BG,
+    COLOR_PANEL_BLUE,
+    COLOR_PRIMARY_ACTION,
+    COLOR_SURFACE_SOFT,
+    COLOR_TEXT_DARK,
+    COLOR_VIOLET,
+    COLOR_VIOLET_BORDER,
+    PERIOD_TAB_STYLE,
+)
 
 from src.controller import DesktopController, LOAD_BATCH_SIZE
 from src.adapters.sqlite_schedule_store import (
-    ABSOLUTE_MAX_STORED_SCHEDULES,
     SQLiteScheduleStore,
     StoredScheduleList,
 )
@@ -55,8 +69,16 @@ from src.domain.period_order import canonical_period_key
 from src.domain.schedule import Schedule
 from src.domain.semester import display_semester
 from src.domain.sorting import SortingConfig
+from src.domain.threshold import ThresholdSettings
 from src.engine.generation_workers import ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
 from src.engine.ranking_worker import RankingWorkerResult, run_ranking_worker
+from src.ui.active_limits_panel import ActiveLimitsPanel
+from src.ui.favorite_schedules import (
+    FavoriteSchedule,
+    FavoritesDialog,
+    find_schedule_by_fingerprint,
+    schedule_fingerprint,
+)
 from src.ui.navigation_model import NavigationModel, DateSignature as _DateSignature
 from src.ui.period_card import PeriodCardWidgets
 from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
@@ -66,12 +88,29 @@ from src.ui.result_summary_presenter import ResultSummaryPresenter
 from src.ui.widgets.calendar_view import CalendarRenderer
 from src.ui.widgets.period_card_builder import (
     build_period_card,
+    _light_hover_bubble,
     _make_data_table,  # re-exported for input_screen / programme_courses_dialog
 )
 
 logger = logging.getLogger(__name__)
 _RANKING_EXIT_QUEUE_GRACE_TICKS = 3
 _RANKING_BUTTON_TEXT = "⇅  Result Ranking"
+_SHORTLIST_ADD_BUTTON_STYLE = (
+    f"QPushButton {{ background: {COLOR_PANEL_BLUE}; color: {COLOR_PRIMARY_ACTION};"
+    " border: 1px solid #93C5FD; border-radius: 8px;"
+    " padding: 7px 16px; font-weight: 700; }"
+    f"QPushButton:hover {{ background: {COLOR_CAL_ACTIVE_BG}; }}"
+    "QPushButton:disabled { background: #F1F5F9; color: #94A3B8;"
+    " border-color: #CBD5E1; }"
+)
+_SHORTLIST_REMOVE_BUTTON_STYLE = (
+    "QPushButton { background: #DC2626; color: #FFFFFF;"
+    " border: 1px solid #B91C1C; border-radius: 8px;"
+    " padding: 7px 16px; font-weight: 700; }"
+    "QPushButton:hover { background: #B91C1C; }"
+    "QPushButton:disabled { background: #F1F5F9; color: #94A3B8;"
+    " border-color: #CBD5E1; }"
+)
 
 
 def _standard_period_keys() -> list[str]:
@@ -79,6 +118,7 @@ def _standard_period_keys() -> list[str]:
         f"{semester} - {moed}"
         for semester, moed in _STANDARD_PERIOD_ORDER
     ]
+
 
 
 def _merge_period_keys(
@@ -135,8 +175,9 @@ class _ResultsPanel(QWidget):
     "Load More" button that fires a background subprocess to fetch the full set.
 
     When results are loaded from an exported schedule file, the panel switches
-    into read-only imported mode. In that mode, navigation/load-more controls are
-    hidden by the period-card builder and no additional schedules are fetched.
+    into read-only imported mode. In that mode, users can browse the imported
+    options, but Load More / Auto Load controls are hidden and no additional
+    schedules are fetched.
     """
 
     heavy_task_state_changed = pyqtSignal(str, bool)
@@ -152,6 +193,7 @@ class _ResultsPanel(QWidget):
         self._period_indices: dict[str, int] = {}
         self._truncated_periods: set[str] = set()
         self._is_imported_schedule: bool = False
+        self._generation_thresholds: ThresholdSettings | None = None
         self._schedule_store: SQLiteScheduleStore | None = None
 
         # Date/variant navigation indexing lives in a plain-Python model that
@@ -171,6 +213,9 @@ class _ResultsPanel(QWidget):
         self._lm = LoadMoreController(self)
         self._lm.messageRequested.connect(self._show_message)
         self._lm.cardRefreshRequested.connect(self._refresh_period_card)
+        self._lm.cardCountersRefreshRequested.connect(
+            self._refresh_period_card_counters
+        )
 
         self._ranking_proc: multiprocessing.Process | None = None
         self._ranking_queue: multiprocessing.Queue | None = None
@@ -181,6 +226,7 @@ class _ResultsPanel(QWidget):
         self._ranking_dirty = False
         self._ranking_dirty_message: str | None = None
         self._summary_presenter = ResultSummaryPresenter()
+        self._favorite_schedules: list[FavoriteSchedule] = []
 
         self._navigator = PeriodNavigator(
             self._nav_model,
@@ -209,10 +255,20 @@ class _ResultsPanel(QWidget):
         # tab scaffold. Reset by begin_streaming() at the start of each run.
         self._streaming_run_active: bool = False
 
-        # Per-period Auto Load is user-controlled. It loads one batch, waits
-        # AUTO_LOAD_DELAY_MS, then requests the next batch until there is no more
-        # data or the user presses Stop Auto Load. Never use a blocking while-loop.
+        # Per-period Auto Load is user-controlled. It loads one batch, waits an
+        # adaptive delay, then requests the next batch until there is no more data
+        # or the user presses Stop Auto Load. Never use a blocking while-loop.
         self._stale_banner: QLabel = QLabel()
+        self._limits_panel: ActiveLimitsPanel = ActiveLimitsPanel()
+        self._limits_toggle: QToolButton = QToolButton()
+        self._limits_details: QLabel = QLabel()
+        self._save_favorite_btn: QPushButton = QPushButton()
+        self._favorites_btn: QPushButton = QPushButton()
+        self._period_selector: QWidget = QWidget()
+        self._period_tip_btn: QToolButton = QToolButton()
+        self._period_tip_bubble: QLabel = QLabel()
+        self._semester_combo: QComboBox = QComboBox()
+        self._moed_combo: QComboBox = QComboBox()
         self._save_btn: QPushButton = QPushButton()
 
         self._setup_ui()
@@ -254,6 +310,10 @@ class _ResultsPanel(QWidget):
     ) -> None:
         self.clear_stale()
         self._is_imported_schedule = read_only_import
+        self._clear_favorites()
+        self._generation_thresholds = (
+            None if read_only_import else self._controller.settings.thresholds
+        )
 
         # Stop any in-flight Load More operation before rebuilding the results UI.
         # A QTimer timeout may already be queued while a new generation/load starts,
@@ -360,6 +420,7 @@ class _ResultsPanel(QWidget):
                 self._build_period_card(period_key),
                 _display_period_key(period_key),
             )
+        self._refresh_period_selector(preferred_key=self._first_period_with_results())
 
         has_proctor_report = any(
             self._has_classroom_feature_results(period_key)
@@ -369,6 +430,7 @@ class _ResultsPanel(QWidget):
         self._proctor_btn.setVisible(has_proctor_report)
 
         self._update_summary()
+        self._refresh_active_limits_panel()
         self._placeholder.setVisible(False)
         self._content.setVisible(True)
 
@@ -382,9 +444,7 @@ class _ResultsPanel(QWidget):
         The first ``append_period`` after this builds the tab scaffold from
         scratch, so a previous run's cards/state do not linger.
         """
-        self._cleanup_ranking_worker(terminate=True)
-        self._set_ranking_busy(False)
-        self._clear_ranking_dirty()
+        self.release_results(delete_db=True)
         self._streaming_run_active = False
 
     def append_period(
@@ -410,8 +470,64 @@ class _ResultsPanel(QWidget):
         # calendar can always resolve course names/colours.
         self._courses_by_id.update(courses_by_id)
         self._truncated_periods |= truncated
+        display_schedules_by_period = schedules_by_period
 
-        for period_key, schedules in schedules_by_period.items():
+        incoming_stores = {
+            schedules.store
+            for schedules in schedules_by_period.values()
+            if isinstance(schedules, StoredScheduleList)
+        }
+        if incoming_stores:
+            if self._schedule_store is None and len(incoming_stores) == 1:
+                self._schedule_store = next(iter(incoming_stores))
+            for schedules in schedules_by_period.values():
+                if isinstance(schedules, StoredScheduleList):
+                    schedules.set_scoring_context(
+                        list(self._courses_by_id.values()),
+                        self._controller.selected_programs,
+                    )
+                    schedules.set_sorting(self._controller.settings.sorting)
+            display_schedules_by_period = (
+                self._controller.cache_generated_results_incremental(
+                    dict(schedules_by_period)
+                )
+            )
+        else:
+            if self._schedule_store is None:
+                self._schedule_store = SQLiteScheduleStore()
+            stored_by_period: dict[str, list[Schedule]] = {}
+            try:
+                for key, scheds in schedules_by_period.items():
+                    self._schedule_store.replace_period(
+                        key,
+                        scheds,
+                        courses=list(self._courses_by_id.values()),
+                        selected_programs=self._controller.selected_programs,
+                    )
+                    stored_by_period[key] = self._schedule_store.as_sequence(
+                        key,
+                        courses=list(self._courses_by_id.values()),
+                        selected_programs=self._controller.selected_programs,
+                        sorting=self._controller.settings.sorting,
+                    )
+            except (sqlite3.DatabaseError, OSError):
+                logger.exception("Could not store streamed generation results")
+                self._show_message(
+                    "Storage Failed",
+                    "Could not store generated schedules because the temporary "
+                    "database or disk write failed. Already loaded schedules "
+                    "remain available.",
+                    QMessageBox.Icon.Warning,
+                )
+                return
+
+            display_schedules_by_period = (
+                self._controller.cache_generated_results_incremental(
+                    stored_by_period
+                )
+            )
+
+        for period_key, schedules in display_schedules_by_period.items():
             if period_key not in self._schedules_by_period:
                 # A period outside the standard scaffold (e.g. an extra loaded
                 # period): create its tab on the fly.
@@ -421,6 +537,7 @@ class _ResultsPanel(QWidget):
                     self._build_period_card(period_key),
                     _display_period_key(period_key),
                 )
+                self._refresh_period_selector(preferred_key=period_key)
 
             self._schedules_by_period[period_key] = schedules
             self._period_indices.setdefault(period_key, 0)
@@ -434,6 +551,13 @@ class _ResultsPanel(QWidget):
 
             self._rebuild_navigation_cache(period_key)
             self._refresh_period_card(period_key)
+
+        first_ready_period = next(
+            (key for key, schedules in display_schedules_by_period.items() if schedules),
+            None,
+        )
+        if first_ready_period is not None:
+            self._refresh_period_selector(preferred_key=first_ready_period)
 
         has_proctor_report = any(
             bool(getattr(schedule, "classroom_assignments", None))
@@ -454,6 +578,8 @@ class _ResultsPanel(QWidget):
         """Build empty cards for every standard/loaded period on stream start."""
         self.clear_stale()
         self._is_imported_schedule = False
+        self._clear_favorites()
+        self._generation_thresholds = self._controller.settings.thresholds
 
         # Stop any in-flight Load More / persistent workers from a previous run
         # before rebuilding cards (mirrors load()).
@@ -480,9 +606,11 @@ class _ResultsPanel(QWidget):
                 self._build_period_card(period_key),
                 _display_period_key(period_key),
             )
+        self._refresh_period_selector()
 
         self._proctor_btn.setVisible(False)
         self._update_summary()
+        self._refresh_active_limits_panel()
         self._placeholder.setVisible(False)
         self._content.setVisible(True)
         self._content.setGraphicsEffect(None)
@@ -500,59 +628,61 @@ class _ResultsPanel(QWidget):
         self._lm.advance_after_load.add(period_key)
         self._lm.on_load_more(period_key)
 
-    def append_loaded_schedules(self, period_key: str, extra: list[Schedule]) -> None:
+    def append_loaded_schedules(
+        self,
+        period_key: str,
+        extra: list[Schedule],
+    ) -> dict[str, float]:
         """Merge a freshly loaded batch into this period's own schedule state.
 
         Owned by the panel so the load-more controller never mutates the panel's
         private dicts directly. Keeps the navigation cache and the controller's
         cached results in sync (so a later re-sort includes the appended batch).
         """
+        timings = {
+            "sqlite_insert_seconds": 0.0,
+            "navigation_update_seconds": 0.0,
+            "summary_update_seconds": 0.0,
+        }
         if self._is_imported_schedule:
-            return
+            return timings
 
-        # Disk-backed result storage keeps only current objects in RAM and still
-        # enforces its disk-cache ceiling. Plain in-memory results append the
-        # whole returned batch; there is no artificial RAM cap.
-        if self._schedule_store is not None:
-            headroom = ABSOLUTE_MAX_STORED_SCHEDULES - self._schedule_store.total_count()
-            if headroom <= 0:
-                logger.warning(
-                    "SQLite schedule cache cap (%s) reached; refusing further load for %s.",
-                    ABSOLUTE_MAX_STORED_SCHEDULES,
-                    period_key,
-                )
-                return
-            if len(extra) > headroom:
-                logger.warning(
-                    "SQLite schedule cache cap (%s) reached; truncating batch for %s "
-                    "from %s to %s schedules.",
-                    ABSOLUTE_MAX_STORED_SCHEDULES,
-                    period_key,
-                    len(extra),
-                    headroom,
-                )
-                extra = extra[:headroom]
-
+        prev_len = len(self._schedules_by_period[period_key])
+        insert_started_at = time.perf_counter()
         self._schedules_by_period[period_key].extend(extra)
+        insert_seconds = time.perf_counter() - insert_started_at
+        if self._schedule_store is not None:
+            timings["sqlite_insert_seconds"] = insert_seconds
 
         # Keep the appended schedules cached, but do not re-sort the whole
-        # result set on every Load More / Auto Load batch. Users can explicitly
-        # run Result Ranking once loading settles.
+        # result set on every Load More / Auto Load batch. Surface that the
+        # displayed order may now be partially unsorted until the user re-ranks.
         self._schedules_by_period = self._controller.cache_loaded_results_without_reranking(
             dict(self._schedules_by_period)
         )
-        period_schedules = self._schedules_by_period.get(period_key, [])
-        if (
-            self._controller.settings.sorting.criteria_in_order()
-            and not isinstance(period_schedules, StoredScheduleList)
-        ):
-            self.mark_ranking_dirty("New results loaded. Re-rank to apply sorting.")
         self._period_indices[period_key] = min(
             self._period_indices.get(period_key, 0),
             max(0, len(self._schedules_by_period[period_key]) - 1),
         )
-        self._rebuild_navigation_cache(period_key)
-        self._update_summary()
+        nav_started_at = time.perf_counter()
+        self._append_navigation_cache(period_key, prev_len, len(extra))
+        timings["navigation_update_seconds"] = time.perf_counter() - nav_started_at
+
+        summary_started_at = time.perf_counter()
+        self.mark_ranking_dirty("New results loaded. Re-rank to apply sorting.")
+        timings["summary_update_seconds"] = time.perf_counter() - summary_started_at
+
+        logger.info(
+            "Load batch merge timings: period=%s batch_size=%s "
+            "sqlite_insert_seconds=%.3fs navigation_update_seconds=%.3fs "
+            "summary_update_seconds=%.3fs",
+            period_key,
+            len(extra),
+            timings["sqlite_insert_seconds"],
+            timings["navigation_update_seconds"],
+            timings["summary_update_seconds"],
+        )
+        return timings
 
     def advance_to_next_date_option(self, period_key: str, prev_len: int) -> None:
         """Move the displayed index to the next date option after a load.
@@ -603,6 +733,15 @@ class _ResultsPanel(QWidget):
         """The DesktopController backing this panel."""
         return self._controller
 
+    def active_schedule_store_path(self) -> Path | None:
+        """Return the active SQLite DB path used for resource checks."""
+        if self._schedule_store is not None:
+            return self._schedule_store.path
+        for schedules in self._schedules_by_period.values():
+            if isinstance(schedules, StoredScheduleList):
+                return schedules.store.path
+        return None
+
     def has_period(self, period_key: str) -> bool:
         """Return True if *period_key* is a known period even if empty."""
         return period_key in self._schedules_by_period
@@ -630,6 +769,19 @@ class _ResultsPanel(QWidget):
         )
         self._summary_lbl.setText(message)
 
+    def _on_limits_toggled(self, expanded: bool) -> None:
+        """Expand/collapse the active generation limits details."""
+        self._limits_panel._on_toggled(expanded)
+
+    def _refresh_active_limits_panel(self) -> None:
+        """Show enabled threshold rules used by the displayed generation."""
+        self._limits_panel.show_limits(
+            self._generation_thresholds,
+            imported_schedule=self._is_imported_schedule,
+        )
+        self._limits_toggle = self._limits_panel.toggle
+        self._limits_details = self._limits_panel.details
+
     def _clear_ranking_dirty(self) -> None:
         self._summary_presenter.clear_ranking_dirty()
         self._sync_ranking_dirty_state()
@@ -648,9 +800,7 @@ class _ResultsPanel(QWidget):
         return sum(len(scheds) for scheds in self._schedules_by_period.values())
 
     def is_at_memory_cap(self) -> bool:
-        """Return True once the active disk-backed result cache reaches its cap."""
-        if self._schedule_store is not None:
-            return self._schedule_store.total_count() >= ABSOLUTE_MAX_STORED_SCHEDULES
+        """Return True if a legacy in-memory result container reaches its cap."""
         if ABSOLUTE_MAX_IN_MEMORY_SCHEDULES is None:
             return False
         return self.total_in_memory_schedule_count() >= ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
@@ -662,6 +812,272 @@ class _ResultsPanel(QWidget):
     def get_card(self, period_key: str) -> PeriodCardWidgets | None:
         """Return the period card widgets for *period_key*, if built."""
         return self._cards.get(period_key)
+
+    def _clear_favorites(self) -> None:
+        self._favorite_schedules.clear()
+        self._refresh_favorite_buttons()
+
+    def _refresh_shortlist_labels(self) -> None:
+        """Keep shortlist labels accurate after ranking/load-order changes.
+
+        Shortlist entries are identified by a content fingerprint, not by their
+        old list index.  After ranking or loading more results, the same schedule
+        can move to a new Date option / Variant position, so refresh labels
+        instead of clearing the user's shortlist.
+        """
+        updated: list[FavoriteSchedule] = []
+        for favorite in self._favorite_schedules:
+            schedules = self._schedules_by_period.get(favorite.period_key)
+            if not schedules:
+                updated.append(favorite)
+                continue
+
+            index = find_schedule_by_fingerprint(schedules, favorite.signature)
+            if index is None:
+                updated.append(favorite)
+                continue
+
+            updated.append(
+                replace(
+                    favorite,
+                    label=self._favorite_label(favorite.period_key, index),
+                )
+            )
+
+        self._favorite_schedules = updated
+        self._refresh_favorite_buttons()
+
+    def _favorite_label(self, period_key: str, index: int) -> str:
+        index_nav = self._nav_model.index_nav(period_key)
+        nav_pos = index_nav.get(index)
+        if nav_pos is None:
+            self._rebuild_navigation_cache(period_key)
+            nav_pos = self._nav_model.index_nav(period_key).get(index)
+
+        if nav_pos is None:
+            return f"{_display_period_key(period_key)} | Schedule {index + 1:,}"
+
+        date_pos, variant_pos = nav_pos
+        label_parts = [
+            _display_period_key(period_key),
+            f"Date option {date_pos + 1:,}",
+        ]
+
+        # Feature 4 schedules can have multiple classroom/time-slot choices for
+        # the same date option.  Show that choice only when classroom data is
+        # actually present, so regular date-only schedules do not display a
+        # confusing Variant 1/1 label.
+        schedules = self._schedules_by_period.get(period_key, [])
+        schedule = schedules[index] if 0 <= index < len(schedules) else None
+        if schedule is not None and self._schedule_has_classroom_data(schedule):
+            label_parts.append(f"Classroom choice {variant_pos + 1:,}")
+
+        return " | ".join(label_parts)
+
+    def _current_shortlist_row(self) -> int | None:
+        period_key = self._current_period_key()
+        if period_key is None:
+            return None
+
+        schedules = self._schedules_by_period.get(period_key, [])
+        if not schedules:
+            return None
+
+        index = self._period_indices.get(period_key, 0)
+        if index < 0 or index >= len(schedules):
+            return None
+
+        signature = schedule_fingerprint(schedules[index])
+        for row, favorite in enumerate(self._favorite_schedules):
+            if favorite.period_key == period_key and favorite.signature == signature:
+                return row
+        return None
+
+    def _toggle_current_favorite(self, period_key: str) -> None:
+        row = self._current_shortlist_row()
+        if row is not None:
+            self._delete_favorite_at(row)
+            return
+
+        self._save_current_favorite(period_key)
+
+    def _save_current_favorite(self, period_key: str) -> None:
+        schedules = self._schedules_by_period.get(period_key, [])
+        if not schedules:
+            return
+
+        index = self._period_indices.get(period_key, 0)
+        if index < 0 or index >= len(schedules):
+            return
+
+        signature = schedule_fingerprint(schedules[index])
+        for favorite in self._favorite_schedules:
+            if favorite.period_key == period_key and favorite.signature == signature:
+                self._refresh_favorite_buttons()
+                return
+
+        self._favorite_schedules.append(
+            FavoriteSchedule(
+                period_key=period_key,
+                signature=signature,
+                label=self._favorite_label(period_key, index),
+            )
+        )
+        self._refresh_favorite_buttons()
+
+    def _save_visible_favorite(self) -> None:
+        period_key = self._current_period_key()
+        if period_key is not None:
+            self._save_current_favorite(period_key)
+
+    def _toggle_visible_favorite(self) -> None:
+        period_key = self._current_period_key()
+        if period_key is not None:
+            self._toggle_current_favorite(period_key)
+
+    def _delete_favorite_at(self, row: int) -> bool:
+        if row < 0 or row >= len(self._favorite_schedules):
+            return False
+        del self._favorite_schedules[row]
+        self._refresh_favorite_buttons()
+        return True
+
+    def _refresh_favorite_buttons(self, saved_period_key: str | None = None) -> None:
+        count = len(self._favorite_schedules)
+        current = self._current_period_key()
+        has_current_schedule = bool(
+            current is not None and self._schedules_by_period.get(current)
+        )
+        current_is_shortlisted = self._current_shortlist_row() is not None
+
+        self._save_favorite_btn.setVisible(not self._is_imported_schedule)
+        self._save_favorite_btn.setEnabled(has_current_schedule)
+        self._favorites_btn.setEnabled(count > 0)
+        self._favorites_btn.setText(f"Shortlist ({count})")
+
+        if current_is_shortlisted:
+            self._save_favorite_btn.setText("Remove from Shortlist")
+            self._save_favorite_btn.setStyleSheet(_SHORTLIST_REMOVE_BUTTON_STYLE)
+        else:
+            self._save_favorite_btn.setText("Add to Shortlist")
+            self._save_favorite_btn.setStyleSheet(_SHORTLIST_ADD_BUTTON_STYLE)
+
+    def _show_favorites_dialog(self) -> None:
+        if not self._favorite_schedules:
+            self._show_message(
+                "Shortlist Empty",
+                "Add one or more schedule options to the Shortlist before choosing a final export.",
+                QMessageBox.Icon.Information,
+            )
+            return
+
+        dialog = FavoritesDialog(self._favorite_schedules, self)
+
+        def open_selected() -> None:
+            row = dialog.favorites_list.currentRow()
+            self._open_favorite_at(row, close_dialog=dialog.accept)
+
+        def export_selected() -> None:
+            self._export_shortlisted_schedules(close_dialog=dialog.accept)
+
+        def delete_selected() -> None:
+            row = dialog.favorites_list.currentRow()
+            if not self._delete_favorite_at(row):
+                return
+            dialog.remove_row(row, len(self._favorite_schedules))
+
+        dialog.openRequested.connect(lambda _row: open_selected())
+        dialog.exportRequested.connect(lambda _row: export_selected())
+        dialog.deleteRequested.connect(lambda _row: delete_selected())
+        dialog.exec()
+
+    def _open_favorite_at(self, row: int, close_dialog=None) -> bool:
+        if row < 0 or row >= len(self._favorite_schedules):
+            return False
+
+        favorite = self._favorite_schedules[row]
+
+        schedules = self._schedules_by_period.get(favorite.period_key)
+        if not schedules:
+            self._show_missing_favorite_message()
+            return False
+
+        index = find_schedule_by_fingerprint(schedules, favorite.signature)
+        if index is None:
+            self._show_missing_favorite_message()
+            return False
+
+        self._period_indices[favorite.period_key] = index
+        self._select_period_key(favorite.period_key)
+        self._refresh_period_card(favorite.period_key)
+        if close_dialog is not None:
+            close_dialog()
+        return True
+
+    def _schedule_for_shortlist_row(self, row: int) -> tuple[FavoriteSchedule, Schedule] | None:
+        if row < 0 or row >= len(self._favorite_schedules):
+            return None
+
+        favorite = self._favorite_schedules[row]
+        schedules = self._schedules_by_period.get(favorite.period_key)
+        if not schedules:
+            return None
+
+        index = find_schedule_by_fingerprint(schedules, favorite.signature)
+        if index is None:
+            return None
+
+        return favorite, schedules[index]
+
+    def _shortlisted_schedule_selection(self) -> dict[str, list[Schedule]] | None:
+        selected: dict[str, list[Schedule]] = {}
+
+        for favorite in self._favorite_schedules:
+            schedules = self._schedules_by_period.get(favorite.period_key)
+            if not schedules:
+                return None
+
+            index = find_schedule_by_fingerprint(schedules, favorite.signature)
+            if index is None:
+                return None
+
+            selected.setdefault(favorite.period_key, []).append(schedules[index])
+
+        return selected
+
+    def _export_shortlisted_schedules(self, close_dialog=None) -> bool:
+        selected = self._shortlisted_schedule_selection()
+        if not selected:
+            self._show_missing_favorite_message()
+            return False
+
+        if self._export_schedule_selection(selected):
+            if close_dialog is not None:
+                close_dialog()
+            return True
+        return False
+
+    def _export_favorite_at(self, row: int, close_dialog=None) -> bool:
+        shortlist_item = self._schedule_for_shortlist_row(row)
+        if shortlist_item is None:
+            self._show_missing_favorite_message()
+            return False
+
+        favorite, schedule = shortlist_item
+        if self._export_schedule_selection({favorite.period_key: [schedule]}):
+            if close_dialog is not None:
+                close_dialog()
+            return True
+        return False
+
+    def _show_missing_favorite_message(self) -> None:
+        self._show_message(
+            "Shortlist Option Unavailable",
+            "This shortlisted schedule is no longer available in the current results. "
+            "The generated results may have changed; generate or load the matching "
+            "results and try again.",
+            QMessageBox.Icon.Information,
+        )
 
     def get_truncated_periods(self) -> set[str]:
         """Return a copy of the periods that still have more schedules to load."""
@@ -707,19 +1123,103 @@ class _ResultsPanel(QWidget):
         """Return how many loaded variants share *signature* in *period_key*."""
         return len(self._indices_for_signature(period_key, signature))
 
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+    def release_results(self, *, delete_db: bool = True) -> None:
+        """Release result DBs, caches, workers and generated-result UI state."""
+        if hasattr(self, "_period_tip_bubble"):
+            self._period_tip_bubble.hide()
+
+        self._lm.reset()
         self._cleanup_ranking_worker(terminate=True)
-        if self._controller.heavy_task_kind == "ranking":
-            self._controller.end_heavy_task("ranking")
-            self._finish_ranking_metrics()
-            self.heavy_task_state_changed.emit("ranking", False)
+        heavy_kind = self._controller.heavy_task_kind
+        if heavy_kind in {"loading", "ranking"}:
+            self._controller.end_heavy_task(heavy_kind)
+            if heavy_kind == "ranking":
+                self._finish_ranking_metrics()
+            self.heavy_task_state_changed.emit(heavy_kind, False)
+
+        stores: set[SQLiteScheduleStore] = set()
         if self._schedule_store is not None:
-            self._schedule_store.close(delete=True)
-            self._schedule_store = None
+            stores.add(self._schedule_store)
+        for schedules in self._schedules_by_period.values():
+            if isinstance(schedules, StoredScheduleList):
+                stores.add(schedules.store)
+        for store in stores:
+            try:
+                store.close(delete=delete_db)
+            except Exception:
+                logger.debug("Failed closing result SQLite store", exc_info=True)
+
+        self._schedule_store = None
+        self._schedules_by_period.clear()
+        self._period_indices.clear()
+        self._truncated_periods.clear()
+        self._total_by_period.clear()
+        self._cell_data.clear()
+        self._nav_model.clear()
+        self._clear_favorites()
+        self._clear_ranking_dirty()
+        self._has_stale_results = False
+        self._is_imported_schedule = False
+        self._generation_thresholds = None
+        self._streaming_run_active = False
+
+        if hasattr(self, "_period_tabs"):
+            self._period_tabs.clear()
+        self._cards.clear()
+        if hasattr(self, "_summary_lbl"):
+            self._summary_lbl.setText("")
+        if hasattr(self, "_period_selector"):
+            self._period_selector.setVisible(False)
+        if hasattr(self, "_save_btn"):
+            self._save_btn.setEnabled(False)
+        if hasattr(self, "_proctor_btn"):
+            self._proctor_btn.setVisible(False)
+            self._proctor_btn.setEnabled(False)
+        if hasattr(self, "_stale_banner"):
+            self._stale_banner.setVisible(False)
+        if hasattr(self, "_placeholder"):
+            self._placeholder.setVisible(True)
+        if hasattr(self, "_content"):
+            self._content.setVisible(False)
+        if delete_db:
+            gc.collect()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        self.release_results(delete_db=True)
         super().closeEvent(event)
 
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt override name
+        if obj is self._period_tip_btn:
+            if event.type() == QEvent.Type.Enter:
+                self._show_period_tip()
+            elif event.type() in (
+                QEvent.Type.Leave,
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.Hide,
+            ):
+                self._period_tip_bubble.hide()
+
+        return super().eventFilter(obj, event)
+
+    def _show_period_tip(self) -> None:
+        """Show a styled light popover instead of the native black tooltip."""
+        if not self._period_tip_btn.isVisible():
+            return
+
+        self._period_tip_bubble.adjustSize()
+        pos = self._period_tip_btn.mapToGlobal(
+            QPoint(0, self._period_tip_btn.height() + 8)
+        )
+        self._period_tip_bubble.move(pos)
+        self._period_tip_bubble.show()
+        self._period_tip_bubble.raise_()
+
     def _setup_ui(self) -> None:
-        self.setStyleSheet("background: transparent;")
+        self.setStyleSheet(
+            """
+            _ResultsPanel { background: transparent; }
+            """
+        )
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -759,7 +1259,24 @@ class _ResultsPanel(QWidget):
         self._ranking_btn.clicked.connect(self._on_result_ranking)
         action_row.addWidget(self._ranking_btn)
 
-        self._save_btn = QPushButton("⬇  Export Schedule")
+        self._save_favorite_btn = QPushButton("Add to Shortlist")
+        self._save_favorite_btn.setStyleSheet(_SHORTLIST_ADD_BUTTON_STYLE)
+        self._save_favorite_btn.clicked.connect(self._toggle_visible_favorite)
+        action_row.addWidget(self._save_favorite_btn)
+
+        self._favorites_btn = QPushButton("Shortlist (0)")
+        self._favorites_btn.setStyleSheet(
+            "QPushButton { background: #F5F3FF; color: #5B21B6;"
+            f" border: 1px solid {COLOR_VIOLET_BORDER}; border-radius: 8px;"
+            " padding: 7px 16px; font-weight: 700; }"
+            "QPushButton:hover { background: #EDE9FE; }"
+            "QPushButton:disabled { background: #F1F5F9; color: #94A3B8;"
+            " border-color: #CBD5E1; }"
+        )
+        self._favorites_btn.clicked.connect(self._show_favorites_dialog)
+        action_row.addWidget(self._favorites_btn)
+
+        self._save_btn = QPushButton("⬇  Export Shortlist")
         self._save_btn.clicked.connect(self._on_save)
         action_row.addWidget(self._save_btn)
 
@@ -769,6 +1286,12 @@ class _ResultsPanel(QWidget):
         action_row.addWidget(self._proctor_btn)
 
         cl.addLayout(action_row)
+
+        self._limits_panel = ActiveLimitsPanel(self)
+        self._limits_toggle = self._limits_panel.toggle
+        self._limits_details = self._limits_panel.details
+
+        cl.addWidget(self._limits_panel)
 
         self._stale_banner = QLabel(
             "⚠  Exam period dates were changed after generation. "
@@ -785,18 +1308,83 @@ class _ResultsPanel(QWidget):
 
         cl.addWidget(self._stale_banner)
 
-        tip_lbl = QLabel("Tip: Click on any scheduled exam date to view full details.")
-        tip_lbl.setStyleSheet(
-            "background: rgba(0,90,194,0.06); color: #004394;"
-            " border: 1px solid rgba(0,90,194,0.12); border-radius: 8px;"
-            " padding: 8px 14px; font-size: 12px; font-weight: 500;"
+        self._period_selector = QWidget()
+        self._period_selector.setStyleSheet(
+            "QWidget { background: #FFFFFF; border: 1px solid #DCE5F0;"
+            " border-radius: 8px; }"
         )
-        tip_lbl.setWordWrap(True)
+        selector_layout = QHBoxLayout(self._period_selector)
+        selector_layout.setContentsMargins(12, 10, 12, 10)
+        selector_layout.setSpacing(10)
 
-        cl.addWidget(tip_lbl)
+        selector_title = QLabel("View period")
+        selector_title.setStyleSheet(
+            f"background: transparent; border: none; color: {COLOR_PRIMARY_ACTION};"
+            " font-size: 13px; font-weight: 800;"
+        )
+        selector_layout.addWidget(selector_title)
+
+        self._period_tip_btn = QToolButton()
+        self._period_tip_btn.setText("!")
+        self._period_tip_btn.setCursor(Qt.CursorShape.WhatsThisCursor)
+        self._period_tip_btn.setFixedSize(24, 24)
+        self._period_tip_btn.setStyleSheet(
+            f"QToolButton {{ background: {COLOR_PANEL_BLUE}; color: {COLOR_PRIMARY_ACTION};"
+            " border: 1px solid #93C5FD; border-radius: 12px;"
+            " font-size: 13px; font-weight: 900; }"
+            f"QToolButton:hover {{ background: #F5F3FF; color: {COLOR_VIOLET};"
+            f" border-color: {COLOR_VIOLET_BORDER}; }}"
+        )
+        self._period_tip_btn.installEventFilter(self)
+        selector_layout.addWidget(self._period_tip_btn)
+
+        self._period_tip_bubble = _light_hover_bubble()
+        self._period_tip_bubble.setText(
+            "Click on any scheduled exam date to view full details."
+        )
+
+        semester_label = QLabel("Semester")
+        semester_label.setStyleSheet(
+            "background: transparent; border: none; color: #64748B;"
+            " font-size: 11px; font-weight: 700;"
+        )
+        selector_layout.addWidget(semester_label)
+
+        combo_style = (
+            f"QComboBox {{ background: {COLOR_SURFACE_SOFT}; color: {COLOR_TEXT_DARK};"
+            " border: 1px solid #CBD5E1; border-radius: 8px;"
+            " padding: 6px 32px 6px 10px; font-size: 12px; font-weight: 700;"
+            " min-width: 140px; }"
+            f"QComboBox:hover {{ border-color: {COLOR_VIOLET}; }}"
+            f"QComboBox:focus {{ border-color: {COLOR_PRIMARY_ACTION}; }}"
+            "QComboBox::drop-down { border: none; width: 26px; }"
+        )
+        self._semester_combo = QComboBox()
+        self._semester_combo.setStyleSheet(combo_style)
+        self._semester_combo.currentIndexChanged.connect(
+            self._on_period_semester_changed
+        )
+        selector_layout.addWidget(self._semester_combo)
+
+        moed_label = QLabel("Moed")
+        moed_label.setStyleSheet(
+            "background: transparent; border: none; color: #64748B;"
+            " font-size: 11px; font-weight: 700;"
+        )
+        selector_layout.addWidget(moed_label)
+
+        self._moed_combo = QComboBox()
+        self._moed_combo.setStyleSheet(combo_style)
+        self._moed_combo.currentIndexChanged.connect(self._on_period_moed_changed)
+        selector_layout.addWidget(self._moed_combo)
+        selector_layout.addStretch()
+        self._period_selector.setVisible(False)
+
+        cl.addWidget(self._period_selector)
 
         self._period_tabs = QTabWidget()
         self._period_tabs.setStyleSheet(PERIOD_TAB_STYLE)
+        self._period_tabs.tabBar().hide()
         self._period_tabs.currentChanged.connect(self._on_period_tab_changed)
         cl.addWidget(self._period_tabs)
 
@@ -833,6 +1421,15 @@ class _ResultsPanel(QWidget):
         """Rebuild navigation indexes through NavigationModel."""
         self._nav_model.rebuild(period_key)
 
+    def _append_navigation_cache(
+        self,
+        period_key: str,
+        start_index: int,
+        count: int,
+    ) -> None:
+        """Append navigation indexes through NavigationModel."""
+        self._nav_model.append_entries(period_key, start_index, count)
+
     def _date_options_for_period(
         self,
         period_key: str,
@@ -847,6 +1444,112 @@ class _ResultsPanel(QWidget):
             return period_keys[index]
         return None
 
+    @staticmethod
+    def _period_parts(period_key: str) -> tuple[str, str]:
+        """Return (semester, moed) for a period key."""
+        if " - " in period_key:
+            semester, moed = period_key.split(" - ", 1)
+            return semester.strip(), moed.strip()
+        if " — " in period_key:
+            semester, moed = period_key.split(" — ", 1)
+            return semester.strip(), moed.strip()
+        return period_key.strip(), ""
+
+    def _period_keys_for_semester(self, semester: str) -> list[str]:
+        return [
+            key
+            for key in self._period_keys_for_selector()
+            if self._period_parts(key)[0] == semester
+        ]
+
+    def _period_keys_for_selector(self) -> list[str]:
+        """Return all periods the user can inspect, including empty ones."""
+        return list(self._schedules_by_period)
+
+    def _first_period_with_results(self) -> str | None:
+        """Return the first period that currently has visible schedules."""
+        for key, schedules in self._schedules_by_period.items():
+            if schedules:
+                return key
+        return None
+
+    def _refresh_period_selector(self, preferred_key: str | None = None) -> None:
+        """Populate the compact semester/moed selector from available periods."""
+        if not hasattr(self, "_semester_combo"):
+            return
+
+        period_keys = self._period_keys_for_selector()
+        self._period_selector.setVisible(bool(period_keys))
+        if not period_keys:
+            return
+
+        current_key = (
+            preferred_key
+            or self._first_period_with_results()
+            or self._current_period_key()
+            or period_keys[0]
+        )
+        current_semester, _ = self._period_parts(current_key)
+
+        semesters: list[str] = []
+        for key in period_keys:
+            semester, _moed = self._period_parts(key)
+            if semester not in semesters:
+                semesters.append(semester)
+
+        with QSignalBlocker(self._semester_combo):
+            self._semester_combo.clear()
+            for semester in semesters:
+                self._semester_combo.addItem(display_semester(semester), semester)
+            semester_index = max(0, self._semester_combo.findData(current_semester))
+            self._semester_combo.setCurrentIndex(semester_index)
+            current_semester = self._semester_combo.currentData()
+
+        self._populate_moed_selector(current_semester, current_key)
+
+    def _populate_moed_selector(
+        self,
+        semester: str,
+        preferred_key: str | None = None,
+    ) -> None:
+        period_keys = self._period_keys_for_semester(semester)
+        with QSignalBlocker(self._moed_combo):
+            self._moed_combo.clear()
+            for key in period_keys:
+                _semester, moed = self._period_parts(key)
+                self._moed_combo.addItem(moed or _display_period_key(key), key)
+            preferred_index = (
+                self._moed_combo.findData(preferred_key)
+                if preferred_key is not None
+                else -1
+            )
+            self._moed_combo.setCurrentIndex(max(0, preferred_index))
+
+        selected_key = self._moed_combo.currentData()
+        if selected_key:
+            self._select_period_key(selected_key)
+
+    def _select_period_key(self, period_key: str) -> None:
+        period_keys = list(self._schedules_by_period)
+        try:
+            index = period_keys.index(period_key)
+        except ValueError:
+            return
+        if self._period_tabs.currentIndex() != index:
+            self._period_tabs.setCurrentIndex(index)
+        else:
+            self._on_period_tab_changed(index)
+
+    def _on_period_semester_changed(self, _index: int) -> None:
+        semester = self._semester_combo.currentData()
+        if semester:
+            self._populate_moed_selector(semester)
+
+    def _on_period_moed_changed(self, _index: int) -> None:
+        period_key = self._moed_combo.currentData()
+        if period_key:
+            self._select_period_key(period_key)
+
     def _current_period_key(self) -> str | None:
         """Return the period key for the currently visible tab."""
         return self._period_key_at_tab_index(self._period_tabs.currentIndex())
@@ -855,6 +1558,8 @@ class _ResultsPanel(QWidget):
         """Refresh a period lazily when it becomes visible."""
         period_key = self._period_key_at_tab_index(index)
         if period_key is not None and period_key in self._cards:
+            if hasattr(self, "_moed_combo") and self._moed_combo.currentData() != period_key:
+                self._refresh_period_selector(preferred_key=period_key)
             self._refresh_period_card(period_key)
 
     def _nav_position_for_index(
@@ -878,6 +1583,17 @@ class _ResultsPanel(QWidget):
         return self._nav_model.indices_for_signature(period_key, signature)
 
     def _refresh_period_card(self, period_key: str) -> None:
+        self._refresh_period_card_ui(period_key, repaint_calendar=True)
+
+    def _refresh_period_card_counters(self, period_key: str) -> None:
+        self._refresh_period_card_ui(period_key, repaint_calendar=False)
+
+    def _refresh_period_card_ui(
+        self,
+        period_key: str,
+        *,
+        repaint_calendar: bool,
+    ) -> None:
         schedules = self._schedules_by_period[period_key]
         total = len(schedules)
         has_more = (
@@ -916,6 +1632,9 @@ class _ResultsPanel(QWidget):
             variant_pos = -1
 
             if card is not None:
+                card.empty_label.setText(
+                    f"No schedules were generated for {_display_period_key(period_key)}."
+                )
                 card.empty_label.setVisible(True)
                 card.cal_table.setVisible(False)
         else:
@@ -988,9 +1707,10 @@ class _ResultsPanel(QWidget):
             self._lm.stop_auto_load(period_key, refresh=False)
 
         has_classroom_variants = self._has_classroom_feature_results(period_key)
-        card.variant_navigation.setVisible(
-            not self._is_imported_schedule and has_classroom_variants
-        )
+        # Imported shortlist files are read-only, but they may still contain
+        # multiple classroom/time-slot choices. Allow browsing those imported
+        # variants; only Load More / Auto controls stay hidden for imports.
+        card.variant_navigation.setVisible(has_classroom_variants)
         card.auto_date_btn.setVisible(
             not self._is_imported_schedule
             and (has_more or active_mode == _AUTO_MODE_DATES)
@@ -1002,6 +1722,11 @@ class _ResultsPanel(QWidget):
 
         if not self._is_imported_schedule:
             self._lm.update_auto_load_button(period_key)
+        self._refresh_favorite_buttons()
+
+        if not repaint_calendar:
+            self._update_summary()
+            return
 
         if schedules:
             self._cell_data[period_key] = self._calendar.populate(
@@ -1379,7 +2104,12 @@ class _ResultsPanel(QWidget):
             # best-ranked option instead of keeping an arbitrary old ordinal.
             self._period_indices[period_key] = 0
 
+        # Shortlist entries use content fingerprints, so keep the user's saved
+        # candidates across ranking and refresh their labels to the new order.
         self._nav_model.clear()
+        for period_key in resorted:
+            self._rebuild_navigation_cache(period_key)
+        self._refresh_shortlist_labels()
         self._clear_ranking_dirty()
 
         has_proctor_report = any(
@@ -1475,13 +2205,13 @@ class _ResultsPanel(QWidget):
         self._refresh_heavy_task_controls()
         return True
 
-    def _end_heavy_task(self, kind: str) -> None:
+    def _end_heavy_task(self, kind: str, *, repaint_calendar: bool = True) -> None:
         """Release the shared heavy-task slot and refresh visible controls."""
         if self._controller.end_heavy_task(kind):
             if kind == "ranking":
                 self._finish_ranking_metrics()
             self.heavy_task_state_changed.emit(kind, False)
-        self._refresh_heavy_task_controls()
+        self._refresh_heavy_task_controls(repaint_calendar=repaint_calendar)
 
     def _finish_ranking_metrics(self) -> None:
         """Finalize ranking timing metrics."""
@@ -1496,12 +2226,15 @@ class _ResultsPanel(QWidget):
         except Exception:
             logger.debug("Failed recording ranking metrics", exc_info=True)
 
-    def _refresh_heavy_task_controls(self) -> None:
+    def _refresh_heavy_task_controls(self, *, repaint_calendar: bool = True) -> None:
         """Refresh ranking/load controls after heavy-task state changes."""
         self._set_ranking_busy(self._ranking_proc is not None)
         current = self._current_period_key()
         if current is not None and current in self._cards:
-            self._refresh_period_card(current)
+            if repaint_calendar:
+                self._refresh_period_card(current)
+            else:
+                self._refresh_period_card_counters(current)
 
     def sync_heavy_task_state(self) -> None:
         """Public hook for the parent screen to refresh controls after generation."""
@@ -1549,6 +2282,51 @@ class _ResultsPanel(QWidget):
         dialog = ProctorReportDialog(report_text, parent=self)
         dialog.exec()
 
+    def _export_schedule_selection(self, selected_by_period: dict[str, list[Schedule]]) -> bool:
+        selected = {
+            period_key: list(schedules)
+            for period_key, schedules in selected_by_period.items()
+            if schedules
+        }
+        if not selected:
+            self._show_message(
+                "Nothing to Save",
+                "No shortlisted schedules are currently available for export.",
+                QMessageBox.Icon.Warning,
+            )
+            return False
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Shortlisted Schedules",
+            "shortlisted_schedules.txt",
+            "Text files (*.txt);;All files (*)",
+        )
+
+        if not path:
+            return False
+
+        try:
+            self._controller.export(
+                selected,
+                Path(path),
+                courses_by_id=self._courses_by_id,
+            )
+            self._show_message(
+                "Saved",
+                f"Shortlisted schedules saved to:\n{path}",
+                QMessageBox.Icon.Information,
+            )
+            return True
+        except Exception:
+            logger.exception("Save failed")
+            self._show_message(
+                "Save Error",
+                "Could not save the schedule file. Please check the selected path and try again.",
+                QMessageBox.Icon.Critical,
+            )
+            return False
+
     def _on_save(self) -> None:
         if self._is_stale():
             self._show_message(
@@ -1567,45 +2345,13 @@ class _ResultsPanel(QWidget):
             )
             return
 
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Schedule",
-            "schedules.txt",
-            "Text files (*.txt);;All files (*)",
-        )
-
-        if not path:
-            return
-
-        selected = {
-            key: [self._schedules_by_period[key][self._period_indices[key]]]
-            for key in self._schedules_by_period
-            if self._schedules_by_period[key]
-        }
-
-        if not selected:
+        if not self._favorite_schedules:
             self._show_message(
-                "Nothing to Save",
-                "No schedules are currently displayed.",
-                QMessageBox.Icon.Warning,
-            )
-            return
-
-        try:
-            self._controller.export(
-                selected,
-                Path(path),
-                courses_by_id=self._courses_by_id,
-            )
-            self._show_message(
-                "Saved",
-                f"Schedule saved to:\n{path}",
+                "Shortlist Required",
+                "Add the current option to the Shortlist before exporting. "
+                "This makes the final export an explicit selected schedule instead of an accidental visible option.",
                 QMessageBox.Icon.Information,
             )
-        except Exception:
-            logger.exception("Save failed")
-            self._show_message(
-                "Save Error",
-                "Could not save the schedule file. Please check the selected path and try again.",
-                QMessageBox.Icon.Critical,
-            )
+            return
+
+        self._export_shortlisted_schedules()

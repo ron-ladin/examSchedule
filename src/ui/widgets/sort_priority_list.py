@@ -6,13 +6,14 @@ the Settings dialog (input screen) and the Result Ranking dialog (output screen)
 so both screens present the exact same prioritization UX.
 
 Behaviour (the "dynamic UX rules"):
-  * Only *checked* (enabled) criteria can be dragged and reordered.
-  * Unchecked criteria are anchored at the bottom of the list and cannot be
-    dragged above the checked block.
-  * Checking an unchecked criterion makes it jump to the bottom of the checked
-    block — i.e. it becomes the lowest active priority, ready to be dragged up.
-  * Unchecking a criterion drops it to the top of the unchecked block.
-  * Each checked row is prefixed with its live priority number (1..N).
+  * Only *checked* (enabled) criteria can be dragged and reordered; unchecked
+    rows are not draggable.
+  * Toggling a row's checkbox keeps it in place — checking or unchecking never
+    moves a row, so checked and unchecked rows may be interleaved freely.
+  * Priority follows top-to-bottom row order: the active priority numbers count
+    only the checked rows in the order they currently appear.
+  * Each checked row is prefixed with its live priority number (1..N); unchecked
+    rows are greyed out and unnumbered.
 
 Round-trips cleanly through ``SortingConfig``:
     widget.load_config(config)   # populate from a config
@@ -116,7 +117,7 @@ class SortPriorityList(QListWidget):
             return
         self._updating = True
         try:
-            self._reposition(item)
+            self._refresh_item_flags(item)
         finally:
             self._updating = False
         self._renumber()
@@ -142,39 +143,18 @@ class SortPriorityList(QListWidget):
             if self.item(i).checkState() == Qt.CheckState.Checked
         )
 
-    def _reposition(self, item: QListWidgetItem) -> None:
-        """Move a just-toggled item to the boundary of the checked block.
-
-        Checking sends the item to the bottom of the checked block (lowest
-        active priority); unchecking sends it to the top of the unchecked block.
-        """
-        row = self.row(item)
+    def _refresh_item_flags(self, item: QListWidgetItem) -> None:
+        """Refresh drag flags for a toggled item without moving it."""
         is_checked = item.checkState() == Qt.CheckState.Checked
-        checked_count = self._checked_count()
-        # When checked, this item is already counted, so the bottom of the
-        # checked block is index checked_count - 1. When unchecked, the first
-        # unchecked slot sits right after the (now smaller) checked block.
-        target = checked_count - 1 if is_checked else checked_count
-        if row != target:
-            taken = self.takeItem(row)
-            self.insertItem(target, taken)
-            self.setCurrentItem(taken)
-            item = taken
         item.setFlags(self._flags_for(is_checked))
 
     def _normalize(self) -> None:
-        """Stable-partition so every checked row precedes every unchecked row.
-
-        Used after a drop, which may have dragged a row into the wrong block.
-        Python's stable sort preserves the relative order within each block.
-        """
-        items = [self.takeItem(0) for _ in range(self.count())]
-        items.sort(
-            key=lambda it: 0 if it.checkState() == Qt.CheckState.Checked else 1
-        )
-        for it in items:
-            it.setFlags(self._flags_for(it.checkState() == Qt.CheckState.Checked))
-            self.addItem(it)
+        """Refresh row flags after a drag without forcing checked rows together."""
+        for i in range(self.count()):
+            item = self.item(i)
+            item.setFlags(
+                self._flags_for(item.checkState() == Qt.CheckState.Checked)
+            )
 
     def _renumber(self) -> None:
         """Prefix each checked row with its 1..N priority and grey unchecked rows."""

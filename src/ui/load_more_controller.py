@@ -9,6 +9,8 @@ live schedule/navigation state through it.
 
 import logging
 import multiprocessing
+import sqlite3
+import time
 from queue import Empty as _QueueEmpty
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
@@ -16,13 +18,22 @@ from PyQt6.QtWidgets import QMessageBox, QPushButton
 
 from src.controller import LOAD_BATCH_SIZE
 from src.domain.generation_result import GenerationResult
+from src.domain.resource_guard import (
+    BatchResourceDeltas,
+    ResourceDecision,
+    ResourceGuard,
+    ResourceSnapshot,
+)
 from src.ui.navigation_model import DateSignature as _DateSignature
 
 logger = logging.getLogger(__name__)
 
 _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-AUTO_LOAD_DELAY_MS = 500
+AUTO_LOAD_MIN_DELAY_MS = 100
+AUTO_LOAD_NORMAL_DELAY_MS = 250
+AUTO_LOAD_HEAVY_DELAY_MS = 500
+AUTO_LOAD_PRESSURE_DELAY_MS = 1000
 
 _AUTO_MODE_DATES = "dates"
 _AUTO_MODE_VARIANTS = "variants"
@@ -43,10 +54,13 @@ class LoadMoreController(QObject):
         A user-facing message box should be shown.
     cardRefreshRequested(period_key: str)
         The period card for ``period_key`` should be re-rendered.
+    cardCountersRefreshRequested(period_key: str)
+        Only counters/buttons changed; the calendar should not be repainted.
     """
 
     messageRequested = pyqtSignal(str, str, object)
     cardRefreshRequested = pyqtSignal(str)
+    cardCountersRefreshRequested = pyqtSignal(str)
 
     def __init__(self, panel) -> None:
         super().__init__(panel)
@@ -67,6 +81,10 @@ class LoadMoreController(QObject):
         self.timers: dict[str, QTimer] = {}
         self.ticks: dict[str, int] = {}
         self.advance_after_load: set[str] = set()
+        self.batch_started_at: dict[str, float] = {}
+        self.resource_snapshots_before: dict[str, ResourceSnapshot] = {}
+        self.resource_decisions: dict[str, ResourceDecision] = {}
+        self._resource_guard = ResourceGuard(panel.active_schedule_store_path)
 
     def reset(self) -> None:
         """Stop all in-flight workers and clear per-result-set auto state."""
@@ -76,6 +94,9 @@ class LoadMoreController(QObject):
         self.auto_load_modes.clear()
         self.pending_auto_modes.clear()
         self.variant_more_by_signature.clear()
+        self.batch_started_at.clear()
+        self.resource_snapshots_before.clear()
+        self.resource_decisions.clear()
 
     def start_automatic_loads(self) -> None:
         """Start automatic loading for all currently truncated periods.
@@ -237,6 +258,146 @@ class LoadMoreController(QObject):
 
         self.stop_auto_load(period_key)
 
+    def _check_resources_before_batch(self, period_key: str) -> bool:
+        """Return False when the next batch would exceed RAM/disk budgets."""
+        try:
+            estimates = self._resource_guard.estimate_next_batch(LOAD_BATCH_SIZE)
+            decision = self._resource_guard.evaluate(**estimates)
+        except Exception:
+            logger.exception("Resource preflight failed; allowing one batch")
+            return True
+
+        self.resource_decisions[period_key] = decision
+        self.resource_snapshots_before[period_key] = decision.snapshot
+
+        if not decision.can_continue:
+            self._pause_for_resource_limit(
+                period_key,
+                decision,
+                auto_load=period_key in self.auto_load_periods,
+            )
+            return False
+
+        if decision.should_warn:
+            logger.warning(
+                "Resource warning before load batch: period=%s reason=%s "
+                "rss_mb=%.1f db_total_mb=%.1f free_disk_mb=%.1f",
+                period_key,
+                decision.reason,
+                decision.snapshot.process_rss_mb,
+                decision.snapshot.db_total_size_mb,
+                decision.snapshot.free_disk_mb,
+            )
+        return True
+
+    def _pause_for_resource_limit(
+        self,
+        period_key: str,
+        decision: ResourceDecision,
+        *,
+        auto_load: bool = True,
+    ) -> None:
+        """Stop further loading and keep already-loaded schedules usable."""
+        loaded_count = self._panel.total_in_memory_schedule_count()
+        snapshot = decision.snapshot
+        self.stop_auto_load(period_key, refresh=False)
+        self.resource_decisions.pop(period_key, None)
+        self.resource_snapshots_before.pop(period_key, None)
+        self.update_auto_load_button(period_key)
+        if self._panel.has_period(period_key):
+            self.cardCountersRefreshRequested.emit(period_key)
+
+        logger.warning(
+            "Auto Load paused by ResourceGuard: period=%s reason=%s "
+            "loaded=%s rss_mb=%.1f db_total_mb=%.1f free_disk_mb=%.1f",
+            period_key,
+            decision.reason,
+            loaded_count,
+            snapshot.process_rss_mb,
+            snapshot.db_total_size_mb,
+            snapshot.free_disk_mb,
+        )
+        lead = (
+            "Auto Load was paused to protect system resources."
+            if auto_load
+            else "Load More was paused to protect system resources."
+        )
+        self.messageRequested.emit(
+            "Resource Limit Reached",
+            f"{lead}\n"
+            f"Already loaded {loaded_count:,} schedules.\n"
+            f"RAM used: {snapshot.process_rss_mb:,.0f} MB.\n"
+            f"Database size: {snapshot.db_total_size_mb / 1024.0:,.2f} GB.\n"
+            f"Free disk: {snapshot.free_disk_mb / 1024.0:,.2f} GB.",
+            QMessageBox.Icon.Warning,
+        )
+
+    def _next_auto_load_delay_ms(
+        self,
+        *,
+        total_batch_seconds: float,
+        resource_pressure: bool,
+        resource_warning: bool,
+    ) -> int:
+        if resource_pressure:
+            return AUTO_LOAD_PRESSURE_DELAY_MS
+
+        if resource_warning:
+            return AUTO_LOAD_HEAVY_DELAY_MS
+
+        if total_batch_seconds < 0.7:
+            return AUTO_LOAD_MIN_DELAY_MS
+
+        if total_batch_seconds < 2.0:
+            return AUTO_LOAD_NORMAL_DELAY_MS
+
+        if total_batch_seconds < 4.0:
+            return AUTO_LOAD_HEAVY_DELAY_MS
+
+        return AUTO_LOAD_PRESSURE_DELAY_MS
+
+    def _snapshot_resources(self) -> ResourceSnapshot | None:
+        try:
+            return self._resource_guard.snapshot()
+        except Exception:
+            logger.debug("Resource snapshot failed", exc_info=True)
+            return None
+
+    @staticmethod
+    def _empty_resource_deltas() -> BatchResourceDeltas:
+        return BatchResourceDeltas(
+            rss_delta_mb=0.0,
+            db_delta_mb=0.0,
+            wal_delta_mb=0.0,
+            sqlite_total_delta_mb=0.0,
+            ram_per_schedule_kb=0.0,
+            db_per_schedule_kb=0.0,
+            wal_per_schedule_kb=0.0,
+            sqlite_total_per_schedule_kb=0.0,
+            rolling_ram_per_schedule_kb=0.0,
+            rolling_db_per_schedule_kb=0.0,
+            rolling_wal_per_schedule_kb=0.0,
+            rolling_sqlite_total_per_schedule_kb=0.0,
+        )
+
+    def _record_resource_deltas(
+        self,
+        before: ResourceSnapshot | None,
+        schedule_count: int,
+    ) -> tuple[ResourceSnapshot | None, BatchResourceDeltas]:
+        after = self._snapshot_resources()
+        if before is None or after is None:
+            return after, self._empty_resource_deltas()
+        try:
+            return after, self._resource_guard.record_batch(
+                before,
+                after,
+                schedule_count,
+            )
+        except Exception:
+            logger.debug("Resource delta recording failed", exc_info=True)
+            return after, self._empty_resource_deltas()
+
     def _style_auto_button(
         self,
         button: QPushButton,
@@ -245,9 +406,14 @@ class LoadMoreController(QObject):
         enabled: bool,
     ) -> None:
         button.setStyleSheet(
+            "QPushButton {"
             f"color: {color}; border: 2px solid {color}; border-radius: 8px;"
             "padding: 6px 12px; font-size: 11px; font-weight: 700;"
             f"background: {background};"
+            "}"
+            f"QPushButton:hover {{ background: {background}; }}"
+            "QPushButton:disabled { color: #94A3B8; background: #F8FAFC;"
+            "border-color: #CBD5E1; }"
         )
         button.setEnabled(enabled)
 
@@ -274,17 +440,17 @@ class LoadMoreController(QObject):
 
         if date_btn is not None:
             if pending_mode == _AUTO_MODE_DATES:
-                date_btn.setText("⏳  Dates Next")
+                date_btn.setText("Dates queued")
                 self._style_auto_button(
-                    date_btn, "#B45309", "rgba(180, 83, 9, 0.07)", False
+                    date_btn, "#475569", "#F1F5F9", False
                 )
             elif mode == _AUTO_MODE_DATES:
-                date_btn.setText("⏹  Stop Dates")
+                date_btn.setText("Stop Dates")
                 self._style_auto_button(
-                    date_btn, "#B91C1C", "rgba(185, 28, 28, 0.07)", True
+                    date_btn, "#7F1D1D", "#FEF2F2", True
                 )
             else:
-                date_btn.setText("⚡  Auto Load Dates")
+                date_btn.setText("Auto Dates")
                 self._style_auto_button(
                     date_btn,
                     "#047857",
@@ -297,17 +463,17 @@ class LoadMoreController(QObject):
 
         if variant_btn is not None:
             if pending_mode == _AUTO_MODE_VARIANTS:
-                variant_btn.setText("⏳  Variants Next")
+                variant_btn.setText("Variants queued")
                 self._style_auto_button(
-                    variant_btn, "#B45309", "rgba(180, 83, 9, 0.07)", False
+                    variant_btn, "#475569", "#F1F5F9", False
                 )
             elif mode == _AUTO_MODE_VARIANTS:
-                variant_btn.setText("⏹  Stop Variants")
+                variant_btn.setText("Stop Variants")
                 self._style_auto_button(
-                    variant_btn, "#B91C1C", "rgba(185, 28, 28, 0.07)", True
+                    variant_btn, "#7F1D1D", "#FEF2F2", True
                 )
             else:
-                variant_btn.setText("⚡  Auto Load Classes Variants")
+                variant_btn.setText("Auto Variants")
                 self._style_auto_button(
                     variant_btn,
                     "#7C3AED",
@@ -361,7 +527,11 @@ class LoadMoreController(QObject):
         """Load one batch of different date options."""
         if period_key in self.procs:
             return
+        if not self._check_resources_before_batch(period_key):
+            return
         if not self._begin_loading_task(period_key):
+            self.resource_snapshots_before.pop(period_key, None)
+            self.resource_decisions.pop(period_key, None)
             return
         self._panel.show_workload_status(
             f"Loading {LOAD_BATCH_SIZE:,} more date options..."
@@ -369,12 +539,16 @@ class LoadMoreController(QObject):
 
         try:
             already_date_options = self._panel.get_date_option_count(period_key)
+            self.batch_started_at[period_key] = time.perf_counter()
             queue, proc = self._controller.start_load_more_date_options_for_period(
                 period_key,
                 already_date_options,
             )
             self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_DATES)
         except Exception:
+            self.batch_started_at.pop(period_key, None)
+            self.resource_snapshots_before.pop(period_key, None)
+            self.resource_decisions.pop(period_key, None)
             self._finish_load_metrics()
             self._panel._end_heavy_task("loading")
             raise
@@ -387,7 +561,11 @@ class LoadMoreController(QObject):
         """Load one batch of variants for the currently displayed date option."""
         if period_key in self.procs:
             return
+        if not self._check_resources_before_batch(period_key):
+            return
         if not self._begin_loading_task(period_key):
+            self.resource_snapshots_before.pop(period_key, None)
+            self.resource_decisions.pop(period_key, None)
             return
         self._panel.show_workload_status("Loading classroom variants...")
 
@@ -405,6 +583,7 @@ class LoadMoreController(QObject):
         existing_variants = panel.get_variant_index_count(period_key, signature)
 
         try:
+            self.batch_started_at[period_key] = time.perf_counter()
             queue, proc = self._controller.start_load_variants_for_schedule(
                 period_key,
                 current_schedule,
@@ -412,6 +591,9 @@ class LoadMoreController(QObject):
             )
             self._start_load_more_process(period_key, queue, proc, _AUTO_MODE_VARIANTS)
         except Exception:
+            self.batch_started_at.pop(period_key, None)
+            self.resource_snapshots_before.pop(period_key, None)
+            self.resource_decisions.pop(period_key, None)
             self._finish_load_metrics()
             panel._end_heavy_task("loading")
             raise
@@ -479,6 +661,7 @@ class LoadMoreController(QObject):
 
         try:
             result = queue.get_nowait()
+            result_received_at = time.perf_counter()
         except _QueueEmpty:
             proc = self.procs.get(period_key)
 
@@ -536,6 +719,13 @@ class LoadMoreController(QObject):
                 return
             result = payload
 
+        batch_started_at = self.batch_started_at.pop(period_key, None)
+        worker_generation_seconds = (
+            result_received_at - batch_started_at
+            if batch_started_at is not None
+            else 0.0
+        )
+
         timer = self.timers.pop(period_key, None)
         if timer:
             timer.stop()
@@ -559,6 +749,7 @@ class LoadMoreController(QObject):
         truncated_periods = result.truncated_periods
 
         old_len = len(panel.get_schedules(period_key))
+        old_index = panel.get_current_index(period_key)
         extra = all_by_period.get(period_key, [])
         still_more = period_key in truncated_periods
         active_auto_mode = self.auto_load_modes.get(period_key)
@@ -569,11 +760,46 @@ class LoadMoreController(QObject):
             current_signature = panel.get_current_signature(period_key)
 
         should_advance_to_next_date = period_key in self.advance_after_load
+        merge_timings = {
+            "sqlite_insert_seconds": 0.0,
+            "navigation_update_seconds": 0.0,
+            "summary_update_seconds": 0.0,
+        }
+        resource_before = (
+            self.resource_snapshots_before.get(period_key)
+            or self._snapshot_resources()
+        )
+        resource_decision = self.resource_decisions.get(period_key)
 
         if extra:
             # The panel owns its schedule/nav state; ask it to merge the batch
             # rather than reaching into its private dicts (Tell, Don't Ask).
-            panel.append_loaded_schedules(period_key, extra)
+            try:
+                merge_timings = panel.append_loaded_schedules(period_key, extra)
+            except (sqlite3.DatabaseError, OSError):
+                loaded_count = panel.total_in_memory_schedule_count()
+                logger.exception(
+                    "Could not store additional schedules for %s", period_key
+                )
+                if btn:
+                    btn.setEnabled(True)
+                    btn.setText("⚠  Storage failed — retry")
+
+                self.stop_auto_load(period_key, refresh=False)
+                self.messageRequested.emit(
+                    "Storage Failed",
+                    "Could not store more schedules because the database/disk "
+                    f"write failed. Already loaded {loaded_count:,} schedules. "
+                    "Free disk space or export current results.",
+                    QMessageBox.Icon.Warning,
+                )
+                self.cleanup_load_more_state(
+                    period_key,
+                    terminate=False,
+                    repaint_calendar=False,
+                )
+                self.cardCountersRefreshRequested.emit(period_key)
+                return
 
         if mode == _AUTO_MODE_DATES:
             if should_advance_to_next_date:
@@ -614,8 +840,83 @@ class LoadMoreController(QObject):
         else:
             should_continue_auto = False
 
-        self.cleanup_load_more_state(period_key)
-        self.cardRefreshRequested.emit(period_key)
+        visible_index_changed = panel.get_current_index(period_key) != old_index
+        counters_only_refresh = (
+            period_key in self.auto_load_periods
+            and not visible_index_changed
+            and not should_advance_to_next_date
+        )
+
+        self.cleanup_load_more_state(
+            period_key,
+            repaint_calendar=not counters_only_refresh,
+        )
+        card_refresh_started_at = time.perf_counter()
+        if counters_only_refresh:
+            self.cardCountersRefreshRequested.emit(period_key)
+        else:
+            self.cardRefreshRequested.emit(period_key)
+        card_refresh_seconds = time.perf_counter() - card_refresh_started_at
+        total_auto_load_batch_seconds = (
+            time.perf_counter() - batch_started_at
+            if batch_started_at is not None
+            else 0.0
+        )
+        resource_after, resource_deltas = self._record_resource_deltas(
+            resource_before,
+            len(extra),
+        )
+        resource_before_log = resource_before or resource_after
+        resource_after_log = resource_after or resource_before
+
+        logger.info(
+            "Load batch timings: period=%s mode=%s auto_load=%s batch_size=%s "
+            "sqlite_rows=%s worker_generation_seconds=%.3fs "
+            "sqlite_insert_seconds=%.3fs navigation_update_seconds=%.3fs "
+            "summary_update_seconds=%.3fs card_refresh_seconds=%.3fs "
+            "total_auto_load_batch_seconds=%.3fs "
+            "rss_before_mb=%.1f db_size_before_mb=%.1f wal_size_before_mb=%.1f "
+            "shm_size_before_mb=%.1f db_total_size_before_mb=%.1f "
+            "free_disk_before_gb=%.2f rss_after_mb=%.1f rss_delta_mb=%.1f "
+            "ram_per_schedule_kb=%.3f db_size_after_mb=%.1f "
+            "wal_size_after_mb=%.1f shm_size_after_mb=%.1f "
+            "db_total_size_after_mb=%.1f db_delta_mb=%.1f "
+            "db_per_schedule_kb=%.3f free_disk_after_gb=%.2f "
+            "wal_per_schedule_kb=%.3f sqlite_total_per_schedule_kb=%.3f",
+            period_key,
+            mode,
+            period_key in self.auto_load_periods,
+            len(extra),
+            panel.total_in_memory_schedule_count(),
+            worker_generation_seconds,
+            merge_timings["sqlite_insert_seconds"],
+            merge_timings["navigation_update_seconds"],
+            merge_timings["summary_update_seconds"],
+            card_refresh_seconds,
+            total_auto_load_batch_seconds,
+            resource_before_log.process_rss_mb if resource_before_log else 0.0,
+            resource_before_log.db_size_mb if resource_before_log else 0.0,
+            resource_before_log.wal_size_mb if resource_before_log else 0.0,
+            resource_before_log.shm_size_mb if resource_before_log else 0.0,
+            resource_before_log.db_total_size_mb if resource_before_log else 0.0,
+            (resource_before_log.free_disk_mb / 1024.0)
+            if resource_before_log
+            else 0.0,
+            resource_after_log.process_rss_mb if resource_after_log else 0.0,
+            resource_deltas.rss_delta_mb,
+            resource_deltas.ram_per_schedule_kb,
+            resource_after_log.db_size_mb if resource_after_log else 0.0,
+            resource_after_log.wal_size_mb if resource_after_log else 0.0,
+            resource_after_log.shm_size_mb if resource_after_log else 0.0,
+            resource_after_log.db_total_size_mb if resource_after_log else 0.0,
+            resource_deltas.db_delta_mb,
+            resource_deltas.db_per_schedule_kb,
+            (resource_after_log.free_disk_mb / 1024.0)
+            if resource_after_log
+            else 0.0,
+            resource_deltas.wal_per_schedule_kb,
+            resource_deltas.sqlite_total_per_schedule_kb,
+        )
 
         if mode == _AUTO_MODE_DATES and still_more and btn:
             btn.setEnabled(period_key not in self.auto_load_periods)
@@ -631,9 +932,45 @@ class LoadMoreController(QObject):
             self.start_auto_load(period_key, pending_mode)
             return
 
+        next_resource_decision: ResourceDecision | None = None
         if should_continue_auto:
+            try:
+                next_estimates = self._resource_guard.estimate_next_batch(
+                    LOAD_BATCH_SIZE
+                )
+                next_resource_decision = self._resource_guard.evaluate(
+                    **next_estimates
+                )
+            except Exception:
+                logger.debug("Next-batch resource evaluation failed", exc_info=True)
+
+            if (
+                next_resource_decision is not None
+                and not next_resource_decision.can_continue
+            ):
+                self._pause_for_resource_limit(
+                    period_key,
+                    next_resource_decision,
+                    auto_load=True,
+                )
+                self.update_auto_load_button(period_key)
+                return
+
+            resource_warning = (
+                (resource_decision.should_warn if resource_decision else False)
+                or (
+                    next_resource_decision.should_warn
+                    if next_resource_decision
+                    else False
+                )
+            )
+            delay_ms = self._next_auto_load_delay_ms(
+                total_batch_seconds=total_auto_load_batch_seconds,
+                resource_pressure=False,
+                resource_warning=resource_warning,
+            )
             QTimer.singleShot(
-                AUTO_LOAD_DELAY_MS,
+                delay_ms,
                 lambda k=period_key: self._auto_load_next_batch(k),
             )
         elif active_auto_mode == mode:
@@ -645,6 +982,7 @@ class LoadMoreController(QObject):
         self,
         period_key: str,
         terminate: bool = False,
+        repaint_calendar: bool = True,
     ) -> None:
         timer = self.timers.pop(period_key, None)
         if timer is not None:
@@ -654,6 +992,9 @@ class LoadMoreController(QObject):
         self.chunk_sizes.pop(period_key, None)
         self.modes.pop(period_key, None)
         self.ticks.pop(period_key, None)
+        self.batch_started_at.pop(period_key, None)
+        self.resource_snapshots_before.pop(period_key, None)
+        self.resource_decisions.pop(period_key, None)
         self.advance_after_load.discard(period_key)
 
         proc = self.procs.pop(period_key, None)
@@ -674,7 +1015,10 @@ class LoadMoreController(QObject):
 
         if not self.procs:
             self._finish_load_metrics()
-            self._panel._end_heavy_task("loading")
+            self._panel._end_heavy_task(
+                "loading",
+                repaint_calendar=repaint_calendar,
+            )
 
     def _finish_load_metrics(self) -> None:
         """Finalize the current load-batch metrics snapshot, if one is active."""

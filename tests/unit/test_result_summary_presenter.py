@@ -1,7 +1,7 @@
 from src.ui.result_summary_presenter import ResultSummaryPresenter
 
 
-def test_summary_presenter_shows_and_clears_ranking_dirty_message():
+def test_summary_presenter_shows_dirty_message_until_cleared():
     presenter = ResultSummaryPresenter()
 
     presenter.mark_ranking_dirty(
@@ -18,7 +18,9 @@ def test_summary_presenter_shows_and_clears_ranking_dirty_message():
     )
 
     assert dirty is not None
-    assert "Click Result Ranking" in dirty.text
+    assert dirty.text == (
+        "Sort settings changed. Click Result Ranking to apply to current results."
+    )
     assert presenter.ranking_dirty is True
 
     presenter.clear_ranking_dirty()
@@ -55,3 +57,23 @@ def test_summary_presenter_gives_stale_priority_over_ranking_dirty():
 
     assert summary is not None
     assert summary.text == "Results stale - regenerate required."
+
+
+def test_empty_ranking_dirty_message_keeps_normal_summary_visible():
+    presenter = ResultSummaryPresenter()
+    presenter.mark_ranking_dirty("")
+
+    summary = presenter.build(
+        has_any_periods=True,
+        has_results=True,
+        is_stale=False,
+        is_imported_schedule=False,
+        combined_options_total=1234,
+        period_schedules_total=1234,
+        has_more=False,
+    )
+
+    assert presenter.ranking_dirty is True
+    assert summary is not None
+    assert summary.text
+    assert "1,234 combined schedule options available" in summary.text

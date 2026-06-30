@@ -29,6 +29,7 @@ QtGui = pytest.importorskip("PyQt6.QtGui", exc_type=ImportError)
 QApplication = QtWidgets.QApplication
 
 from src.ui.widgets.period_card_builder import _make_data_table
+from src.ui.style import get_application_style
 
 
 def _get_qapp() -> QApplication:
@@ -51,3 +52,14 @@ def test_calendar_table_tracks_mouse_for_hover():
         table.close()
         table.deleteLater()
         app.processEvents()
+
+
+def test_application_tooltips_use_light_readable_style():
+    """Calendar hover help should not fall back to the native dark tooltip."""
+    qss = get_application_style()
+
+    assert "QToolTip" in qss
+    assert "background-color: #F8FAFC" in qss
+    assert "color: #172033" in qss
+    assert "border: 1px solid #C4B5FD" in qss
+    assert "background-color: #1a1c1e" not in qss

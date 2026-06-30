@@ -11,14 +11,15 @@ QMainWindow, QDialog, QWidget {
 
 /* ── TOOLTIPS ─────────────────────────────────────────────── */
 /* A global stylesheet makes Qt paint tooltips as a black box unless we
- * style QToolTip ourselves, so give it readable colors (SCRUM-399). */
+ * style QToolTip ourselves, so keep hover help light and readable. */
 QToolTip {
-    background-color: #1a1c1e;
-    color: #ffffff;
-    border: 1px solid rgba(194, 198, 214, 0.6);
-    border-radius: 6px;
-    padding: 4px 8px;
+    background-color: #F8FAFC;
+    color: #172033;
+    border: 1px solid #C4B5FD;
+    border-radius: 8px;
+    padding: 8px 12px;
     font-size: 12px;
+    font-weight: 600;
 }
 
 /* ── APP HEADER ───────────────────────────────────────────── */
