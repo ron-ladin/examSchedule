@@ -29,7 +29,7 @@ QApplication = QtWidgets.QApplication
 QFileDialog = QtWidgets.QFileDialog
 QMessageBox = QtWidgets.QMessageBox
 
-from src.controller import DesktopController
+from src.controller import LOAD_BATCH_SIZE, DesktopController
 from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
@@ -49,6 +49,39 @@ def _get_qapp() -> QApplication:
         app = QApplication(sys.argv)
 
     return app
+
+
+def _wait_for_qt_timers(ms: int) -> None:
+    loop = QtCore.QEventLoop()
+    QtCore.QTimer.singleShot(ms, loop.quit)
+    loop.exec()
+
+
+def _generation_ready_config_screen() -> tuple[
+    QApplication,
+    DesktopController,
+    ConfigScreen,
+]:
+    app = _get_qapp()
+    controller = DesktopController()
+    controller._courses = [
+        Course(
+            id="11111",
+            name="Calculus",
+            instructor="Dr. Cohen",
+            evaluation_type="Exam",
+            offerings=[CourseOffering("83101", 1, "FALL", "Obligatory")],
+        )
+    ]
+    controller._exam_periods = [
+        ExamPeriod("FALL", "Aleph", [(date(2026, 1, 5), date(2026, 1, 9))])
+    ]
+    screen = ConfigScreen(controller)
+    screen._refresh_programme_list()
+    _find_programme_row(screen, "83101").set_checked(True)
+    screen._refresh_periods_card()
+    screen._update_gen_btn()
+    return app, controller, screen
 
 
 def _write_courses_base(path: Path) -> None:
@@ -754,6 +787,139 @@ def test_generation_started_signal_switches_to_results_loading_screen():
     assert screen._results._spin_timer.isActive() is True
 
     screen._results.hide_loading()
+    screen.close()
+
+
+def test_generate_emits_loading_state_before_poller_starts(monkeypatch):
+    app, controller, screen = _generation_ready_config_screen()
+    events: list[str] = []
+    emitted_payloads: list[tuple] = []
+    poller_start_calls: list[tuple] = []
+
+    def record_generation_started(payload):
+        events.append("generation_started")
+        emitted_payloads.append(payload)
+
+    def fake_start(selected, color_map, allow_unassigned):
+        events.append("poller_start")
+        poller_start_calls.append((selected, color_map, allow_unassigned))
+
+    screen.generation_started.connect(record_generation_started)
+    monkeypatch.setattr(screen._poller, "start", fake_start)
+
+    screen._on_generate()
+
+    assert events == ["generation_started"]
+    assert len(emitted_payloads) == 1
+    emitted_selected, emitted_color_map = emitted_payloads[0]
+    assert emitted_selected == ["83101"]
+    assert set(emitted_color_map) == {"83101"}
+    assert poller_start_calls == []
+    assert controller.heavy_task_kind == "generation"
+    assert "Starting generation" in screen._status_label.text()
+
+    _wait_for_qt_timers(80)
+
+    assert events == ["generation_started", "poller_start"]
+    assert poller_start_calls == [
+        (emitted_selected, emitted_color_map, False)
+    ]
+
+    screen.close()
+    app.processEvents()
+
+
+def test_delayed_generation_start_failure_cleans_heavy_task(monkeypatch):
+    app, controller, screen = _generation_ready_config_screen()
+    settings_states: list[bool] = []
+    heavy_events: list[tuple[str, bool]] = []
+
+    def fail_start(_selected, _color_map, _allow_unassigned):
+        raise RuntimeError("poller start failed")
+
+    monkeypatch.setattr(screen._poller, "start", fail_start)
+    monkeypatch.setattr(
+        screen,
+        "_notify_settings_state",
+        lambda is_running: settings_states.append(is_running),
+    )
+    screen.heavy_task_state_changed.connect(
+        lambda kind, active: heavy_events.append((kind, active))
+    )
+
+    assert controller.begin_heavy_task("generation") is True
+    controller.performance_metrics.start_generation(LOAD_BATCH_SIZE)
+    screen._gen_btn.setEnabled(False)
+
+    with pytest.raises(RuntimeError, match="poller start failed"):
+        screen._start_generation_polling(
+            ["83101"],
+            {"83101": "#2563EB"},
+            False,
+        )
+
+    assert controller.heavy_task_kind is None
+    assert heavy_events == [("generation", False)]
+    assert settings_states == [False]
+    assert screen._gen_btn.isEnabled() is True
+
+    screen.close()
+    app.processEvents()
+
+
+def test_first_period_ready_appends_before_hiding_loading(monkeypatch):
+    app = _get_qapp()
+    controller = DesktopController()
+    screen = InputScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen._config.generation_started.emit((["83101"], {"83101": "#2563EB"}))
+    app.processEvents()
+    assert screen._results._content_stack.currentIndex() == 0
+    assert screen._results._spin_timer.isActive() is True
+
+    events: list[tuple[str, int]] = []
+    appended_batches: list[dict[str, list[Schedule]]] = []
+    original_hide_loading = screen._results.hide_loading
+
+    def fake_append_period(
+        schedules_by_period,
+        _courses_by_id,
+        _prog_color_map,
+        _truncated_periods,
+    ):
+        events.append(("append", screen._results._content_stack.currentIndex()))
+        appended_batches.append(schedules_by_period)
+        screen._results._workspace.setCurrentIndex(2)
+        screen._results._results_loaded = True
+
+    def record_hide_loading():
+        events.append(("hide", screen._results._content_stack.currentIndex()))
+        original_hide_loading()
+
+    monkeypatch.setattr(screen._results, "append_period", fake_append_period)
+    monkeypatch.setattr(screen._results, "hide_loading", record_hide_loading)
+
+    schedules_by_period = {"FALL - Aleph": []}
+    screen._config.period_ready.emit(
+        (
+            ["83101"],
+            schedules_by_period,
+            {},
+            {"83101": "#2563EB"},
+            set(),
+        )
+    )
+    app.processEvents()
+
+    assert events == [("append", 0), ("hide", 0)]
+    assert appended_batches == [schedules_by_period]
+    assert screen._results._content_stack.currentIndex() == 1
+    assert screen._results._spin_timer.isActive() is False
+    assert screen._stacked.currentIndex() == 1
+    assert screen._results._results_loaded is True
+
     screen.close()
 
 

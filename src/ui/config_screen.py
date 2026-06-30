@@ -24,7 +24,7 @@ results_invalidated()       → threshold settings changed; cached results are s
 import logging
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from src.domain.sorting import SortingConfig
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
@@ -659,19 +659,40 @@ class ConfigScreen(QWidget):
 
         self._gen_btn.setEnabled(False)
         self._notify_settings_state(True)
-        self._set_status("Generating schedules…")
+        self._set_status("Starting generation…")
         self._progress_bar.setRange(0, 0)
         self._progress_bar.setStyleSheet(
             "QProgressBar { background:#E2E8F0; border:none; border-radius:2px; }"
             "QProgressBar::chunk { background:#2563EB; }"
         )
 
+        QTimer.singleShot(
+            50,
+            lambda: self._start_generation_polling(
+                selected,
+                color_map,
+                self._allow_unassigned_generation,
+            ),
+        )
+
+    def _start_generation_polling(
+        self,
+        selected_programs: list[str],
+        color_map: dict[str, str],
+        allow_unassigned_generation: bool,
+    ) -> None:
         try:
-            self._poller.start(selected, color_map, self._allow_unassigned_generation)
+            self._poller.start(
+                selected_programs,
+                color_map,
+                allow_unassigned_generation,
+            )
         except Exception:
             self._controller.performance_metrics.finish_generation()
             if self._controller.end_heavy_task("generation"):
                 self.heavy_task_state_changed.emit("generation", False)
+            self._notify_settings_state(False)
+            self._update_gen_btn()
             raise
 
     def _confirm_capacity_warning(self) -> bool:

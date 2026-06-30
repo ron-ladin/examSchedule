@@ -465,12 +465,11 @@ class InputScreen(QWidget):
         """Display one streamed period batch as soon as it arrives."""
         _, schedules_by_period, courses_by_id, prog_color_map, truncated = data[:5]
 
-        # The first batch replaces the loading spinner with the (incrementally
-        # filling) results view.
-        if not self._streaming_active:
+        # Keep the loading pane visible while the first batch is appended; only
+        # reveal the results pane once it has real content to display.
+        first_batch = not self._streaming_active
+        if first_batch:
             self._streaming_active = True
-            self._results.hide_loading()
-            self._stacked.setCurrentIndex(1)
 
         self._results.append_period(
             schedules_by_period,
@@ -478,6 +477,10 @@ class InputScreen(QWidget):
             prog_color_map,
             truncated,
         )
+
+        if first_batch:
+            self._results.hide_loading()
+            self._stacked.setCurrentIndex(1)
 
     def _on_generated(self, data: tuple) -> None:
         _, schedules_by_period, courses_by_id, prog_color_map, truncated = data[:5]

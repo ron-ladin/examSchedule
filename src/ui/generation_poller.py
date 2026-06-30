@@ -48,7 +48,7 @@ _HARD_KILL_GEN_SECS = 15 * 60
 # enqueue several period messages between 150 ms ticks; processing them all in
 # one callback (each triggers a sort + card rebuild) can freeze the Qt event
 # loop. Remaining messages are picked up on the next tick.
-_MAX_DRAIN_PER_TICK = 5
+_MAX_DRAIN_PER_TICK = 1
 
 # Consecutive ticks with a worker not alive and its queue empty before we
 # declare an unexpected exit.
