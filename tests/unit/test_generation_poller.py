@@ -10,6 +10,7 @@ import os
 import queue
 import sys
 import time
+import types
 from datetime import date
 
 import pytest
@@ -298,8 +299,11 @@ def _patch_process_spawning(
         created["procs"].append(proc)
         return proc
 
-    monkeypatch.setattr(gp.multiprocessing, "Queue", fake_queue)
-    monkeypatch.setattr(gp.multiprocessing, "Process", fake_process)
+    monkeypatch.setattr(
+        gp,
+        "worker_context",
+        lambda: types.SimpleNamespace(Queue=fake_queue, Process=fake_process),
+    )
     return created
 
 
@@ -376,10 +380,11 @@ def test_start_spawns_only_bounded_period_workers(monkeypatch):
         gp._PER_WORKER_QUEUE_MAXSIZE,
     ]
 
-    for proc in created["procs"]:
+    for index, proc in enumerate(created["procs"]):
         assert proc.construct_kwargs["target"] is gp._run_generation_process
         assert proc.construct_kwargs["daemon"] is True
-        _queue, _courses, worker_periods, _selected = proc.construct_kwargs["args"]
+        queue_obj, _courses, worker_periods, _selected = proc.construct_kwargs["args"]
+        assert queue_obj is created["queues"][index]
         assert len(worker_periods) == 1
         worker_kwargs = proc.construct_kwargs["kwargs"]
         assert worker_kwargs["stream"] is True
@@ -728,8 +733,11 @@ def test_queue_construction_failure_rolls_back_and_future_run_works(monkeypatch)
         created["procs"].append(proc)
         return proc
 
-    monkeypatch.setattr(gp.multiprocessing, "Queue", fake_queue)
-    monkeypatch.setattr(gp.multiprocessing, "Process", fake_process)
+    monkeypatch.setattr(
+        gp,
+        "worker_context",
+        lambda: types.SimpleNamespace(Queue=fake_queue, Process=fake_process),
+    )
 
     poller.start(["83101"], {}, allow_unassigned=False)
     assert len(failed) == 1
@@ -1662,10 +1670,14 @@ def test_repeated_lifecycle_leaves_no_tracked_resources(monkeypatch):
 
     created["procs"].clear()
     created["queues"].clear()
+    fake_queue = gp.worker_context().Queue
     monkeypatch.setattr(
-        gp.multiprocessing,
-        "Process",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        gp,
+        "worker_context",
+        lambda: types.SimpleNamespace(
+            Queue=fake_queue,
+            Process=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        ),
     )
     failed = _collect(poller.generation_failed)
     poller.start(["83101"], {}, allow_unassigned=False)

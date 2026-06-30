@@ -61,9 +61,9 @@ def test_dynamic_budget_uses_machine_ram_and_disk_baselines(tmp_path):
     budget = guard.budget(snapshot)
 
     assert snapshot.process_rss_mb == 512
-    assert budget.ram_hard_limit_mb == 4096
-    assert budget.ram_soft_limit_mb == 3276.8
-    assert budget.min_free_ram_mb == max(2048, 16_384 * 0.15)
+    assert budget.ram_hard_limit_mb == 16_384 * 0.90
+    assert budget.ram_soft_limit_mb == 16_384 * 0.80
+    assert budget.min_free_ram_mb == max(1536, 16_384 * 0.15)
     assert budget.max_db_size_mb == 40_000
     assert budget.min_free_disk_mb == 8_000
 
@@ -110,6 +110,78 @@ def test_soft_warning_and_hard_pause_decisions(tmp_path):
     assert "soft limit" in warning.reason
     assert hard.can_continue is False
     assert "hard limit" in hard.reason
+
+
+def test_ram_with_more_than_three_gb_available_continues_without_warning(tmp_path):
+    guard = ResourceGuard(
+        lambda: tmp_path / "cache.sqlite3",
+        psutil_module=_FakePsutil(
+            total_mb=16_384,
+            available_mb=3400,
+            rss_mb=512,
+        ),
+        disk_usage_func=lambda _path: _disk(total_mb=100_000, free_mb=80_000),
+    )
+
+    decision = guard.evaluate(estimated_ram_growth_mb=100)
+
+    assert decision.can_continue is True
+    assert decision.should_warn is False
+    assert decision.reason is None
+
+
+def test_eighty_five_percent_ram_usage_warns_instead_of_hard_stop(tmp_path):
+    guard = ResourceGuard(
+        lambda: tmp_path / "cache.sqlite3",
+        psutil_module=_FakePsutil(
+            total_mb=16_384,
+            available_mb=2400,
+            rss_mb=512,
+        ),
+        disk_usage_func=lambda _path: _disk(total_mb=100_000, free_mb=80_000),
+    )
+
+    decision = guard.evaluate()
+
+    assert decision.can_continue is True
+    assert decision.should_warn is True
+    assert "available RAM" in decision.reason
+
+
+def test_critical_available_ram_blocks_before_hard_reserve_is_exhausted(tmp_path):
+    guard = ResourceGuard(
+        lambda: tmp_path / "cache.sqlite3",
+        psutil_module=_FakePsutil(
+            total_mb=16_384,
+            available_mb=1500,
+            rss_mb=512,
+        ),
+        disk_usage_func=lambda _path: _disk(total_mb=100_000, free_mb=80_000),
+    )
+
+    decision = guard.evaluate()
+
+    assert decision.can_continue is False
+    assert decision.should_warn is True
+    assert "critical reserve" in decision.reason
+
+
+def test_projected_next_batch_below_hard_ram_reserve_blocks(tmp_path):
+    guard = ResourceGuard(
+        lambda: tmp_path / "cache.sqlite3",
+        psutil_module=_FakePsutil(
+            total_mb=16_384,
+            available_mb=2000,
+            rss_mb=512,
+        ),
+        disk_usage_func=lambda _path: _disk(total_mb=100_000, free_mb=80_000),
+    )
+
+    decision = guard.evaluate(estimated_ram_growth_mb=1100)
+
+    assert decision.can_continue is False
+    assert decision.should_warn is True
+    assert "hard reserve" in decision.reason
 
 
 def test_fallback_without_psutil_still_checks_disk(tmp_path):

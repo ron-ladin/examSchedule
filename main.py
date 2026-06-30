@@ -282,10 +282,26 @@ def _run_cli_safely(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
 
-if __name__ == "__main__":
+def _is_multiprocessing_child_process() -> bool:
+    """Return True when this interpreter is a multiprocessing worker child."""
+    import multiprocessing
+
+    if multiprocessing.parent_process() is not None:
+        return True
+
+    return any(
+        arg == "--multiprocessing-fork" or arg.startswith("--multiprocessing-fork")
+        for arg in sys.argv
+    )
+
+
+def _main() -> None:
     import multiprocessing
 
     multiprocessing.freeze_support()
+
+    if _is_multiprocessing_child_process():
+        sys.exit(0)
 
     argv = sys.argv[1:]
 
@@ -295,3 +311,7 @@ if __name__ == "__main__":
         _run_cli_safely(argv)
     else:
         _run_gui()
+
+
+if __name__ == "__main__":
+    _main()

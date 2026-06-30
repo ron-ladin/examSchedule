@@ -543,6 +543,193 @@ def test_missing_favorite_signature_shows_clear_feedback():
     app.processEvents()
 
 
+def _panel_with_two_shortlisted_options():
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 1), date(2026, 1, 2))])
+    first = Schedule(period, {"10001": date(2026, 1, 1)})
+    second = Schedule(period, {"10001": date(2026, 1, 2)})
+
+    panel.load({"FALL - Aleph": [first, second]}, {}, {}, set())
+    panel._period_indices["FALL - Aleph"] = 0
+    panel._save_current_favorite("FALL - Aleph")
+    panel._period_indices["FALL - Aleph"] = 1
+    panel._save_current_favorite("FALL - Aleph")
+
+    assert len(panel._favorite_schedules) == 2
+    return app, controller, panel, first, second
+
+
+def _capture_shortlist_export(monkeypatch, tmp_path, controller, panel):
+    exported: list[dict[str, list[Schedule]]] = []
+    messages = []
+
+    monkeypatch.setattr(
+        "src.ui.results_export_controller.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(tmp_path / "shortlist.txt"), "Text files (*.txt)"),
+    )
+
+    def fake_export(selected_by_period, path, courses_by_id=None):
+        exported.append(selected_by_period)
+
+    monkeypatch.setattr(controller, "export", fake_export)
+    panel._show_message = lambda title, text, icon: messages.append((title, text, icon))
+    return exported
+
+
+def _exported_schedule_count(selected_by_period: dict[str, list[Schedule]]) -> int:
+    return sum(len(schedules) for schedules in selected_by_period.values())
+
+
+def test_external_export_shortlist_button_exports_all_shortlisted_options(
+    monkeypatch,
+    tmp_path,
+):
+    app, controller, panel, first, second = _panel_with_two_shortlisted_options()
+    exported = _capture_shortlist_export(monkeypatch, tmp_path, controller, panel)
+
+    panel._on_save()
+
+    assert len(exported) == 1
+    assert _exported_schedule_count(exported[0]) == 2
+    exported_assignments = [
+        schedule.assignments
+        for schedules in exported[0].values()
+        for schedule in schedules
+    ]
+    assert first.assignments in exported_assignments
+    assert second.assignments in exported_assignments
+
+    panel.close()
+    app.processEvents()
+
+
+def test_shortlist_dialog_export_button_exports_all_shortlisted_options(
+    monkeypatch,
+    tmp_path,
+):
+    app, controller, panel, first, second = _panel_with_two_shortlisted_options()
+    exported = _capture_shortlist_export(monkeypatch, tmp_path, controller, panel)
+
+    class _Signal:
+        def __init__(self) -> None:
+            self._callbacks = []
+
+        def connect(self, callback) -> None:
+            self._callbacks.append(callback)
+
+        def emit(self, row: int) -> None:
+            for callback in self._callbacks:
+                callback(row)
+
+    class _FavoritesList:
+        def currentRow(self) -> int:
+            return 0
+
+    class _FakeFavoritesDialog:
+        instance = None
+
+        def __init__(self, favorites, parent=None) -> None:
+            self.favorites = favorites
+            self.parent = parent
+            self.favorites_list = _FavoritesList()
+            self.openRequested = _Signal()
+            self.exportRequested = _Signal()
+            self.deleteRequested = _Signal()
+            self.accepted = False
+            _FakeFavoritesDialog.instance = self
+
+        def accept(self) -> None:
+            self.accepted = True
+
+        def exec(self) -> None:
+            self.exportRequested.emit(1)
+
+    monkeypatch.setattr(
+        "src.ui.results_shortlist_controller.FavoritesDialog",
+        _FakeFavoritesDialog,
+    )
+
+    panel._show_favorites_dialog()
+
+    assert len(exported) == 1
+    assert _exported_schedule_count(exported[0]) == 2
+    exported_assignments = [
+        schedule.assignments
+        for schedules in exported[0].values()
+        for schedule in schedules
+    ]
+    assert first.assignments in exported_assignments
+    assert second.assignments in exported_assignments
+    assert _FakeFavoritesDialog.instance is not None
+    assert _FakeFavoritesDialog.instance.accepted is True
+
+    panel.close()
+    app.processEvents()
+
+
+def test_legacy_shortlist_export_wrapper_exports_all_shortlisted_options(
+    monkeypatch,
+    tmp_path,
+):
+    app, controller, panel, first, second = _panel_with_two_shortlisted_options()
+    exported = _capture_shortlist_export(monkeypatch, tmp_path, controller, panel)
+
+    assert panel._export_favorite_at(0) is True
+
+    assert len(exported) == 1
+    assert _exported_schedule_count(exported[0]) == 2
+    exported_assignments = [
+        schedule.assignments
+        for schedules in exported[0].values()
+        for schedule in schedules
+    ]
+    assert first.assignments in exported_assignments
+    assert second.assignments in exported_assignments
+
+    panel.close()
+    app.processEvents()
+
+
+def test_legacy_shortlist_export_invalid_row_shows_missing_message(monkeypatch):
+    app, controller, panel, _first, _second = _panel_with_two_shortlisted_options()
+    messages = []
+
+    monkeypatch.setattr(
+        controller,
+        "export",
+        lambda *args, **kwargs: pytest.fail("invalid row must not export"),
+    )
+    panel._show_message = lambda title, text, icon: messages.append((title, text, icon))
+
+    assert panel._export_favorite_at(-1) is False
+    assert messages
+    assert messages[0][0] == "Shortlist Option Unavailable"
+
+    panel.close()
+    app.processEvents()
+
+
+def test_shortlist_export_rejects_positive_out_of_range_row(monkeypatch):
+    app, controller, panel, _first, _second = _panel_with_two_shortlisted_options()
+    messages = []
+
+    monkeypatch.setattr(
+        controller,
+        "export",
+        lambda *args, **kwargs: pytest.fail("out-of-range row must not export"),
+    )
+    panel._show_message = lambda title, text, icon: messages.append((title, text, icon))
+
+    assert panel._export_favorite_at(10) is False
+    assert messages
+    assert messages[-1][0] == "Shortlist Option Unavailable"
+
+    panel.close()
+    app.processEvents()
+
+
 def test_streaming_results_switch_selector_to_ready_period():
     app = _get_qapp()
     controller = DesktopController()

@@ -8,6 +8,7 @@ broadcast and atexit registration behaviour.
 
 import atexit
 import gc
+import types
 import weakref
 
 import src.engine.load_worker_pool as lwp
@@ -112,8 +113,11 @@ def _patch_spawning(monkeypatch) -> dict:
         created["procs"].append(p)
         return p
 
-    monkeypatch.setattr(lwp.multiprocessing, "Queue", fake_queue)
-    monkeypatch.setattr(lwp.multiprocessing, "Process", fake_process)
+    monkeypatch.setattr(
+        lwp,
+        "worker_context",
+        lambda: types.SimpleNamespace(Queue=fake_queue, Process=fake_process),
+    )
     return created
 
 
@@ -124,8 +128,11 @@ def test_get_or_start_reuses_alive_worker(monkeypatch):
     def _no_spawn(*_args, **_kwargs):
         raise AssertionError("get_or_start must not spawn for a live worker")
 
-    monkeypatch.setattr(lwp.multiprocessing, "Process", _no_spawn)
-    monkeypatch.setattr(lwp.multiprocessing, "Queue", _no_spawn)
+    monkeypatch.setattr(
+        lwp,
+        "worker_context",
+        lambda: types.SimpleNamespace(Process=_no_spawn, Queue=_no_spawn),
+    )
 
     assert pool.get_or_start("FALL - Aleph") == (task_q, result_q, proc)
 
@@ -143,6 +150,18 @@ def test_get_or_start_starts_new_worker_for_different_period(monkeypatch):
     # The unrelated period's worker stays untouched.
     assert pool._procs["FALL - Aleph"] is existing
     assert pool._procs["SPRING - Bet"] is new_proc
+
+
+def test_get_or_start_creates_queues_and_process_from_same_context(monkeypatch):
+    pool = LoadWorkerPool()
+    created = _patch_spawning(monkeypatch)
+
+    task_q, result_q, proc = pool.get_or_start("FALL - Aleph")
+
+    _args, kwargs = proc.construct_args
+    assert created["queues"] == [task_q, result_q]
+    assert created["procs"] == [proc]
+    assert kwargs["args"] == (task_q, result_q)
 
 
 def test_get_or_start_replaces_dead_worker(monkeypatch):
