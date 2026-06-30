@@ -80,6 +80,7 @@ from src.ui.results_shortlist_controller import (
     ResultsShortlistController,
     _SHORTLIST_ADD_BUTTON_STYLE,
 )
+from src.ui.results_status_controller import ResultsStatusController
 from src.ui.results_period_selector_controller import ResultsPeriodSelectorController
 from src.ui.results_proctor_report_controller import ResultsProctorReportController
 from src.ui.result_summary_presenter import ResultSummaryPresenter
@@ -201,6 +202,7 @@ class _ResultsPanel(QWidget):
         self._ranking_dirty = False
         self._ranking_dirty_message: str | None = None
         self._summary_presenter = ResultSummaryPresenter()
+        self._status = ResultsStatusController(self)
         self._favorite_schedules: list[FavoriteSchedule] = []
         self._shortlist = ResultsShortlistController(
             self,
@@ -317,31 +319,13 @@ class _ResultsPanel(QWidget):
         self._ranking_controller.empty_after_exit_ticks = value
 
     def mark_stale(self) -> None:
-        """Show the stale-data warning and disable schedule/report exports."""
-        self._has_stale_results = True
-        self._stale_banner.setVisible(True)
-        self._save_btn.setEnabled(False)
-        self._proctor_btn.setEnabled(False)
-        self._update_summary()
+        self._status.mark_stale()
 
     def clear_stale(self) -> None:
-        """Hide the stale-data warning and re-enable Export."""
-        self._has_stale_results = False
-        self._stale_banner.setVisible(False)
-        self._save_btn.setEnabled(True)
-        self._proctor_btn.setEnabled(True)
-        self._update_summary()
+        self._status.clear_stale()
 
     def _is_stale(self) -> bool:
-        """True if displayed results are stale per the panel OR the controller.
-
-        The panel's own flag tracks period-date edits, but threshold changes go
-        straight to the controller (apply_settings -> mark_results_stale) without
-        the panel necessarily being told. Consulting the controller too ensures a
-        threshold change immediately blocks every action that would otherwise act
-        on the now-invalid displayed schedules.
-        """
-        return self._has_stale_results or self._controller.results_stale
+        return self._status.is_stale()
 
     def load(
         self,
@@ -798,40 +782,22 @@ class _ResultsPanel(QWidget):
         return any(bool(schedules) for schedules in self._schedules_by_period.values())
 
     def mark_ranking_dirty(self, message: str) -> None:
-        """Show that current results need explicit async Result Ranking."""
-        if not self.has_results():
-            return
-        self._summary_presenter.mark_ranking_dirty(message)
-        self._sync_ranking_dirty_state()
-        self._update_summary()
+        self._status.mark_ranking_dirty(message)
 
     def show_workload_status(self, message: str) -> None:
-        """Show a non-popup status for normal background workload progress."""
-        self._summary_lbl.setStyleSheet(
-            "color: #64748B; font-weight: 600; font-size: 12px;"
-        )
-        self._summary_lbl.setText(message)
+        self._status.show_workload_status(message)
 
     def _on_limits_toggled(self, expanded: bool) -> None:
-        """Expand/collapse the active generation limits details."""
-        self._limits_panel._on_toggled(expanded)
+        self._status.on_limits_toggled(expanded)
 
     def _refresh_active_limits_panel(self) -> None:
-        """Show enabled threshold rules used by the displayed generation."""
-        self._limits_panel.show_limits(
-            self._generation_thresholds,
-            imported_schedule=self._is_imported_schedule,
-        )
-        self._limits_toggle = self._limits_panel.toggle
-        self._limits_details = self._limits_panel.details
+        self._status.refresh_active_limits_panel()
 
     def _clear_ranking_dirty(self) -> None:
-        self._summary_presenter.clear_ranking_dirty()
-        self._sync_ranking_dirty_state()
+        self._status.clear_ranking_dirty()
 
     def _sync_ranking_dirty_state(self) -> None:
-        self._ranking_dirty = self._summary_presenter.ranking_dirty
-        self._ranking_dirty_message = self._summary_presenter.ranking_dirty_message
+        self._status.sync_ranking_dirty_state()
 
     def total_in_memory_schedule_count(self) -> int:
         """Return loaded schedule count kept by the active result container.
@@ -1352,39 +1318,7 @@ class _ResultsPanel(QWidget):
         )
 
     def _update_summary(self) -> None:
-        if not self._schedules_by_period:
-            return
-
-        non_empty = {
-            key: value
-            for key, value in self._schedules_by_period.items()
-            if value
-        }
-
-        period_schedules_total = sum(
-            len(schedules)
-            for schedules in non_empty.values()
-        )
-
-        has_more = any(
-            self._controller.has_more_schedules(period_key)
-            or period_key in self._truncated_periods
-            for period_key in non_empty
-        )
-        summary = self._summary_presenter.build(
-            has_any_periods=bool(self._schedules_by_period),
-            has_results=bool(non_empty),
-            is_stale=self._is_stale(),
-            is_imported_schedule=self._is_imported_schedule,
-            combined_options_total=self._controller.get_combined_schedule_count(non_empty),
-            period_schedules_total=period_schedules_total,
-            has_more=has_more,
-        )
-        if summary is None:
-            return
-
-        self._summary_lbl.setStyleSheet(summary.style)
-        self._summary_lbl.setText(summary.text)
+        self._status.update_summary()
 
     def _on_cell_clicked(
         self,
