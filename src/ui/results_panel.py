@@ -18,41 +18,24 @@ Public API:
 
 from __future__ import annotations
 
-import gc
 import logging
-import sqlite3
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
-    QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
-    QTabWidget,
     QToolButton,
-    QVBoxLayout,
     QWidget,
 )
-
-from src.ui.assets.animated_widgets import AnimatedPlaceholder
 
 # _group_exams_by_slot is re-exported here for input_screen / tests.
 from src.ui.calendar_cell_delegate import (
     _group_exams_by_slot,
 )
-from src.ui.tokens import (
-    COLOR_PANEL_BLUE,
-    COLOR_PRIMARY_ACTION,
-    COLOR_SURFACE_SOFT,
-    COLOR_TEXT_DARK,
-    COLOR_VIOLET,
-    COLOR_VIOLET_BORDER,
-    PERIOD_TAB_STYLE,
-)
-
 from src.controller import DesktopController, LOAD_BATCH_SIZE
 from src.adapters.sqlite_schedule_store import (
     SQLiteScheduleStore,
@@ -76,9 +59,10 @@ from src.ui.period_utils import STANDARD_PERIOD_ORDER as _STANDARD_PERIOD_ORDER
 from src.ui.load_more_controller import LoadMoreController
 from src.ui.period_navigator import PeriodNavigator
 from src.ui.results_export_controller import ResultsExportController
+from src.ui.results_layout_controller import ResultsLayoutController
+from src.ui.results_lifecycle_controller import ResultsLifecycleController
 from src.ui.results_shortlist_controller import (
     ResultsShortlistController,
-    _SHORTLIST_ADD_BUTTON_STYLE,
 )
 from src.ui.results_status_controller import ResultsStatusController
 from src.ui.results_period_selector_controller import ResultsPeriodSelectorController
@@ -87,7 +71,6 @@ from src.ui.result_summary_presenter import ResultSummaryPresenter
 from src.ui.widgets.calendar_view import CalendarRenderer
 from src.ui.widgets.period_card_builder import (
     build_period_card,
-    _light_hover_bubble,
     _make_data_table,  # re-exported for input_screen / programme_courses_dialog
 )
 
@@ -203,6 +186,15 @@ class _ResultsPanel(QWidget):
         self._ranking_dirty_message: str | None = None
         self._summary_presenter = ResultSummaryPresenter()
         self._status = ResultsStatusController(self)
+        self._lifecycle = ResultsLifecycleController(
+            self,
+            merge_period_keys=_merge_period_keys,
+            display_period_key=_display_period_key,
+        )
+        self._layout = ResultsLayoutController(
+            self,
+            ranking_button_text=_RANKING_BUTTON_TEXT,
+        )
         self._favorite_schedules: list[FavoriteSchedule] = []
         self._shortlist = ResultsShortlistController(
             self,
@@ -335,144 +327,16 @@ class _ResultsPanel(QWidget):
         truncated_periods: set[str] | None = None,
         read_only_import: bool = False,
     ) -> None:
-        self.clear_stale()
-        self._is_imported_schedule = read_only_import
-        self._clear_favorites()
-        self._generation_thresholds = (
-            None if read_only_import else self._controller.settings.thresholds
+        self._lifecycle.load(
+            schedules_by_period,
+            courses_by_id,
+            prog_color_map,
+            truncated_periods,
+            read_only_import,
         )
-
-        # Stop any in-flight Load More operation before rebuilding the results UI.
-        # A QTimer timeout may already be queued while a new generation/load starts,
-        # so cleanup must happen before old cards/widgets are removed.
-        self._lm.reset()
-        self._cleanup_ranking_worker(terminate=True)
-        self._set_ranking_busy(False)
-        self._clear_ranking_dirty()
-
-        # Stop idle persistent load-more workers from the previous result set.
-        # They will be recreated lazily if the user clicks Load More / Auto again.
-        self._controller.shutdown_load_workers()
-
-        # Imported schedules are fixed read-only snapshots. Do not keep any
-        # old generation/load-more state from a previous Generate run.
-        if read_only_import:
-            self._controller.reset_generation_state()
-
-        courses_for_scoring = list(courses_by_id.values())
-        selected_programs = self._controller.selected_programs
-        incoming_stores = {
-            schedules.store
-            for schedules in schedules_by_period.values()
-            if isinstance(schedules, StoredScheduleList)
-        }
-
-        if incoming_stores:
-            # The schedules are already backed by SQLite. Adopt the existing
-            # StoredScheduleList facades directly; never close/recreate the store
-            # that backs them. This keeps Result Ranking and repeated Generate
-            # flows from invalidating live views.
-            if self._schedule_store is not None and self._schedule_store not in incoming_stores:
-                self._schedule_store.close(delete=True)
-
-            self._schedule_store = next(iter(incoming_stores)) if len(incoming_stores) == 1 else None
-            stored_by_period: dict[str, list[Schedule]] = dict(schedules_by_period)
-
-            for schedules in stored_by_period.values():
-                if isinstance(schedules, StoredScheduleList):
-                    schedules.set_scoring_context(courses_for_scoring, selected_programs)
-                    schedules.set_sorting(self._controller.settings.sorting)
-
-        elif read_only_import:
-            # Imported files are small, fixed snapshots and should remain a simple
-            # read-only in-memory view. Do not create a temporary SQLite store just
-            # to display them.
-            if self._schedule_store is not None:
-                self._schedule_store.close(delete=True)
-                self._schedule_store = None
-            stored_by_period = dict(schedules_by_period)
-
-        else:
-            # Fresh subprocess generation returns bounded plain lists. Move them
-            # into one panel-owned SQLite store, then cache those StoredScheduleList
-            # facades in the controller so future Result Ranking does not copy the
-            # data back and forth between RAM and SQLite.
-            if self._schedule_store is not None:
-                self._schedule_store.close(delete=True)
-
-            self._schedule_store = SQLiteScheduleStore()
-            stored_by_period = {}
-            for key, scheds in schedules_by_period.items():
-                self._schedule_store.replace_period(
-                    key,
-                    scheds,
-                    courses=courses_for_scoring,
-                    selected_programs=selected_programs,
-                )
-                stored_by_period[key] = self._schedule_store.as_sequence(
-                    key,
-                    courses=courses_for_scoring,
-                    selected_programs=selected_programs,
-                    sorting=self._controller.settings.sorting,
-                )
-
-            stored_by_period = self._controller.cache_generated_results(stored_by_period)
-
-        self._schedules_by_period = stored_by_period
-        self._courses_by_id = courses_by_id
-        self._prog_color_map = prog_color_map
-        self._truncated_periods = set() if read_only_import else (truncated_periods or set())
-        self._period_indices = {k: 0 for k in stored_by_period}
-        self._total_by_period = {}
-
-        for key, scheds in stored_by_period.items():
-            if key not in self._truncated_periods:
-                self._total_by_period[key] = len(scheds)
-
-        all_period_keys = _merge_period_keys(self._controller, stored_by_period)
-        merged: dict[str, list[Schedule]] = {k: [] for k in all_period_keys}
-        merged.update(stored_by_period)
-
-        self._schedules_by_period = merged
-        self._period_indices = {k: 0 for k in merged}
-        self._nav_model.clear()
-        self._rebuild_navigation_cache()
-
-        self._period_tabs.clear()
-        self._cards.clear()
-        self._cell_data.clear()
-
-        for period_key in merged:
-            self._period_tabs.addTab(
-                self._build_period_card(period_key),
-                _display_period_key(period_key),
-            )
-        self._refresh_period_selector(preferred_key=self._first_period_with_results())
-
-        has_proctor_report = any(
-            self._has_classroom_feature_results(period_key)
-            for period_key, schedules in merged.items()
-            if schedules
-        )
-        self._proctor_btn.setVisible(has_proctor_report)
-
-        self._update_summary()
-        self._refresh_active_limits_panel()
-        self._placeholder.setVisible(False)
-        self._content.setVisible(True)
-
-        # Avoid opacity effects while rebuilding result widgets.
-        # QGraphicsOpacityEffect caused QPainter warnings and visual flicker.
-        self._content.setGraphicsEffect(None)
 
     def begin_streaming(self) -> None:
-        """Arm the panel for a fresh streaming run.
-
-        The first ``append_period`` after this builds the tab scaffold from
-        scratch, so a previous run's cards/state do not linger.
-        """
-        self.release_results(delete_db=True)
-        self._streaming_run_active = False
+        self._lifecycle.begin_streaming()
 
     def append_period(
         self,
@@ -481,120 +345,12 @@ class _ResultsPanel(QWidget):
         prog_color_map: dict[str, str],
         truncated_periods: set[str] | None = None,
     ) -> None:
-        """Add one streamed batch of periods without clearing existing tabs.
-
-        The first batch of a run builds the standard tab scaffold (all periods
-        empty); each batch then fills in its own period card(s). This is the
-        incremental counterpart to :meth:`load`, used for streaming generation.
-        """
-        truncated = truncated_periods or set()
-
-        if not self._streaming_run_active:
-            self._init_streaming_scaffold(courses_by_id, prog_color_map, truncated)
-            self._streaming_run_active = True
-
-        # Course metadata can arrive with any batch; keep the union so the
-        # calendar can always resolve course names/colours.
-        self._courses_by_id.update(courses_by_id)
-        self._truncated_periods |= truncated
-        display_schedules_by_period = schedules_by_period
-
-        incoming_stores = {
-            schedules.store
-            for schedules in schedules_by_period.values()
-            if isinstance(schedules, StoredScheduleList)
-        }
-        if incoming_stores:
-            if self._schedule_store is None and len(incoming_stores) == 1:
-                self._schedule_store = next(iter(incoming_stores))
-            for schedules in schedules_by_period.values():
-                if isinstance(schedules, StoredScheduleList):
-                    schedules.set_scoring_context(
-                        list(self._courses_by_id.values()),
-                        self._controller.selected_programs,
-                    )
-                    schedules.set_sorting(self._controller.settings.sorting)
-            display_schedules_by_period = (
-                self._controller.cache_generated_results_incremental(
-                    dict(schedules_by_period)
-                )
-            )
-        else:
-            if self._schedule_store is None:
-                self._schedule_store = SQLiteScheduleStore()
-            stored_by_period: dict[str, list[Schedule]] = {}
-            try:
-                for key, scheds in schedules_by_period.items():
-                    self._schedule_store.replace_period(
-                        key,
-                        scheds,
-                        courses=list(self._courses_by_id.values()),
-                        selected_programs=self._controller.selected_programs,
-                    )
-                    stored_by_period[key] = self._schedule_store.as_sequence(
-                        key,
-                        courses=list(self._courses_by_id.values()),
-                        selected_programs=self._controller.selected_programs,
-                        sorting=self._controller.settings.sorting,
-                    )
-            except (sqlite3.DatabaseError, OSError):
-                logger.exception("Could not store streamed generation results")
-                self._show_message(
-                    "Storage Failed",
-                    "Could not store generated schedules because the temporary "
-                    "database or disk write failed. Already loaded schedules "
-                    "remain available.",
-                    QMessageBox.Icon.Warning,
-                )
-                return
-
-            display_schedules_by_period = (
-                self._controller.cache_generated_results_incremental(
-                    stored_by_period
-                )
-            )
-
-        for period_key, schedules in display_schedules_by_period.items():
-            if period_key not in self._schedules_by_period:
-                # A period outside the standard scaffold (e.g. an extra loaded
-                # period): create its tab on the fly.
-                self._schedules_by_period[period_key] = []
-                self._period_indices[period_key] = 0
-                self._period_tabs.addTab(
-                    self._build_period_card(period_key),
-                    _display_period_key(period_key),
-                )
-                self._refresh_period_selector(preferred_key=period_key)
-
-            self._schedules_by_period[period_key] = schedules
-            self._period_indices.setdefault(period_key, 0)
-
-            # Keep the controller's has-more state in sync per batch so the
-            # period's "Load More" control reflects truncation as it streams in.
-            still_more = period_key in truncated
-            self._controller.set_has_more_for_period(period_key, still_more)
-            if not still_more:
-                self._total_by_period[period_key] = len(schedules)
-
-            self._rebuild_navigation_cache(period_key)
-            self._refresh_period_card(period_key)
-
-        first_ready_period = next(
-            (key for key, schedules in display_schedules_by_period.items() if schedules),
-            None,
+        self._lifecycle.append_period(
+            schedules_by_period,
+            courses_by_id,
+            prog_color_map,
+            truncated_periods,
         )
-        if first_ready_period is not None:
-            self._refresh_period_selector(preferred_key=first_ready_period)
-
-        has_proctor_report = any(
-            bool(getattr(schedule, "classroom_assignments", None))
-            for schedules in self._schedules_by_period.values()
-            for schedule in schedules
-        )
-        if has_proctor_report:
-            self._proctor_btn.setVisible(True)
-
-        self._update_summary()
 
     def _init_streaming_scaffold(
         self,
@@ -602,45 +358,11 @@ class _ResultsPanel(QWidget):
         prog_color_map: dict[str, str],
         truncated_periods: set[str],
     ) -> None:
-        """Build empty cards for every standard/loaded period on stream start."""
-        self.clear_stale()
-        self._is_imported_schedule = False
-        self._clear_favorites()
-        self._generation_thresholds = self._controller.settings.thresholds
-
-        # Stop any in-flight Load More / persistent workers from a previous run
-        # before rebuilding cards (mirrors load()).
-        self._lm.reset()
-        self._controller.shutdown_load_workers()
-
-        self._courses_by_id = dict(courses_by_id)
-        self._prog_color_map = prog_color_map
-        self._truncated_periods = set(truncated_periods)
-
-        all_period_keys = _merge_period_keys(self._controller, {})
-        self._schedules_by_period = {k: [] for k in all_period_keys}
-        self._period_indices = {k: 0 for k in self._schedules_by_period}
-        self._total_by_period = {}
-        self._nav_model.clear()
-        self._rebuild_navigation_cache()
-
-        self._period_tabs.clear()
-        self._cards.clear()
-        self._cell_data.clear()
-
-        for period_key in self._schedules_by_period:
-            self._period_tabs.addTab(
-                self._build_period_card(period_key),
-                _display_period_key(period_key),
-            )
-        self._refresh_period_selector()
-
-        self._proctor_btn.setVisible(False)
-        self._update_summary()
-        self._refresh_active_limits_panel()
-        self._placeholder.setVisible(False)
-        self._content.setVisible(True)
-        self._content.setGraphicsEffect(None)
+        self._lifecycle.init_streaming_scaffold(
+            courses_by_id,
+            prog_color_map,
+            truncated_periods,
+        )
 
     def _on_navigation_requested(self, period_key: str, index: int) -> None:
         """Slot: apply a navigator-requested schedule index to own state."""
@@ -923,65 +645,7 @@ class _ResultsPanel(QWidget):
         return len(self._indices_for_signature(period_key, signature))
 
     def release_results(self, *, delete_db: bool = True) -> None:
-        """Release result DBs, caches, workers and generated-result UI state."""
-        if hasattr(self, "_period_tip_bubble"):
-            self._period_tip_bubble.hide()
-
-        self._lm.reset()
-        self._cleanup_ranking_worker(terminate=True)
-        heavy_kind = self._controller.heavy_task_kind
-        if heavy_kind in {"loading", "ranking"}:
-            self._controller.end_heavy_task(heavy_kind)
-            if heavy_kind == "ranking":
-                self._finish_ranking_metrics()
-            self.heavy_task_state_changed.emit(heavy_kind, False)
-
-        stores: set[SQLiteScheduleStore] = set()
-        if self._schedule_store is not None:
-            stores.add(self._schedule_store)
-        for schedules in self._schedules_by_period.values():
-            if isinstance(schedules, StoredScheduleList):
-                stores.add(schedules.store)
-        for store in stores:
-            try:
-                store.close(delete=delete_db)
-            except Exception:
-                logger.debug("Failed closing result SQLite store", exc_info=True)
-
-        self._schedule_store = None
-        self._schedules_by_period.clear()
-        self._period_indices.clear()
-        self._truncated_periods.clear()
-        self._total_by_period.clear()
-        self._cell_data.clear()
-        self._nav_model.clear()
-        self._clear_favorites()
-        self._clear_ranking_dirty()
-        self._has_stale_results = False
-        self._is_imported_schedule = False
-        self._generation_thresholds = None
-        self._streaming_run_active = False
-
-        if hasattr(self, "_period_tabs"):
-            self._period_tabs.clear()
-        self._cards.clear()
-        if hasattr(self, "_summary_lbl"):
-            self._summary_lbl.setText("")
-        if hasattr(self, "_period_selector"):
-            self._period_selector.setVisible(False)
-        if hasattr(self, "_save_btn"):
-            self._save_btn.setEnabled(False)
-        if hasattr(self, "_proctor_btn"):
-            self._proctor_btn.setVisible(False)
-            self._proctor_btn.setEnabled(False)
-        if hasattr(self, "_stale_banner"):
-            self._stale_banner.setVisible(False)
-        if hasattr(self, "_placeholder"):
-            self._placeholder.setVisible(True)
-        if hasattr(self, "_content"):
-            self._content.setVisible(False)
-        if delete_db:
-            gc.collect()
+        self._lifecycle.release_results(delete_db=delete_db)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
         self.release_results(delete_db=True)
@@ -1001,193 +665,10 @@ class _ResultsPanel(QWidget):
         return super().eventFilter(obj, event)
 
     def _show_period_tip(self) -> None:
-        """Show a styled light popover instead of the native black tooltip."""
-        if not self._period_tip_btn.isVisible():
-            return
-
-        self._period_tip_bubble.adjustSize()
-        pos = self._period_tip_btn.mapToGlobal(
-            QPoint(0, self._period_tip_btn.height() + 8)
-        )
-        self._period_tip_bubble.move(pos)
-        self._period_tip_bubble.show()
-        self._period_tip_bubble.raise_()
+        self._layout.show_period_tip()
 
     def _setup_ui(self) -> None:
-        self.setStyleSheet(
-            """
-            _ResultsPanel { background: transparent; }
-            """
-        )
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-
-        self._placeholder = AnimatedPlaceholder(
-            "No schedules generated yet.\n\n"
-            "Load files, select a programme, then click  ▶  Generate Schedule."
-        )
-        root.addWidget(self._placeholder)
-
-        self._content = QWidget()
-        self._content.setStyleSheet("background: transparent;")
-        self._content.setVisible(False)
-
-        cl = QVBoxLayout(self._content)
-        cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(8)
-
-        action_row = QHBoxLayout()
-
-        self._summary_lbl = QLabel("")
-        self._summary_lbl.setStyleSheet(
-            "color: #059669; font-weight: 600; font-size: 12px;"
-        )
-        action_row.addWidget(self._summary_lbl)
-        action_row.addStretch()
-
-        # Spec: re-rank the already-generated schedules in memory (no regenerate).
-        self._ranking_btn = QPushButton(_RANKING_BUTTON_TEXT)
-        self._ranking_btn.setStyleSheet(
-            "QPushButton {"
-            " background: #2563EB; color: #FFFFFF; font-weight: 700;"
-            " border: none; border-radius: 8px; padding: 7px 18px; }"
-            "QPushButton:hover { background: #1D4ED8; }"
-            "QPushButton:disabled { background: #C7D2DE; color: #FFFFFF; }"
-        )
-        self._ranking_btn.clicked.connect(self._on_result_ranking)
-        action_row.addWidget(self._ranking_btn)
-
-        self._save_favorite_btn = QPushButton("Add to Shortlist")
-        self._save_favorite_btn.setStyleSheet(_SHORTLIST_ADD_BUTTON_STYLE)
-        self._save_favorite_btn.clicked.connect(self._toggle_visible_favorite)
-        action_row.addWidget(self._save_favorite_btn)
-
-        self._favorites_btn = QPushButton("Shortlist (0)")
-        self._favorites_btn.setStyleSheet(
-            "QPushButton { background: #F5F3FF; color: #5B21B6;"
-            f" border: 1px solid {COLOR_VIOLET_BORDER}; border-radius: 8px;"
-            " padding: 7px 16px; font-weight: 700; }"
-            "QPushButton:hover { background: #EDE9FE; }"
-            "QPushButton:disabled { background: #F1F5F9; color: #94A3B8;"
-            " border-color: #CBD5E1; }"
-        )
-        self._favorites_btn.clicked.connect(self._show_favorites_dialog)
-        action_row.addWidget(self._favorites_btn)
-
-        self._save_btn = QPushButton("⬇  Export Shortlist")
-        self._save_btn.clicked.connect(self._on_save)
-        action_row.addWidget(self._save_btn)
-
-        # Spec 4.6: per-schedule proctor report (GUI view + .txt export).
-        self._proctor_btn = QPushButton("🧑‍🏫  Proctor Report")
-        self._proctor_btn.clicked.connect(self._on_proctor_report)
-        action_row.addWidget(self._proctor_btn)
-
-        cl.addLayout(action_row)
-
-        self._limits_panel = ActiveLimitsPanel(self)
-        self._limits_toggle = self._limits_panel.toggle
-        self._limits_details = self._limits_panel.details
-
-        cl.addWidget(self._limits_panel)
-
-        self._stale_banner = QLabel(
-            "⚠  Exam period dates were changed after generation. "
-            "The displayed schedules may contain now-excluded dates. "
-            "Click  ▶  Generate again to update."
-        )
-        self._stale_banner.setWordWrap(True)
-        self._stale_banner.setStyleSheet(
-            "background: #FEF3C7; color: #92400E;"
-            " border: 1px solid #F59E0B; border-radius: 8px;"
-            " padding: 8px 14px; font-size: 12px; font-weight: 500;"
-        )
-        self._stale_banner.setVisible(False)
-
-        cl.addWidget(self._stale_banner)
-
-        self._period_selector = QWidget()
-        self._period_selector.setStyleSheet(
-            "QWidget { background: #FFFFFF; border: 1px solid #DCE5F0;"
-            " border-radius: 8px; }"
-        )
-        selector_layout = QHBoxLayout(self._period_selector)
-        selector_layout.setContentsMargins(12, 10, 12, 10)
-        selector_layout.setSpacing(10)
-
-        selector_title = QLabel("View period")
-        selector_title.setStyleSheet(
-            f"background: transparent; border: none; color: {COLOR_PRIMARY_ACTION};"
-            " font-size: 13px; font-weight: 800;"
-        )
-        selector_layout.addWidget(selector_title)
-
-        self._period_tip_btn = QToolButton()
-        self._period_tip_btn.setText("!")
-        self._period_tip_btn.setCursor(Qt.CursorShape.WhatsThisCursor)
-        self._period_tip_btn.setFixedSize(24, 24)
-        self._period_tip_btn.setStyleSheet(
-            f"QToolButton {{ background: {COLOR_PANEL_BLUE}; color: {COLOR_PRIMARY_ACTION};"
-            " border: 1px solid #93C5FD; border-radius: 12px;"
-            " font-size: 13px; font-weight: 900; }"
-            f"QToolButton:hover {{ background: #F5F3FF; color: {COLOR_VIOLET};"
-            f" border-color: {COLOR_VIOLET_BORDER}; }}"
-        )
-        self._period_tip_btn.installEventFilter(self)
-        selector_layout.addWidget(self._period_tip_btn)
-
-        self._period_tip_bubble = _light_hover_bubble()
-        self._period_tip_bubble.setText(
-            "Click on any scheduled exam date to view full details."
-        )
-
-        semester_label = QLabel("Semester")
-        semester_label.setStyleSheet(
-            "background: transparent; border: none; color: #64748B;"
-            " font-size: 11px; font-weight: 700;"
-        )
-        selector_layout.addWidget(semester_label)
-
-        combo_style = (
-            f"QComboBox {{ background: {COLOR_SURFACE_SOFT}; color: {COLOR_TEXT_DARK};"
-            " border: 1px solid #CBD5E1; border-radius: 8px;"
-            " padding: 6px 32px 6px 10px; font-size: 12px; font-weight: 700;"
-            " min-width: 140px; }"
-            f"QComboBox:hover {{ border-color: {COLOR_VIOLET}; }}"
-            f"QComboBox:focus {{ border-color: {COLOR_PRIMARY_ACTION}; }}"
-            "QComboBox::drop-down { border: none; width: 26px; }"
-        )
-        self._semester_combo = QComboBox()
-        self._semester_combo.setStyleSheet(combo_style)
-        self._semester_combo.currentIndexChanged.connect(
-            self._on_period_semester_changed
-        )
-        selector_layout.addWidget(self._semester_combo)
-
-        moed_label = QLabel("Moed")
-        moed_label.setStyleSheet(
-            "background: transparent; border: none; color: #64748B;"
-            " font-size: 11px; font-weight: 700;"
-        )
-        selector_layout.addWidget(moed_label)
-
-        self._moed_combo = QComboBox()
-        self._moed_combo.setStyleSheet(combo_style)
-        self._moed_combo.currentIndexChanged.connect(self._on_period_moed_changed)
-        selector_layout.addWidget(self._moed_combo)
-        selector_layout.addStretch()
-        self._period_selector.setVisible(False)
-
-        cl.addWidget(self._period_selector)
-
-        self._period_tabs = QTabWidget()
-        self._period_tabs.setStyleSheet(PERIOD_TAB_STYLE)
-        self._period_tabs.tabBar().hide()
-        self._period_tabs.currentChanged.connect(self._on_period_tab_changed)
-        cl.addWidget(self._period_tabs)
-
-        root.addWidget(self._content)
+        self._layout.setup_ui()
 
     def _build_period_card(self, period_key: str) -> QWidget:
         return build_period_card(self, period_key)
