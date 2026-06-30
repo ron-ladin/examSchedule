@@ -2,6 +2,7 @@ import os
 import queue
 import sqlite3
 import sys
+import types
 from datetime import date
 
 import pytest
@@ -230,8 +231,8 @@ def test_apply_ranking_starts_async_and_does_not_call_resort(monkeypatch, qapp):
     _FakeRunningProcess.created.clear()
     monkeypatch.setattr(controller, "resort", lambda _config: pytest.fail("resort called"))
     monkeypatch.setattr(
-        "src.ui.results_panel.multiprocessing.Process",
-        _FakeRunningProcess,
+        "src.ui.results_panel.worker_context",
+        lambda: types.SimpleNamespace(Process=_FakeRunningProcess, Queue=queue.Queue),
     )
 
     try:
@@ -259,8 +260,11 @@ def test_apply_ranking_is_blocked_while_loading_or_generation_is_active(
     messages = []
     panel._show_message = lambda *args, **kwargs: messages.append(args)
     monkeypatch.setattr(
-        "src.ui.results_panel.multiprocessing.Process",
-        lambda *args, **kwargs: pytest.fail("ranking process should not start"),
+        "src.ui.results_panel.worker_context",
+        lambda: types.SimpleNamespace(
+            Process=lambda *args, **kwargs: pytest.fail("ranking process should not start"),
+            Queue=queue.Queue,
+        ),
     )
     controller.begin_heavy_task(heavy_kind)
     panel.sync_heavy_task_state()

@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from queue import Empty as _QueueEmpty
 from typing import Any
 
+from src.engine.mp_context import worker_context
+
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from src.controller import (
@@ -543,7 +545,8 @@ class GenerationPoller(QObject):
                 run_id,
                 period_key,
             )
-            queue_obj = multiprocessing.Queue(maxsize=_PER_WORKER_QUEUE_MAXSIZE)
+            ctx = worker_context()
+            queue_obj = ctx.Queue(maxsize=_PER_WORKER_QUEUE_MAXSIZE)
 
             args = (
                 queue_obj,
@@ -563,7 +566,7 @@ class GenerationPoller(QObject):
             }
             self._assert_worker_payload_picklable(period_key, args[1:], kwargs)
 
-            process = multiprocessing.Process(
+            process = ctx.Process(
                 target=_run_generation_process,
                 args=args,
                 kwargs=kwargs,

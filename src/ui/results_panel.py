@@ -71,6 +71,7 @@ from src.domain.semester import display_semester
 from src.domain.sorting import SortingConfig
 from src.domain.threshold import ThresholdSettings
 from src.engine.generation_workers import ABSOLUTE_MAX_IN_MEMORY_SCHEDULES
+from src.engine.mp_context import worker_context
 from src.engine.ranking_worker import RankingWorkerResult, run_ranking_worker
 from src.ui.active_limits_panel import ActiveLimitsPanel
 from src.ui.favorite_schedules import (
@@ -1979,8 +1980,9 @@ class _ResultsPanel(QWidget):
             self._end_heavy_task("ranking")
             return
 
-        queue = multiprocessing.Queue()
-        proc = multiprocessing.Process(
+        ctx = worker_context()
+        queue = ctx.Queue()
+        proc = ctx.Process(
             target=run_ranking_worker,
             args=(queue, job),
             daemon=True,

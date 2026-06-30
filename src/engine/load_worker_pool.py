@@ -13,6 +13,7 @@ import multiprocessing
 import weakref
 
 from src.engine.generation_workers import _run_load_more_worker
+from src.engine.mp_context import worker_context
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +84,10 @@ class LoadWorkerPool:
 
         self.cleanup(period_key, terminate=True)
 
-        task_queue = multiprocessing.Queue()
-        result_queue = multiprocessing.Queue()
-        proc = multiprocessing.Process(
+        ctx = worker_context()
+        task_queue = ctx.Queue()
+        result_queue = ctx.Queue()
+        proc = ctx.Process(
             target=_run_load_more_worker,
             args=(task_queue, result_queue),
             daemon=True,

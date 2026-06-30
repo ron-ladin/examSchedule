@@ -8,6 +8,7 @@ broadcast and atexit registration behaviour.
 
 import atexit
 import gc
+import types
 import weakref
 
 import src.engine.load_worker_pool as lwp
@@ -112,8 +113,11 @@ def _patch_spawning(monkeypatch) -> dict:
         created["procs"].append(p)
         return p
 
-    monkeypatch.setattr(lwp.multiprocessing, "Queue", fake_queue)
-    monkeypatch.setattr(lwp.multiprocessing, "Process", fake_process)
+    monkeypatch.setattr(
+        lwp,
+        "worker_context",
+        lambda: types.SimpleNamespace(Queue=fake_queue, Process=fake_process),
+    )
     return created
 
 
@@ -124,8 +128,11 @@ def test_get_or_start_reuses_alive_worker(monkeypatch):
     def _no_spawn(*_args, **_kwargs):
         raise AssertionError("get_or_start must not spawn for a live worker")
 
-    monkeypatch.setattr(lwp.multiprocessing, "Process", _no_spawn)
-    monkeypatch.setattr(lwp.multiprocessing, "Queue", _no_spawn)
+    monkeypatch.setattr(
+        lwp,
+        "worker_context",
+        lambda: types.SimpleNamespace(Process=_no_spawn, Queue=_no_spawn),
+    )
 
     assert pool.get_or_start("FALL - Aleph") == (task_q, result_q, proc)
 
