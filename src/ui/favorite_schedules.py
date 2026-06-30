@@ -145,7 +145,7 @@ class FavoritesDialog(QDialog):
         actions = QHBoxLayout()
         self.open_btn = QPushButton("Open Selected")
         self.open_btn.setEnabled(bool(favorites))
-        self.export_btn = QPushButton("Export Shortlist")
+        self.export_btn = QPushButton("Export Selected")
         self.export_btn.setEnabled(bool(favorites))
         self.delete_btn = QPushButton("Remove Selected")
         self.delete_btn.setEnabled(bool(favorites))

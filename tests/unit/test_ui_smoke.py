@@ -543,6 +543,80 @@ def test_missing_favorite_signature_shows_clear_feedback():
     app.processEvents()
 
 
+def test_favorites_dialog_export_uses_requested_row(monkeypatch):
+    app = _get_qapp()
+    controller = DesktopController()
+    panel = _ResultsPanel(controller)
+    period = ExamPeriod("FALL", "Aleph", [(date(2026, 1, 1), date(2026, 1, 2))])
+    first = Schedule(period, {"10001": date(2026, 1, 1)})
+    second = Schedule(period, {"10001": date(2026, 1, 2)})
+    exported: list[dict[str, list[Schedule]]] = []
+
+    class _Signal:
+        def __init__(self) -> None:
+            self._callbacks = []
+
+        def connect(self, callback) -> None:
+            self._callbacks.append(callback)
+
+        def emit(self, row: int) -> None:
+            for callback in self._callbacks:
+                callback(row)
+
+    class _FavoritesList:
+        def currentRow(self) -> int:
+            return 0
+
+    class _FakeFavoritesDialog:
+        instance = None
+
+        def __init__(self, favorites, parent=None) -> None:
+            self.favorites = favorites
+            self.parent = parent
+            self.favorites_list = _FavoritesList()
+            self.openRequested = _Signal()
+            self.exportRequested = _Signal()
+            self.deleteRequested = _Signal()
+            self.accepted = False
+            _FakeFavoritesDialog.instance = self
+
+        def accept(self) -> None:
+            self.accepted = True
+
+        def exec(self) -> None:
+            self.exportRequested.emit(1)
+
+    def fake_export_schedule_selection(selected_by_period):
+        exported.append(selected_by_period)
+        return True
+
+    panel.load({"FALL - Aleph": [first, second]}, {}, {}, set())
+    panel._period_indices["FALL - Aleph"] = 0
+    panel._save_current_favorite("FALL - Aleph")
+    panel._period_indices["FALL - Aleph"] = 1
+    panel._save_current_favorite("FALL - Aleph")
+
+    monkeypatch.setattr(
+        "src.ui.results_shortlist_controller.FavoritesDialog",
+        _FakeFavoritesDialog,
+    )
+    monkeypatch.setattr(
+        panel._export_controller,
+        "export_schedule_selection",
+        fake_export_schedule_selection,
+    )
+
+    panel._show_favorites_dialog()
+
+    assert len(exported) == 1
+    assert exported[0]["FALL - Aleph"][0].assignments == second.assignments
+    assert _FakeFavoritesDialog.instance is not None
+    assert _FakeFavoritesDialog.instance.accepted is True
+
+    panel.close()
+    app.processEvents()
+
+
 def test_streaming_results_switch_selector_to_ready_period():
     app = _get_qapp()
     controller = DesktopController()
