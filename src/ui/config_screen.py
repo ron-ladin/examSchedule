@@ -688,12 +688,18 @@ class ConfigScreen(QWidget):
                 allow_unassigned_generation,
             )
         except Exception:
-            self._controller.performance_metrics.finish_generation()
-            if self._controller.end_heavy_task("generation"):
-                self.heavy_task_state_changed.emit("generation", False)
-            self._notify_settings_state(False)
-            self._update_gen_btn()
-            raise
+            # This runs inside a QTimer.singleShot callback. An exception that
+            # escapes a native Qt slot triggers std::terminate() on macOS
+            # (SIGABRT → crash to desktop), so we MUST absorb it here instead of
+            # re-raising. Route it through the normal failure flow: _fail()
+            # performs the full cleanup and emits generation_failed, so
+            # InputScreen hides the loading pane and returns to the input screen
+            # (single source of the user-facing error dialog).
+            logger.exception("Generation failed to start")
+            self._fail(
+                "Generation failed to start. Please check the input files and try again."
+            )
+            return
 
     def _confirm_capacity_warning(self) -> bool:
         """Show the optional Feature 4 capacity warning before generation."""
