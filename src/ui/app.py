@@ -14,8 +14,8 @@ Usage (from main.py):
 import logging
 from pathlib import Path
 
-from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QMainWindow
+from PyQt6.QtGui import QColor, QIcon, QPalette
+from PyQt6.QtWidgets import QApplication, QMainWindow
 
 from src.controller import DesktopController
 from src.ui.input_screen import InputScreen
@@ -32,6 +32,23 @@ class ExamSchedulerApp(QMainWindow):
         self.setWindowTitle("Syncacademic — Exam Schedule Portal")
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets" / "logo.png")))
         self.setMinimumSize(1100, 720)
-        self.setStyleSheet(QSS())
-        controller = DesktopController()
-        self.setCentralWidget(InputScreen(controller))
+        style = QSS()
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(style)
+            palette = app.palette()
+            palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#F8FAFC"))
+            palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#172033"))
+            app.setPalette(palette)
+        self.setStyleSheet(style)
+        self._controller = DesktopController()
+        self._input_screen = InputScreen(self._controller)
+        self.setCentralWidget(self._input_screen)
+
+    def shutdown_background_workers(self) -> None:
+        """Stop generation and load-more workers before Qt tears widgets down."""
+        self._input_screen.shutdown_background_workers()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        self.shutdown_background_workers()
+        super().closeEvent(event)

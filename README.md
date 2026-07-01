@@ -1,559 +1,285 @@
-# Syncademic
+<div align="center">
 
-> **University exam scheduler** — given a course catalog, exam windows, and a set of study programs, generates every valid conflict-free timetable using a backtracking CSP solver with an MCV heuristic.
+# Syncademic — Exam Scheduling System
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)
-![PyQt6](https://img.shields.io/badge/UI-PyQt6%20Desktop-4a90d9?style=flat-square&logo=qt&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-210%20passed-2ecc71?style=flat-square)
-![Coverage](https://img.shields.io/badge/Coverage-90%25-2ecc71?style=flat-square)
-![Release](https://img.shields.io/badge/Release-v2.0-4a90d9?style=flat-square)
-![Architecture](https://img.shields.io/badge/Architecture-Clean%20%2F%20Ports%20%26%20Adapters-c678dd?style=flat-square)
-![Algorithm](https://img.shields.io/badge/Algorithm-Backtracking%20%2B%20MCV-e5a22e?style=flat-square)
+### *Turning an NP-Hard scheduling nightmare into ranked, conflict-free timetables.*
 
----
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Tests](https://img.shields.io/badge/Tests-850%20passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#-testing)
+[![UI](https://img.shields.io/badge/UI-PyQt6-41CD52?style=for-the-badge&logo=qt&logoColor=white)](https://pypi.org/project/PyQt6/)
+[![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](#-license)
 
-## Table of Contents
+**A constraint-driven exam scheduler built around an intelligent backtracking engine —**
+**with a polished PyQt6 desktop GUI and a fully feature-equivalent headless CLI.**
 
-- [Overview](#overview)
-- [Quick Start](#quick-start)
-- [Architecture](#architecture)
-- [UI Workflow](#ui-workflow)
-- [Domain Model](#domain-model)
-- [Scheduling Algorithm](#scheduling-algorithm)
-- [Project Structure](#project-structure)
-- [Setup](#setup)
-- [Usage](#usage)
-- [Input File Formats](#input-file-formats)
-- [Output Format](#output-format)
-- [Testing](#testing)
-- [What's New in v2.0](#whats-new-in-v20)
+</div>
 
 ---
 
 ## Overview
 
-Syncademic solves the exam timetabling problem as a **Constraint Satisfaction Problem (CSP)** and exposes it through a **PyQt6 desktop application**.
+University exam scheduling is a textbook **NP-Hard Constraint Satisfaction Problem (CSP)**. Hundreds of courses, dozens of degree programs with overlapping enrollments, fixed exam windows, holidays, room capacities, and proctor budgets all collide at once. Solving it by hand is slow and error-prone; solving it naïvely by brute force is computationally hopeless.
 
-Key capabilities:
+**Syncademic** automates the whole pipeline. It ingests your program, course, and period data, runs a lazy backtracking engine with conflict-graph pruning, then **filters, ranks, and (optionally) assigns rooms and proctors** — surfacing the best valid timetables instead of dumping every raw permutation on you.
 
-- Load a course catalog and exam-period windows from plain-text files
-- Select up to five study programs through the desktop UI
-- Edit exam-period date exclusions before generating
-- Run a backtracking + MCV search to find all valid conflict-free schedules
-- Browse results in an interactive calendar grid
-- Export a selected schedule to a structured text file
+### Core Capabilities
 
-| Property | Implementation |
+| Capability | Description |
 |---|---|
-| Architecture | Clean Architecture — 6 layers, Ports & Adapters |
-| Primary interface | PyQt6 desktop application |
-| Algorithm | Backtracking CSP + MCV heuristic |
-| Memory model | Lazy `Iterator[Schedule]` — schedules are never all held in RAM |
-| Conflict graph | Built once O(n²), reused across all backtrack steps |
-| Generation | Runs in a `multiprocessing.Process`; UI stays responsive via `QTimer` polling |
+| **Conflict-Free Scheduling** | No student in a selected program/year sits two exams in conflict |
+| **Phase 3 — Multi-Level Sorting** | Reorderable, multi-criteria ranking (min gap, average gap, spread, daily load, elective collisions) |
+| **Feature 4 — Strict Classroom Assignment** | Capacity-aware room splitting + proctor math `⌈students / X⌉` |
+| **GUI & CLI Parity** | Every feature reachable from the desktop app *or* the headless batch CLI |
+| **True Lazy Evaluation** | Generators stream schedules and room variants — the full solution space is never materialised |
+| **Aggressive Memoization** | Hot sorting metrics are cached, keeping ranking fast even with all 5 criteria enabled |
 
 ---
 
-## Quick Start
+## Features
 
-```bash
-git clone <repo-url> && cd examSchedule
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python main.py
-```
+### Phase 3 — Multi-Level Sorting
 
-The desktop application opens. Load `data/courses.txt` and `data/dates.txt`, select your programs, and click **Generate**.
+Once raw schedules are generated, Phase 3 applies threshold filtering and **multi-criteria sorting** without regenerating anything. The five criteria (spec §3.1–3.5) are all ranked **descending** (higher score ranks first):
 
----
-
-## Architecture
-
-Syncademic v2.0 is organised into **six strict layers**. Inner layers never import outer layers.
-
-```mermaid
-%%{init: {'theme': 'dark'}}%%
-flowchart TB
-    classDef ui       fill:#0f2744,stroke:#4a90d9,color:#7ec8f7,font-weight:bold
-    classDef ctrl     fill:#0e2233,stroke:#5ba3e0,color:#a8d4f5
-    classDef engine   fill:#0f2e1a,stroke:#2ecc71,color:#7effa4,font-weight:bold
-    classDef iface    fill:#1a1a1a,stroke:#555,color:#aaa,stroke-dasharray:4 2
-    classDef adapter  fill:#2a0f3a,stroke:#c678dd,color:#e0a8ff
-    classDef domain   fill:#1a1a2e,stroke:#e05c5c,color:#ff9999
-
-    subgraph L6["① Desktop UI (PyQt6)"]
-        direction LR
-        App["ExamSchedulerApp\n(QMainWindow)"]:::ui
-        InputScreen["InputScreen\n(QStackedWidget)"]:::ui
-        ConfigScreen["ConfigScreen\n+ DateEditor"]:::ui
-        ResultsPanel["ResultsPanel\n(calendar grid)"]:::ui
-    end
-
-    subgraph L5["② Controller Boundary"]
-        DC["DesktopController\n— orchestrates UI↔Engine\n— subprocess worker\n— stale-state guard"]:::ctrl
-    end
-
-    subgraph L4["③ Engine"]
-        AC["AppController"]:::engine
-        SG["ScheduleGenerator\n(backtracking + MCV)"]:::engine
-    end
-
-    subgraph L3["④ Interfaces (Ports)"]
-        direction LR
-        IDP["IDataProvider"]:::iface
-        IOE["IOutputExporter"]:::iface
-        ICS["IConflictStrategy"]:::iface
-        ISG["IScheduleGenerator"]:::iface
-    end
-
-    subgraph L2["⑤ Adapters"]
-        direction LR
-        FDP["FileDataProvider"]:::adapter
-        TFE["TextFileExporter"]:::adapter
-        MEM["_MemoryExporter"]:::adapter
-        ECS["ExactConflictStrategy"]:::adapter
-    end
-
-    subgraph L1["⑥ Domain"]
-        direction LR
-        C["Course\n+ CourseOffering"]:::domain
-        EP["ExamPeriod"]:::domain
-        S["Schedule"]:::domain
-    end
-
-    App --> InputScreen --> ConfigScreen & ResultsPanel
-    ConfigScreen --> DC
-    ResultsPanel --> DC
-    DC --> AC
-    AC --> IDP & IOE & ISG
-    SG -. implements .-> ISG
-    FDP -. implements .-> IDP
-    TFE -. implements .-> IOE
-    MEM -. implements .-> IOE
-    ECS -. implements .-> ICS
-    SG --> ICS
-    FDP --> C & EP
-    SG --> S
-    S --> EP
-    ECS --> C
-```
-
-| Layer | Responsibility |
+| Criterion | Meaning |
 |---|---|
-| **Desktop UI** | PyQt6 screens: file loading, program selection, date editing, generation progress, calendar results, export |
-| **Controller** | `DesktopController` — bridges UI signals to engine calls, runs generation in a subprocess worker, enforces stale-state guard |
-| **Engine** | `AppController` orchestrates a pipeline run; `ScheduleGenerator` runs the CSP solver |
-| **Interfaces** | Abstract ports (ABCs) — engine depends only on these, never on concrete adapters |
-| **Adapters** | Concrete implementations: `FileDataProvider`, `TextFileExporter`, `_MemoryExporter`, `ExactConflictStrategy` |
-| **Domain** | Pure data containers (`Course`, `CourseOffering`, `ExamPeriod`, `Schedule`) — zero I/O |
+| `SORT_MIN_DAYS_MANDATORY` | Minimum days between mandatory exams (same program/year) |
+| `SORT_AVG_DAYS_ANY` | Average gap between any two exams (same program/year) |
+| `SORT_ELECTIVE_COLLISIONS` | Elective-vs-elective same-day collisions (same program) |
+| `SORT_EXAM_PERIOD_SPREAD` | Spread between first and last mandatory exam |
+| `SORT_MAX_EXAMS_PER_DAY` | Densest single day, globally |
 
-### Subprocess Worker Pattern
+Criteria are **prioritised and reordered in real time** from the GUI (priority 1 = primary key, the rest are tie-breakers) — no regeneration pass required.
 
-Schedule generation is CPU-intensive. To keep the Qt event loop responsive, `DesktopController` spawns a `multiprocessing.Process` that communicates results back through a `multiprocessing.Queue`. A `QTimer` polling every 150 ms drains the queue and updates the UI without blocking.
+> **Sorting and the output cap.** To keep generation lazy, sorting is applied *after* a capped page of schedules is collected — never across the entire (potentially unbounded) solution space. With no cap (GUI full load) the complete collected list is sorted, so ranking is global; under the CLI's 10,000-combination cap, only the collected page is sorted. The generator is never fully materialised just to rank it.
 
-```
-ConfigScreen  ──signal──►  DesktopController  ──spawn──►  Worker Process
-                                  ▲                              │
-                              QTimer (150ms)  ◄──queue──  results / error
-```
+### Feature 4 — Strict Classroom Assignment
 
----
+When room data is supplied, every exam is assigned concrete rooms, time slots, and proctors:
 
-## UI Workflow
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  1. Load Files                                               │
-│     courses.txt  +  dates.txt  →  FileDataProvider          │
-└──────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌──────────────────────────────────────────────────────────────┐
-│  2. Select Programs                                          │
-│     Up to 5 programs · "View Courses ▶" per row             │
-│     Optional: edit excluded dates per exam period            │
-└──────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌──────────────────────────────────────────────────────────────┐
-│  3. Generate                                                 │
-│     Subprocess worker runs CSP solver                        │
-│     Progress spinner shown · up to 180 s timeout            │
-└──────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌──────────────────────────────────────────────────────────────┐
-│  4. Browse Results                                           │
-│     Calendar grid per semester/moed                          │
-│     Click any cell → exam detail popup                       │
-│     Page through schedules with ◀ / ▶ controls              │
-└──────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌──────────────────────────────────────────────────────────────┐
-│  5. Export                                                   │
-│     Save selected schedule to schedules.txt                  │
-│     Blocked if inputs changed since last generation          │
-└──────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Domain Model
-
-```mermaid
-classDiagram
-    direction TB
-
-    namespace Domain {
-        class Course {
-            +id : str
-            +name : str
-            +instructor : str
-            +evaluation_type : str
-            +offerings : List~CourseOffering~
-            +has_exam() bool
-            +get_relevant_offerings(programs, semester) List
-        }
-        class CourseOffering {
-            +program_id : str
-            +year : int
-            +semester : str
-            +requirement : str
-            +is_elective() bool
-            +is_relevant(programs, semester) bool
-        }
-        class ExamPeriod {
-            +semester : str
-            +moed : str
-            +date_ranges : List~Tuple~
-            +excluded_dates : Set~date~
-            +get_valid_dates() List~date~
-        }
-        class Schedule {
-            +period : ExamPeriod
-            +assignments : Dict~str_date~
-        }
-    }
-
-    Course "1" *-- "0..*" CourseOffering : contains
-    Schedule --> ExamPeriod : period
-```
+- **Capacity splitting** — a single exam's students are split across multiple rooms with a balanced, capacity-respecting distribution; rooms that would receive zero students are dropped.
+- **Proctor math** — proctors per room = `⌈students_in_room / X⌉`, where `X` is the denominator of the `1:X` ratio from `proctors.txt` (spec §4.6).
+- **Graceful degradation** — if `StudentCount` is missing while Feature 4 is *off*, date-only scheduling still runs. With Feature 4 *on*, a missing count aborts the load with an explicit error.
 
 **Conflict rule** — two courses conflict when there exists a shared offering where `program_id`, `year`, and `semester` all match, and not both offerings are elective. Only offerings from **selected programs** are evaluated.
 
 ---
 
-## Scheduling Algorithm
+## Under the Hood: Architecture & Algorithms
+
+### Data Flow
 
 ```mermaid
-%%{init: {'theme': 'dark'}}%%
-flowchart LR
-    classDef start fill:#1a4731,stroke:#2ecc71,color:#fff,rx:20
-    classDef step  fill:#1e3a5f,stroke:#4a90d9,color:#fff,rx:6
-    classDef check fill:#3d2b00,stroke:#e5a22e,color:#fff,rx:6
-    classDef bad   fill:#5c1a1a,stroke:#e74c3c,color:#fff,rx:6
-    classDef good  fill:#1a3a3a,stroke:#1abc9c,color:#fff,rx:20
+graph TD
+    A[Input Files<br/>programs · courses · periods] --> B[FileDataProvider]
+    S[settings.txt<br/>thresholds · sort config] --> TF[ThresholdFilter]
+    R[classrooms.txt<br/>slots.txt · proctors.txt] --> CA[ClassroomAssigner]
 
-    S([Start]):::start
-    DATES["Resolve valid dates\nfrom ExamPeriod\n(exclude Sat + holidays)"]:::step
-    GRAPH["Build conflict graph\nO(n²) — once"]:::step
-    MCV["Sort courses by\nconflict count DESC\n(MCV heuristic)"]:::step
-    TRY["Try next available date\nfor current course"]:::step
-    CHK{Date blocked by\nassigned neighbor?}:::check
-    ASSIGN["Assign date\nto course"]:::step
-    DONE{All courses\nassigned?}:::check
-    BACK["Backtrack —\ndel assignment\ntry next date"]:::bad
-    WIN([Yield Schedule ✓]):::good
-    EMPTY([Return — exhausted]):::bad
+    B --> AC[AppController]
+    TF --> AC
+    CA --> AC
 
-    S --> DATES --> GRAPH --> MCV --> TRY --> CHK
-    CHK -- No --> ASSIGN --> DONE
-    CHK -- Yes --> TRY
-    DONE -- Yes --> WIN --> TRY
-    DONE -- No --> TRY
-    TRY -- No dates left --> BACK --> TRY
-    BACK -- No courses left --> EMPTY
+    AC --> SG[ScheduleGenerator<br/>Backtracking CSP Engine + MCV]
+    SG -->|raw schedules| AC
+    AC --> SE[SortingEngine<br/>memoized metrics]
+    SE -->|filtered & ranked| EX{Output Target}
+
+    EX -->|GUI Mode| UI[PyQt6 Desktop App<br/>Paged viewer · Calendar · Proctor report]
+    EX -->|CLI Mode| TX[TextFileExporter<br/>schedules.txt · schedules_proctor.txt]
 ```
 
-The generator is a lazy `Iterator[Schedule]` — it yields one valid schedule at a time without ever building the full list.
+### CSP Engine — Backtracking with MCV + Lazy Evaluation
+
+The date-assignment core (`ScheduleGenerator`) is a **recursive DFS backtracker** with aggressive pruning:
+
+1. **Conflict graph** — built once (`O(n²)`), mapping each course to the set it conflicts with, so the backtracker does `O(1)` neighbor lookups instead of re-running the conflict rule at every step.
+2. **Most-Constrained-Variable (MCV) heuristic** — courses with the most conflicts are scheduled first. Failures surface early, pruning large branches of the search tree before they're explored.
+3. **True lazy evaluation** — complete schedules are `yield`-ed one at a time; the partial assignment is mutated in place and restored on backtrack, so memory stays `O(n)` regardless of how many solutions exist.
+
+### Feature 4 — Capacity Pruning to Beat $O(2^R)$
+
+With *R* rooms, naïvely enumerating room combinations is $O(2^R)$ — intractable. `ClassroomAssigner` sidesteps the explosion:
+
+- **Capacity-based pruning** — before recursing, it checks whether the best remaining rooms can *possibly* cover an exam's students; impossible branches are cut immediately.
+- **Generator-based DFS** — room variants stream one at a time, so the UI/CLI consume only what they page through; iterators stay alive between page requests.
+- **Largest-exam-first ordering** — bigger exams claim rooms first, maximising feasibility for the rest.
+- **Deduplication** — a `seen` set suppresses identical distributions produced by different room combinations.
+
+### Aggressive Memoization Layer
+
+With all five sort criteria enabled across tens of thousands of candidate schedules, the metric helpers in `sorting_engine.py` (`_min_gap`, `_avg_gap`, `_count_same_day_pairs`) would otherwise re-reduce the *same* lists of exam dates to the *same* numbers millions of times — the root cause of UI freezes under extreme load.
+
+These hot helpers are now backed by an **`@lru_cache` memoization layer**. Because lists are unhashable, each public wrapper normalises its input to a **sorted tuple** before delegating to the cached core — sorting is safe (all three metrics range over unordered pairs) and it collapses differently-ordered date lists onto the same cache entry, maximising the hit rate across permutations. A combinatorial stress test ranks **10,000 schedules across all 120 priority permutations**, asserting each completes in **under 1 second**.
+
+### Handling Extreme Scale: Why We Don't Sort Billions
+
+A natural question for a long-running desktop app: what stops a user who hammers **Auto Load** hundreds of times — pulling an ever-growing pile of generated schedules into the viewer — and then clicks **Result Ranking** to re-sort them? Does the app try to sort billions of options and get OOM-killed by the operating system?
+
+It does not, by design. The reasoning is a deliberate engineering trade-off.
+
+**1. Sorting billions requires materialising billions — and that is what causes OOM.**
+Any comparison sort (`list.sort`, Timsort, quicksort) needs *random access* to the full collection: every element must be resident in RAM simultaneously so the algorithm can compare and reorder it. A schedule is a non-trivial Python object (exam dates, room assignments, proctor data). The space of solutions is a Cartesian product — *date options × classroom variants* — which is effectively **unbounded** and can reach billions. Materialising even a few million such objects to feed a sort would exhaust process memory and trigger the OS OOM-killer long before the sort returned. The crash isn't in the sort; it's in *holding the input the sort demands*.
+
+**2. Our answer is Bounded Lazy Generation, not exhaustive sorting.**
+The engine never tries to enumerate the solution space. Instead:
+
+- **Generate lazily.** `ScheduleGenerator` and `ClassroomAssigner` `yield` solutions one at a time (`O(n)` memory) and keep their iterators alive between page requests. Nothing is materialised until something pages it in.
+- **Bound the work, not an arbitrary count.** No artificial fixed-number ceiling is imposed on the loading flow (`ABSOLUTE_MAX_IN_MEMORY_SCHEDULES` is `None` in `src/engine/generation_workers.py`). Instead, growth is held in check at the source: every Load More / Auto Load request is bounded by **per-request batch and time limits**, and the accumulated population only ever grows by what the user explicitly pages in. It stops on generator exhaustion, user cancellation, or actual system-resource limits — never by silently driving the generator to completion behind the user's back.
+- **Rank only what's been collected.** "Result Ranking" re-sorts the **bounded set already in memory** — the schedules the user actually paged in — not the theoretical billions. Those collected objects are cached and memoized (see the memoization layer above), so re-ranking them is fast and safe; sorting the full product was never on the table.
+
+In other words, we treat the visible, paged-in population as a **working sample** of the solution space and rank *that*. The user always sees a fully, correctly ranked set of exactly the schedules they chose to load.
+
+**3. Why we explicitly rejected External Merge-Sort.**
+External merge-sort (sort RAM-sized chunks, spill to disk, k-way merge) is the textbook fix for "data larger than memory" — and it is the *wrong* tool here. External merge-sort only helps when the dataset is **large but finite and already exists**. Our dataset is neither: the billions of schedules **do not exist yet** — they would have to be *generated* to feed the merge. Driving the lazy generator to completion to produce every chunk would hang the application (and burn unbounded CPU/disk) for a result no human will ever page through. The bottleneck is **generation cost**, not merge I/O, so a merge-sort solves a problem we don't have while leaving the real one — runaway materialisation — completely untouched. A bounded sample is the correct abstraction; an external sort is a more expensive way to still crash.
 
 ---
 
-## Project Structure
+## Installation
 
-```text
-examSchedule/
-├── main.py                          # Entry point — desktop GUI (default) or --cli
-├── data/
-│   ├── courses.txt                  # Course catalog with per-program offerings
-│   ├── dates.txt                    # Exam periods, date ranges, and exclusions
-│   └── programs.txt                 # Program IDs (CLI use)
-├── src/
-│   ├── controller.py                # DesktopController + _MemoryExporter + worker
-│   ├── ui/                          # PyQt6 desktop application
-│   │   ├── app.py                   # QMainWindow entry
-│   │   ├── input_screen.py          # Main widget (QStackedWidget)
-│   │   ├── config_screen.py         # File loading, program selection, generate button
-│   │   ├── results_panel.py         # Calendar grid + QStyledItemDelegate
-│   │   ├── date_editor.py           # Exam-period date exclusion editor
-│   │   ├── exam_detail_dialog.py    # Per-date popup with 4-column table
-│   │   ├── tokens.py                # Colour + spacing constants
-│   │   ├── style.py                 # QSS loader with token substitution
-│   │   └── stylesheet.qss           # Component styling (@COLOR_PRIMARY@ tokens)
-│   ├── domain/                      # Pure data containers — zero I/O
-│   │   ├── course.py
-│   │   ├── course_offering.py
-│   │   ├── exam_period.py
-│   │   ├── schedule.py
-│   │   └── semester.py
-│   ├── interfaces/                  # Abstract ports
-│   │   ├── i_data_provider.py
-│   │   ├── i_conflict_strategy.py
-│   │   ├── i_schedule_generator.py
-│   │   └── i_output_exporter.py
-│   ├── engine/                      # Core logic — depends only on interfaces
-│   │   ├── app_controller.py
-│   │   └── schedule_generator.py
-│   └── adapters/                    # Concrete implementations
-│       ├── exact_conflict_strategy.py
-│       ├── file_data_provider.py
-│       ├── in_memory_data_provider.py
-│       ├── text_file_exporter.py
-│       └── readers/
-│           ├── course_file_reader.py
-│           ├── exam_period_file_reader.py
-│           └── program_selector_reader.py
-├── tests/
-│   ├── unit/                        # Domain, engine, adapters, UI smoke, controller
-│   ├── e2e/                         # Full pipeline and desktop flow tests
-│   └── conftest.py
-├── requirements.txt                 # PyQt6>=6.6.0
-└── requirements-dev.txt             # pytest, pylint, pytest-cov, pre-commit
-```
-
----
-
-## Setup
-
-### 1. System libraries
-
-**Linux only** — PyQt6 requires native graphics libraries that aren't bundled on Linux:
+**Prerequisites:** Python **3.10+** and `pip`.
 
 ```bash
-sudo apt-get update && sudo apt-get install -y \
-  libegl1 libgl1 libgl1-mesa-glx \
-  libxkbcommon0 libxkbcommon-x11-0 \
-  libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0 \
-  libx11-6 libx11-xcb1 libxcb1 libxcb-cursor0 libxcb-icccm4 \
-  libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
-  libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1
-```
-
-**macOS / Windows** — all libraries are bundled with the PyQt6 wheel. Skip this step.
-
-### 2. Python environment
-
-Requires **Python 3.10 or later**. Download from [python.org](https://www.python.org/downloads/) if not installed.
-
-**macOS / Linux:**
-```bash
+# 1. Clone
+git clone https://github.com/ron-ladin/examSchedule.git
 cd examSchedule
-python3 -m venv venv
-source venv/bin/activate
+
+# 2. Create & activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate          # macOS / Linux
+# .venv\Scripts\Activate.ps1       # Windows (PowerShell)
+
+# 3. Install dependencies
+pip install -r requirements.txt
 ```
 
-**Windows (Command Prompt):**
-```cmd
-cd examSchedule
-python -m venv venv
-venv\Scripts\activate.bat
-```
-
-**Windows (PowerShell):**
-```powershell
-cd examSchedule
-python -m venv venv
-venv\Scripts\Activate.ps1
-```
-
-> If PowerShell blocks the script, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once first.
-
-### 3. Install dependencies
-
-```bash
-pip install -r requirements.txt       # runtime: PyQt6
-pip install -r requirements-dev.txt   # dev: pytest, pylint, coverage, pre-commit
-```
+> Runtime dependencies are **PyQt6 ≥ 6.6.0** (desktop GUI) and **psutil ≥ 5.9** (resource guards / adaptive load limits). Dev/test tools (pytest, coverage, pylint, pre-commit) live in `requirements-dev.txt`.
 
 ---
 
 ## Usage
 
-### Desktop application (primary)
+### GUI Mode (default)
 
 **macOS / Linux:**
 ```bash
 python main.py
 ```
 
-**Windows:**
-```cmd
-python main.py
-```
+Launches the **Syncademic** PyQt6 desktop app: validated file browsers, a time-slot validator (HH:MM 24h, ≤3/day, ascending, ≥4h gap), a paged schedule + calendar viewer, schedule import, auto-paged classroom variants, and an inline proctor report.
 
-Opens the PyQt6 GUI. No arguments required.
+### Headless CLI — Three Modes
 
-### Headless CLI (backward-compatible)
+All modes share the four required arguments:
+
+| Argument | Description |
+|---|---|
+| `--programs` | Programs file (comma-separated 5-digit IDs) |
+| `--courses` | Courses file |
+| `--periods` | Exam periods file |
+| `--output` | Output path for generated schedules |
+
+#### Mode 1 — Base (date scheduling only)
 
 **macOS / Linux:**
 ```bash
-python main.py --cli \
+python main.py \
   --programs data/programs.txt \
   --courses  data/courses.txt \
   --periods  data/dates.txt \
   --output   output/schedules.txt
 ```
 
-**Windows:**
-```cmd
-python main.py --cli ^
-  --programs data\programs.txt ^
-  --courses  data\courses.txt ^
-  --periods  data\dates.txt ^
-  --output   output\schedules.txt
-```
+#### Mode 2 — Phase 3 (threshold filtering + multi-level sorting)
 
-Runs the original file-to-file pipeline without launching any UI. Useful for scripting and CI.
+Add `--settings` to filter and rank. Output is capped at 10,000 combinations.
 
-### Running tests
-
-**macOS / Linux:**
 ```bash
-QT_QPA_PLATFORM=offscreen python -m pytest tests/ -v
+python main.py \
+  --programs data/programs.txt \
+  --courses  data/courses.txt \
+  --periods  data/dates.txt \
+  --output   output/schedules.txt \
+  --settings data/settings.txt
 ```
 
-**Windows:**
-```cmd
-set QT_QPA_PLATFORM=offscreen && python -m pytest tests/ -v
+#### Mode 3 — Feature 4 (classroom assignment + proctor report)
+
+All three Feature 4 flags are **required together**; omitting any one aborts with a clear error. Produces both `schedules.txt` and `schedules_proctor.txt`. You may also add `--settings` to rank before room assignment.
+
+```bash
+python main.py \
+  --programs   data/programs.txt \
+  --courses    data/courses.txt \
+  --periods    data/dates.txt \
+  --output     output/schedules.txt \
+  --classrooms data/classrooms.txt \
+  --slots      data/slots.txt \
+  --proctor    data/proctors.txt
 ```
 
-**Windows (PowerShell):**
-```powershell
-$env:QT_QPA_PLATFORM="offscreen"; python -m pytest tests/ -v
-```
-
----
-
-## Input File Formats
-
-### `courses.txt`
-
-Records separated by `$$$$`. Each record: name → ID → instructor → offering lines → evaluation type.
-
-```text
-$$$$
-Calculus 1
-83112
-Dr. Erez Scheiner
-83101, 1, FALL, Obligatory
-83102, 1, FALL, Obligatory
-Exam
-$$$$
-```
-
-Evaluation types: `Exam` | `Project` | `Attendance`. Only `Exam` courses are scheduled.
-
-### `dates.txt`
-
-Exam-period records separated by `$$$$`.
-
-```text
-$$$$
-FALL, Aleph
-29-01-2026, 11-03-2026
-- 14-02-2026
-- 02-03-2026, 04-03-2026  Purim
-$$$$
-```
-
-Semesters: `FALL` | `SPRI` | `SUMM`. Moeds: `Aleph` | `Bet` | `Gimel`. Saturdays excluded automatically.
-
-### `programs.txt` (CLI only)
-
-Comma-separated 5-digit program IDs:
-
-```text
-83101, 83102, 83108
-```
-
----
-
-## Output Format
-
-```text
-=== SEMESTER: FALL ===
---- Moed: Aleph ---
-
-Schedule #1:
-  - Physics 1    | Course ID: 83102 | Date: 29-01-2026 | Instructor: Prof. O. Some
-  - Calculus 1   | Course ID: 83112 | Date: 30-01-2026 | Instructor: Dr. Erez Scheiner
-
-Schedule #2:
-  - Physics 1    | Course ID: 83102 | Date: 29-01-2026 | Instructor: Prof. O. Some
-  - Calculus 1   | Course ID: 83112 | Date: 01-02-2026 | Instructor: Dr. Erez Scheiner
-```
-
-If a period yields no valid schedules the block reads `No valid schedules found.`
+> The CLI is invoked exactly as above, via `python main.py --cli ...`, or in legacy form `python main.py ...` (any non-empty argv that isn't a GUI launch routes to the CLI).
 
 ---
 
 ## Testing
 
-On macOS/Linux, prefix Qt tests with `QT_QPA_PLATFORM=offscreen`. On Windows use `set QT_QPA_PLATFORM=offscreen &&` (CMD) or `$env:QT_QPA_PLATFORM="offscreen";` (PowerShell). See [Running tests](#running-tests) above for platform-specific one-liners.
-
 ```bash
-# Full suite
-QT_QPA_PLATFORM=offscreen python -m pytest tests/ -v
+pip install -r requirements-dev.txt
 
-# Unit tests only
-python -m pytest tests/unit/ -v
+# Regular validation (PR / local) — skips slow performance tests
+pytest tests/ -m "not slow"
 
-# E2E only
-python -m pytest tests/e2e/ -v
+# With coverage
+pytest tests/ -m "not slow" --cov=src --cov-report=term-missing
 
-# UI smoke + integration only
-QT_QPA_PLATFORM=offscreen python -m pytest \
-  tests/unit/test_ui_smoke.py \
-  tests/unit/test_ui_controller_integration.py -v
-
-# With coverage report
-pytest --cov=src --cov-report=term-missing
+# Slow / performance tests — run separately (also executed in the slow-tests CI workflow)
+pytest tests/ -m slow
 ```
 
-**210 tests · all passing · 90% coverage**
+The suite currently runs **850 tests** across unit, integration, and end-to-end layers (excluding the 121 slow/performance tests marked `@pytest.mark.slow`, which run in a separate CI workflow — **971 tests** in total).
 
-| Suite | Scope |
-|---|---|
-| Unit | Domain, readers, adapters, scheduling logic, conflict strategy, controller state |
-| UI smoke | App launches, config screen renders, main controls visible |
-| UI-controller integration | UI actions update controller state; generation and export triggered correctly |
-| E2E | Full flows: load files → select programs → generate → browse → export |
-| Edge cases | Empty files, invalid data, >5 programs, repeated navigation, stale-state prevention |
+> **UI tests** run headless in CI via `QT_QPA_PLATFORM=offscreen` and system Qt libraries (CI is pinned to Python 3.11 for PyQt6 stability). Locally, `pytest.importorskip` skips those tests automatically when PyQt6 is not installed — no `QT_QPA_PLATFORM` override is needed.
 
 ---
 
-## What's New in v2.0
+## Project Structure
 
-| Area | Change |
-|---|---|
-| **Desktop UI** | Full PyQt6 app — config screen, exam period editor, paginated calendar results |
-| **DesktopController** | Dedicated controller layer bridging UI and engine; isolates all subprocess/queue logic |
-| **Subprocess worker** | Generation runs in `multiprocessing.Process`; UI never blocks |
-| **Stale-state guard** | Export blocked when inputs changed since last generation; user notified |
-| **_MemoryExporter** | In-memory adapter captures results without writing to disk during generation |
-| **Per-programme drill-down** | "View Courses ▶" button per programme row |
-| **Date editor** | Multi-range date editor widget with excluded-days support (pre-generation only) |
-| **Design token system** | `tokens.py` + `stylesheet.qss` with `@COLOR_PRIMARY@` substitution |
-| **Tests** | 210 tests at 90% coverage (was 15 tests in v1.0) |
-| **CI** | GitHub Actions with 85% coverage gate + pylint ≥ 8.5 |
+```
+examSchedule/
+├── main.py                        # Entry point — GUI or CLI dispatch
+├── src/
+│   ├── controller.py              # Thin UI-facing desktop controller (no PyQt6 imports)
+│   ├── interfaces/                # Abstract contracts (data provider, exporter, generator, store, conflict strategy)
+│   ├── adapters/                  # File I/O, persistence & conflict strategies
+│   │   ├── readers/               # Per-file parsers (programs, courses, periods, settings, slots, classrooms, proctors, schedules)
+│   │   ├── file_data_provider.py  # Aggregates readers into a single data provider
+│   │   ├── file_hash_cache.py     # Content-hash cache for parsed input files
+│   │   ├── sqlite_schedule_store.py  # SQLite-backed schedule store
+│   │   └── text_file_exporter.py  # schedules.txt / schedules_proctor.txt writer
+│   ├── domain/                    # Pure domain models + SortingEngine (memoized) + resource guards
+│   ├── engine/                    # Orchestration & core algorithms
+│   │   ├── app_controller.py      # Generation pipeline orchestration
+│   │   ├── generation_workers.py  # Background-worker entry point
+│   │   ├── load_worker_pool.py    # Multiprocess load-worker pool
+│   │   ├── ranking_worker.py      # Background ranking worker
+│   │   ├── combined_schedule_indexer.py  # Indexes date × room variants
+│   │   ├── schedule_generator.py  # Backtracking CSP engine (MCV + lazy DFS)
+│   │   ├── classroom_assigner.py  # Lazy room assignment with capacity pruning
+│   │   └── proctor_report.py      # Proctor report builder (⌈students / X⌉)
+│   ├── utils/                     # Shared helpers (merge utilities)
+│   └── ui/                        # PyQt6 desktop application (screens, results controllers, widgets)
+├── tests/                         # unit · e2e · performance
+└── data/                          # Sample input files
+```
+
+---
+
+## License
+
+Released under the **MIT License**.
+
+<div align="center">
+
+Built by the Syncademic team.
+
+</div>

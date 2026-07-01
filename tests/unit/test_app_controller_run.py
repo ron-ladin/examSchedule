@@ -1,14 +1,9 @@
 """
-Unit Tests: AppController
--------------------------
-Pure unit tests for the core AppController orchestration layer.
+Unit Tests: AppController — pipeline wiring and run() behaviour.
 
-These tests verify that AppController wires the pipeline correctly:
-data provider -> generator -> exporter.
-
-No PyQt imports.
-No QApplication.
-No real file I/O.
+Verifies AppController loads from the provider, filters relevant courses,
+sorts/dedupes periods, passes lazy iterators to the exporter, and rejects
+invalid programme selections. No PyQt, no QApplication, no real file I/O.
 """
 
 from collections.abc import Iterator
@@ -18,122 +13,15 @@ import pytest
 
 from src.domain.course import Course
 from src.domain.course_offering import CourseOffering
-from src.domain.exam_period import ExamPeriod
-from src.domain.schedule import Schedule
 from src.engine.app_controller import AppController
 
-
-class FakeDataProvider:
-    """Small in-memory fake for AppController unit tests."""
-
-    def __init__(
-        self,
-        courses: list[Course],
-        exam_periods: list[ExamPeriod],
-    ) -> None:
-        self._courses = courses
-        self._exam_periods = exam_periods
-        self.get_courses_called = False
-        self.get_exam_periods_called = False
-
-    def get_courses(self) -> list[Course]:
-        self.get_courses_called = True
-        return self._courses
-
-    def get_exam_periods(self) -> list[ExamPeriod]:
-        self.get_exam_periods_called = True
-        return self._exam_periods
-
-    def get_selected_programs(self) -> list[str]:
-        return []
-
-
-class FakeGenerator:
-    """Fake generator that records calls and returns lazy iterators."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[list[Course], ExamPeriod]] = []
-
-    def generate_schedules(
-        self,
-        courses: list[Course],
-        exam_period: ExamPeriod,
-    ) -> Iterator[Schedule]:
-        self.calls.append((list(courses), exam_period))
-
-        if not courses:
-            return iter(())
-
-        first_valid_date = exam_period.get_valid_dates()[0]
-        schedule = Schedule(
-            period=exam_period,
-            assignments={courses[0].id: first_valid_date},
-        )
-
-        return iter([schedule])
-
-
-class FakeExporter:
-    """Fake exporter that records the output passed by AppController."""
-
-    def __init__(self) -> None:
-        self.called = False
-        self.schedules_by_period = None
-        self.courses_by_id = None
-        self.materialized_schedules: dict[str, list[Schedule]] = {}
-
-    def export_schedules(
-        self,
-        schedules_by_period,
-        courses_by_id,
-    ) -> None:
-        self.called = True
-        self.schedules_by_period = schedules_by_period
-        self.courses_by_id = courses_by_id
-
-        # Materialize only inside the fake exporter, because the real controller
-        # should pass lazy iterators through without converting them to lists.
-        self.materialized_schedules = {
-            period_key: list(schedule_iter)
-            for period_key, schedule_iter in schedules_by_period.items()
-        }
-
-
-def _course(
-    course_id: str = "11111",
-    name: str = "Course",
-    semester: str = "FALL",
-    evaluation_type: str = "Exam",
-    program_id: str = "83101",
-) -> Course:
-    course = Course(
-        id=course_id,
-        name=name,
-        instructor="Dr. Test",
-        evaluation_type=evaluation_type,
-    )
-    course.add_offering(
-        CourseOffering(
-            program_id=program_id,
-            year=1,
-            semester=semester,
-            requirement="Obligatory",
-        )
-    )
-    return course
-
-
-def _period(
-    semester: str = "FALL",
-    moed: str = "Aleph",
-    start: date = date(2026, 1, 5),
-    end: date = date(2026, 1, 6),
-) -> ExamPeriod:
-    return ExamPeriod(
-        semester=semester,
-        moed=moed,
-        date_ranges=[(start, end)],
-    )
+from tests.unit._app_controller_helpers import (
+    FakeDataProvider,
+    FakeExporter,
+    FakeGenerator,
+    _course,
+    _period,
+)
 
 
 def test_run_connects_provider_generator_and_exporter():
@@ -369,3 +257,81 @@ def test_run_skips_periods_with_no_relevant_exam_courses_but_still_exports():
 
     assert exporter.called is True
     assert list(exporter.materialized_schedules.keys()) == ["FALL - Aleph"]
+
+
+def test_run_without_sorting_cap_1_generator_advances_only_once():
+    """
+    With cap=1 and no sorting, the generator should only be advanced enough
+    to produce the capped page — not fully consumed.
+    """
+    advance_count = 0
+
+    def counting_gen():
+        nonlocal advance_count
+        for i in range(100):
+            advance_count += 1
+            yield i
+
+    class _CountingGenerator:
+        def generate_schedules(self, courses, exam_period):
+            return counting_gen()
+
+    class _CapExporter:
+        def export_schedules(self, schedules_by_period, courses_by_id):
+            for _, it in schedules_by_period.items():
+                next(it, None)  # consume only 1
+
+    course = _course(course_id="11111", semester="FALL")
+    period = _period("FALL", "Aleph")
+    provider = FakeDataProvider(courses=[course], exam_periods=[period])
+
+    AppController(
+        data_provider=provider,
+        exporter=_CapExporter(),
+        generator=_CountingGenerator(),
+        selected_programs=["83101"],
+    ).run()
+
+    assert advance_count == 1, (
+        f"Generator advanced {advance_count} times; cap=1 should advance it only once"
+    )
+
+
+def test_run_does_not_consume_full_generator_with_capped_exporter():
+    """
+    With a capped exporter, AppController.run() must NOT materialise the full
+    iterator. Sorting is the exporter's responsibility (the exporter sorts only
+    the capped page), so AppController never calls list() on the lazy iterator.
+    """
+    advance_count = 0
+
+    def counting_gen():
+        nonlocal advance_count
+        for i in range(100):
+            advance_count += 1
+            yield i
+
+    class _CountingGenerator:
+        def generate_schedules(self, courses, exam_period):
+            return counting_gen()
+
+    class _CapExporter:
+        def export_schedules(self, schedules_by_period, courses_by_id):
+            for _, it in schedules_by_period.items():
+                next(it, None)  # consume only 1
+
+    course = _course(course_id="11111", semester="FALL")
+    period = _period("FALL", "Aleph")
+    provider = FakeDataProvider(courses=[course], exam_periods=[period])
+
+    AppController(
+        data_provider=provider,
+        exporter=_CapExporter(),
+        generator=_CountingGenerator(),
+        selected_programs=["83101"],
+    ).run()
+
+    assert advance_count < 100, (
+        "AppController.run() fully consumed the generator despite a capped exporter; "
+        "sorting must not call list() on the lazy iterator"
+    )

@@ -27,8 +27,6 @@ Notes:
 
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import List, Set, Tuple
-
 from src.domain.semester import normalize_semester
 
 
@@ -36,11 +34,11 @@ from src.domain.semester import normalize_semester
 class ExamPeriod:
     semester: str  # FALL / SPRI / SUMM
     moed: str      # Aleph / Bet / Gimel
-    date_ranges: List[Tuple[date, date]]
-    excluded_dates: Set[date] = field(default_factory=set)
+    date_ranges: list[tuple[date, date]]
+    excluded_dates: set[date] = field(default_factory=set)
 
-    def get_valid_dates(self) -> List[date]:
-        valid_dates: List[date] = []
+    def get_valid_dates(self) -> list[date]:
+        valid_dates: list[date] = []
 
         for start_date, end_date in self.date_ranges:
             current_date = start_date

@@ -217,6 +217,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Dev container
+.devcontainer/
+
 # Project notes
 BUGS_AND_FIXES.md
 
@@ -238,7 +241,7 @@ frontend/node_modules/
 *.mmd
 
 # Local diagram drafts (committed version lives in diagrams.md)
-docs/
+# docs/ intentionally NOT ignored — deliverable docs live there
 
 # Claude Code local files
 .claude/
@@ -262,10 +265,20 @@ frontend/node_modules/
 # Local design / blueprint docs (Part 2 reference — not for commit)
 Phase2_Engineering_Blueprint*.md
 SDD-foundation.md
+sprint3_source_of_truth.md
 *.pdf
 
 .devcontainer/
 .devcontainer/devcontainer.json
 
 
-ECC/ 
+ECC/
+
+# Local generated schedule outputs (CLI + GUI)
+# CLI artifacts go under output/ (already ignored above); main.py creates the
+# directory on demand. These cover legacy/loose output filenames.
+schedules.txt
+out_f4.txt
+out_new_cli.txt
+out_old_cli.txt
+proctor_report.txt
