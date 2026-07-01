@@ -5,7 +5,7 @@
 ### *Turning an NP-Hard scheduling nightmare into ranked, conflict-free timetables.*
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![Tests](https://img.shields.io/badge/Tests-821%20passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#-testing)
+[![Tests](https://img.shields.io/badge/Tests-850%20passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](#-testing)
 [![UI](https://img.shields.io/badge/UI-PyQt6-41CD52?style=for-the-badge&logo=qt&logoColor=white)](https://pypi.org/project/PyQt6/)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](#-license)
 
@@ -150,7 +150,7 @@ source .venv/bin/activate          # macOS / Linux
 pip install -r requirements.txt
 ```
 
-> The only runtime dependency is **PyQt6 ≥ 6.6.0**. Dev/test tools (pytest, coverage, pylint, pre-commit) live in `requirements-dev.txt`.
+> Runtime dependencies are **PyQt6 ≥ 6.6.0** (desktop GUI) and **psutil ≥ 5.9** (resource guards / adaptive load limits). Dev/test tools (pytest, coverage, pylint, pre-commit) live in `requirements-dev.txt`.
 
 ---
 
@@ -232,7 +232,7 @@ pytest tests/ -m "not slow" --cov=src --cov-report=term-missing
 pytest tests/ -m slow
 ```
 
-The suite currently runs **821 tests** across unit, integration, and end-to-end layers (excluding slow/performance tests marked `@pytest.mark.slow`, which run in a separate CI workflow).
+The suite currently runs **850 tests** across unit, integration, and end-to-end layers (excluding the 121 slow/performance tests marked `@pytest.mark.slow`, which run in a separate CI workflow — **971 tests** in total).
 
 > **UI tests** run headless in CI via `QT_QPA_PLATFORM=offscreen` and system Qt libraries (CI is pinned to Python 3.11 for PyQt6 stability). Locally, `pytest.importorskip` skips those tests automatically when PyQt6 is not installed — no `QT_QPA_PLATFORM` override is needed.
 
@@ -246,17 +246,25 @@ examSchedule/
 ├── src/
 │   ├── controller.py              # Thin UI-facing desktop controller (no PyQt6 imports)
 │   ├── interfaces/                # Abstract contracts (data provider, exporter, generator, store, conflict strategy)
-│   ├── adapters/                  # File readers, exporters, conflict strategies
-│   ├── domain/                    # Pure domain models + SortingEngine (memoized)
+│   ├── adapters/                  # File I/O, persistence & conflict strategies
+│   │   ├── readers/               # Per-file parsers (programs, courses, periods, settings, slots, classrooms, proctors, schedules)
+│   │   ├── file_data_provider.py  # Aggregates readers into a single data provider
+│   │   ├── file_hash_cache.py     # Content-hash cache for parsed input files
+│   │   ├── sqlite_schedule_store.py  # SQLite-backed schedule store
+│   │   └── text_file_exporter.py  # schedules.txt / schedules_proctor.txt writer
+│   ├── domain/                    # Pure domain models + SortingEngine (memoized) + resource guards
 │   ├── engine/                    # Orchestration & core algorithms
 │   │   ├── app_controller.py      # Generation pipeline orchestration
 │   │   ├── generation_workers.py  # Background-worker entry point
+│   │   ├── load_worker_pool.py    # Multiprocess load-worker pool
+│   │   ├── ranking_worker.py      # Background ranking worker
+│   │   ├── combined_schedule_indexer.py  # Indexes date × room variants
 │   │   ├── schedule_generator.py  # Backtracking CSP engine (MCV + lazy DFS)
 │   │   ├── classroom_assigner.py  # Lazy room assignment with capacity pruning
 │   │   └── proctor_report.py      # Proctor report builder (⌈students / X⌉)
 │   ├── utils/                     # Shared helpers (merge utilities)
-│   └── ui/                        # PyQt6 desktop application
-├── tests/                         # unit · integration · e2e
+│   └── ui/                        # PyQt6 desktop application (screens, results controllers, widgets)
+├── tests/                         # unit · e2e · performance
 └── data/                          # Sample input files
 ```
 
