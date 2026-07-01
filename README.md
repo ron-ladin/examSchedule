@@ -61,6 +61,8 @@ When room data is supplied, every exam is assigned concrete rooms, time slots, a
 - **Proctor math** — proctors per room = `⌈students_in_room / X⌉`, where `X` is the denominator of the `1:X` ratio from `proctors.txt` (spec §4.6).
 - **Graceful degradation** — if `StudentCount` is missing while Feature 4 is *off*, date-only scheduling still runs. With Feature 4 *on*, a missing count aborts the load with an explicit error.
 
+**Conflict rule** — two courses conflict when there exists a shared offering where `program_id`, `year`, and `semester` all match, and not both offerings are elective. Only offerings from **selected programs** are evaluated.
+
 ---
 
 ## Under the Hood: Architecture & Algorithms
@@ -158,6 +160,7 @@ pip install -r requirements.txt
 
 ### GUI Mode (default)
 
+**macOS / Linux:**
 ```bash
 python main.py
 ```
@@ -177,6 +180,7 @@ All modes share the four required arguments:
 
 #### Mode 1 — Base (date scheduling only)
 
+**macOS / Linux:**
 ```bash
 python main.py \
   --programs data/programs.txt \

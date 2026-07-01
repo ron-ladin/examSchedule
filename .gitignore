@@ -225,7 +225,17 @@ BUGS_AND_FIXES.md
 
 # Locally generated exam schedule output
 output/
+schedules.txt
 data/schedules.txt
+
+# Claude Code & MCP config
+CLAUDE.md
+.mcp.json
+.claude/
+.claude-flow/
+
+# Frontend dependencies
+frontend/node_modules/
 
 # VS Code Mermaid extension auto-generated files
 *.mmd
