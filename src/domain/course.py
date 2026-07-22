@@ -8,7 +8,7 @@ Fields:
     - name            (str)              : full course name
     - instructor      (str)              : instructor name
     - evaluation_type (str)              : "Exam" | "Project" | "Attendance"
-    - offerings       (List[CourseOffering]) : list of programs/years that take this course
+    - offerings       (list[CourseOffering]) : list of programs/years that take this course
 
 Notes:
     - Use @dataclass or Pydantic BaseModel.
@@ -17,7 +17,6 @@ Notes:
 """
 
 from dataclasses import dataclass, field
-from typing import List
 
 from src.domain.course_offering import CourseOffering
 
@@ -28,7 +27,7 @@ class Course:
     name: str
     instructor: str
     evaluation_type: str  # Exam / Project / Attendance
-    offerings: List[CourseOffering] = field(default_factory=list)
+    offerings: list[CourseOffering] = field(default_factory=list)
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Course) and self.id == other.id
@@ -44,9 +43,9 @@ class Course:
 
     def get_relevant_offerings(
         self,
-        selected_programs: List[str],
+        selected_programs: list[str],
         semester: str,
-    ) -> List[CourseOffering]:
+    ) -> list[CourseOffering]:
         return [
             offering
             for offering in self.offerings
@@ -55,7 +54,7 @@ class Course:
 
     def is_relevant_for_period(
         self,
-        selected_programs: List[str],
+        selected_programs: list[str],
         semester: str,
     ) -> bool:
         return self.has_exam() and bool(

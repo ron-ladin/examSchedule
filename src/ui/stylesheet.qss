@@ -9,6 +9,19 @@ QMainWindow, QDialog, QWidget {
     font-size: 12px;
 }
 
+/* ── TOOLTIPS ─────────────────────────────────────────────── */
+/* A global stylesheet makes Qt paint tooltips as a black box unless we
+ * style QToolTip ourselves, so keep hover help light and readable. */
+QToolTip {
+    background-color: #F8FAFC;
+    color: #172033;
+    border: 1px solid #C4B5FD;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
 /* ── APP HEADER ───────────────────────────────────────────── */
 QWidget#appHeader {
     background-color: @COLOR_SIDEBAR@;

@@ -164,6 +164,54 @@ class TextFileExporter(IOutputExporter):
                 f"Instructor: {course.instructor}\n"
             )
 
+            self._write_course_offerings(file, course)
+            self._write_classroom_details(file, schedule, course_id)
+
+    def _write_course_offerings(self, file, course: Course) -> None:
+        """
+        Persist enough course metadata so a later Load Schedule can reconstruct
+        the detail table without requiring the original courses.txt file.
+
+        These lines are intentionally indented under the course line.
+        ScheduleFileReader will parse them back into CourseOffering objects.
+        """
+        for offering in course.offerings:
+            students = (
+                str(offering.student_count)
+                if offering.student_count is not None
+                else ""
+            )
+
+            file.write(
+                f"    Offering: Program: {offering.program_id} | "
+                f"Year: {offering.year} | "
+                f"Semester: {offering.semester} | "
+                f"Requirement: {offering.requirement} | "
+                f"Students: {students}\n"
+            )
+
+    def _write_classroom_details(
+        self,
+        file,
+        schedule: Schedule,
+        course_id: str,
+    ) -> None:
+        classroom_assignments = schedule.classroom_assignments.get(course_id, [])
+
+        for assignment in classroom_assignments:
+            file.write(
+                f"    Slot: {assignment.slot.time.strftime('%H:%M')} | "
+                f"Room: {assignment.room.room_id} | "
+                f"Capacity: {assignment.students_assigned}/{assignment.room.capacity} | "
+                f"Proctors: {assignment.proctor_count}\n"
+            )
+
+        unassigned_count = schedule.unassigned_classroom_exams.get(course_id)
+        if unassigned_count:
+            file.write(
+                f"    Unassigned classroom students: {unassigned_count}\n"
+            )
+
     def _split_period_key(self, period_key: str) -> tuple[str, str]:
         if " - " not in period_key:
             return period_key, "Unknown"

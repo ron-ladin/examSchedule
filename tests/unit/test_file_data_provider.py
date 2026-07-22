@@ -300,3 +300,52 @@ def test_inline_label_on_excluded_date_is_ignored(tmp_path):
 
     assert date(2026, 1, 7) in periods[0].excluded_dates
     assert date(2026, 1, 5) not in periods[0].excluded_dates
+
+
+# ── Spec §6.1: file-hash caching of parsed input data ────────────────────────
+
+def test_cache_serves_identical_data_on_unchanged_files(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    cache_dir = tmp_path / "cache"
+
+    first = FileDataProvider(courses_path, periods_path, programs_path, cache_dir)
+    ids1 = [c.id for c in first.get_courses()]
+    first.get_exam_periods()
+    first.get_selected_programs()
+
+    assert (cache_dir / "manifest.json").exists()
+    assert (cache_dir / "data.json").exists()
+
+    # A new instance with unchanged files must rebuild identical objects from cache.
+    second = FileDataProvider(courses_path, periods_path, programs_path, cache_dir)
+    ids2 = [c.id for c in second.get_courses()]
+    assert ids1 == ids2
+    assert second.get_courses()[0].offerings[0].semester == "SPRI"
+    assert date(2026, 3, 3) in second.get_exam_periods()[0].excluded_dates
+    assert second.get_selected_programs() == ["83101", "83102"]
+
+
+def test_cache_is_invalidated_when_a_watched_file_changes(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    cache_dir = tmp_path / "cache"
+
+    FileDataProvider(courses_path, periods_path, programs_path, cache_dir).get_courses()
+
+    # Change the programs file → combined hash differs → fresh parse, new values.
+    programs_path.write_text("83101", encoding="utf-8")
+    refreshed = FileDataProvider(courses_path, periods_path, programs_path, cache_dir)
+    assert refreshed.get_selected_programs() == ["83101"]
+
+
+def test_cache_miss_does_not_write_when_a_file_is_malformed(tmp_path):
+    courses_path, periods_path, programs_path = _write_valid_files(tmp_path)
+    courses_path.write_text("Calculus\n11111\nDr. Cohen\n", encoding="utf-8")
+    cache_dir = tmp_path / "cache"
+
+    provider = FileDataProvider(courses_path, periods_path, programs_path, cache_dir)
+    # Reading programs first must still succeed (independent of the bad courses file).
+    assert provider.get_selected_programs() == ["83101", "83102"]
+    with pytest.raises(ValueError):
+        provider.get_courses()
+    # No combined cache is persisted because not all three slices parsed cleanly.
+    assert not (cache_dir / "data.json").exists()

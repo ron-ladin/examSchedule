@@ -80,6 +80,7 @@ class ResultsScreen(QWidget):
     """Screen 1: Course Details | Exam Periods | Schedule Results + loading pane."""
 
     back_requested = pyqtSignal()
+    heavy_task_state_changed = pyqtSignal(str, bool)
 
     def __init__(self, controller: DesktopController, parent=None) -> None:
         super().__init__(parent)
@@ -90,6 +91,9 @@ class ResultsScreen(QWidget):
         self._spin_timer.timeout.connect(self._tick_spinner)
         self._results_loaded: bool = False
         self._setup_ui()
+        self._results_panel.heavy_task_state_changed.connect(
+            self.heavy_task_state_changed
+        )
 
     def show_loading(self) -> None:
         self._content_stack.setCurrentIndex(0)
@@ -106,8 +110,45 @@ class ResultsScreen(QWidget):
         courses_by_id: dict[str, Course],
         prog_color_map: dict[str, str],
         truncated_periods: set[str],
+        read_only_import: bool = False,
     ) -> None:
         self._results_panel.load(
+            schedules_by_period,
+            courses_by_id,
+            prog_color_map,
+            truncated_periods,
+            read_only_import=read_only_import,
+        )
+        self._workspace.setCurrentIndex(2)
+        self._results_loaded = True
+
+    def prepare_streaming(self) -> None:
+        """Reset the results panel before a new streaming generation run."""
+        self._results_panel.begin_streaming()
+
+    def has_results_loaded(self) -> bool:
+        """Return True when this screen owns generated/imported results."""
+        return self._results_loaded
+
+    def discard_results(self, *, delete_db: bool = True) -> None:
+        """Release result-panel resources and reset result-loaded state."""
+        self.hide_loading()
+        self._results_panel.release_results(delete_db=delete_db)
+        self._results_loaded = False
+
+    def sync_heavy_task_state(self) -> None:
+        """Refresh result controls after another screen changes heavy-task state."""
+        self._results_panel.sync_heavy_task_state()
+
+    def append_period(
+        self,
+        schedules_by_period: dict[str, list[Schedule]],
+        courses_by_id: dict[str, Course],
+        prog_color_map: dict[str, str],
+        truncated_periods: set[str],
+    ) -> None:
+        """Add one streamed period batch without clearing existing results."""
+        self._results_panel.append_period(
             schedules_by_period,
             courses_by_id,
             prog_color_map,
@@ -146,6 +187,17 @@ class ResultsScreen(QWidget):
         has_rows = self._course_table.rowCount() > 0
         self._courses_placeholder.setVisible(not has_rows)
         self._course_table.setVisible(has_rows)
+
+    def mark_stale(self) -> None:
+        """Show the results panel's stale state immediately (e.g. after a
+        threshold settings change invalidated the cached results)."""
+        if self._results_loaded:
+            self._results_panel.mark_stale()
+
+    def mark_sort_dirty(self) -> None:
+        """Show that sort settings changed and current results need ranking."""
+        if self._results_loaded:
+            self._results_panel.mark_ranking_dirty("")
 
     def refresh_periods(self) -> None:
         self._periods_tabs.clear()
@@ -369,6 +421,7 @@ class InputScreen(QWidget):
     def __init__(self, controller: DesktopController, parent=None) -> None:
         super().__init__(parent)
 
+        self._controller = controller
         self._config = ConfigScreen(controller)
         self._results = ResultsScreen(controller)
 
@@ -381,32 +434,117 @@ class InputScreen(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self._stacked)
 
+        self._streaming_active: bool = False
+
         self._config.generation_started.connect(self._on_generation_started)
+        self._config.period_ready.connect(self._on_period_ready)
         self._config.schedule_generated.connect(self._on_generated)
         self._config.generation_failed.connect(self._on_generation_failed)
         self._config.courses_changed.connect(self._results.refresh_courses)
         self._config.periods_changed.connect(self._results.refresh_periods)
-        self._results.back_requested.connect(lambda: self._stacked.setCurrentIndex(0))
+        self._config.results_invalidated.connect(self._results.mark_stale)
+        self._config.sort_settings_changed.connect(self._results.mark_sort_dirty)
+        self._results.back_requested.connect(self._on_back_requested)
+        self._config.heavy_task_state_changed.connect(
+            lambda _kind, _active: self._results.sync_heavy_task_state()
+        )
+        self._results.heavy_task_state_changed.connect(
+            self._config.on_external_heavy_task_changed
+        )
 
     def _on_generation_started(self, data: tuple) -> None:
         selected, _ = data
 
+        self._streaming_active = False
         self._results.reset_results_state()
+        self._results.prepare_streaming()
         self._results.show_loading()
         self._stacked.setCurrentIndex(1)
 
+    def _on_period_ready(self, data: tuple) -> None:
+        """Display one streamed period batch as soon as it arrives."""
+        _, schedules_by_period, courses_by_id, prog_color_map, truncated = data[:5]
+
+        # Keep the loading pane visible while the first batch is appended; only
+        # reveal the results pane once it has real content to display.
+        first_batch = not self._streaming_active
+        if first_batch:
+            self._streaming_active = True
+
+        self._results.append_period(
+            schedules_by_period,
+            courses_by_id,
+            prog_color_map,
+            truncated,
+        )
+
+        if first_batch:
+            self._results.hide_loading()
+            self._stacked.setCurrentIndex(1)
+
     def _on_generated(self, data: tuple) -> None:
-        _, schedules_by_period, courses_by_id, prog_color_map, truncated = data
+        _, schedules_by_period, courses_by_id, prog_color_map, truncated = data[:5]
+        read_only_import = bool(data[5]) if len(data) > 5 else False
 
         self._results.load(
             schedules_by_period,
             courses_by_id,
             prog_color_map,
             truncated,
+            read_only_import=read_only_import,
         )
         self._results.hide_loading()
+
+        if read_only_import:
+            self._stacked.setCurrentIndex(1)
 
     def _on_generation_failed(self, error_msg: str) -> None:
         self._results.hide_loading()
         self._stacked.setCurrentIndex(0)
         QMessageBox.critical(self, "Generation Error", error_msg)
+
+    def _on_back_requested(self) -> None:
+        if self._controller.heavy_task_kind == "generation":
+            QMessageBox.information(
+                self,
+                "Generation In Progress",
+                "Wait for generation to finish before returning to Input.",
+            )
+            return
+
+        if self._results.has_results_loaded():
+            response = QMessageBox.question(
+                self,
+                "Discard Results?",
+                "Going back to Input will clear generated results and delete "
+                "the temporary database. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if response != QMessageBox.StandardButton.Yes:
+                return
+            self.discard_results(delete_db=True)
+
+        self._stacked.setCurrentIndex(0)
+
+    def discard_results(self, *, delete_db: bool = True) -> None:
+        """Release result resources from both the UI and controller cache."""
+        self._results.discard_results(delete_db=delete_db)
+        self._controller.discard_results(delete_db=delete_db)
+        self._streaming_active = False
+
+    def shutdown_background_workers(self) -> None:
+        """Stop all background workers owned by the UI tree."""
+        self._config.shutdown_background_workers()
+        results = getattr(self, "_results", None)
+        if results is not None:
+            results.discard_results(delete_db=True)
+        shutdown = getattr(self._controller, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+        else:
+            self._controller.shutdown_load_workers()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
+        self.shutdown_background_workers()
+        super().closeEvent(event)

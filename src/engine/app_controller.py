@@ -34,13 +34,82 @@ Notes:
 import logging
 from collections.abc import Iterator
 
+from src.domain.interfaces import IThresholdFilter
+from src.domain.classroom import Classroom
+from src.domain.course import Course
+from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
+from src.domain.threshold import ThresholdSettings
+from src.domain.time_slot import TimeSlot
+from src.engine.classroom_assigner import ClassroomAssigner
 from src.interfaces.i_data_provider import IDataProvider
 from src.interfaces.i_output_exporter import IOutputExporter
 from src.interfaces.i_schedule_generator import IScheduleGenerator
 
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_filter(
+    raw_iter: Iterator[Schedule],
+    threshold_filter,
+    threshold_settings,
+    courses: list,
+    selected_programs: list[str] | None = None,
+) -> Iterator[Schedule]:
+    # Accepts courses as a function argument so the value is captured
+    # eagerly at call time — not by reference to the enclosing loop variable.
+    return (
+        s for s in raw_iter
+        if threshold_filter.is_valid(s, courses, threshold_settings, selected_programs)
+    )
+
+
+CLASSROOM_VARIANT_MODE_ALL = "all"
+CLASSROOM_VARIANT_MODE_FIRST = "first"
+
+
+def _apply_classroom_assignment(
+    raw_iter: Iterator[Schedule],
+    courses: list,
+    selected_programs: list[str],
+    classrooms: list[Classroom],
+    slots: list[TimeSlot],
+    proctor_config: ProctorConfig,
+    allow_unassigned: bool,
+    classroom_variant_mode: str = CLASSROOM_VARIANT_MODE_ALL,
+) -> Iterator[Schedule]:
+    for schedule in raw_iter:
+        # A date-only schedule is only a candidate. When Feature 4 is active,
+        # the caller decides whether to expose all classroom/time-slot variants
+        # or only the first one.
+        #
+        # "first" is used by normal Generate / Load Dates so those actions stay
+        # focused on different date schedules and do not spend time expanding
+        # every classroom variant. Load Variants uses ClassroomAssigner directly
+        # for the currently displayed date schedule.
+        if classroom_variant_mode == CLASSROOM_VARIANT_MODE_FIRST:
+            yield from ClassroomAssigner.assign_variants(
+                schedule,
+                courses,
+                selected_programs,
+                classrooms,
+                slots,
+                proctor_config,
+                allow_unassigned=allow_unassigned,
+                max_options_per_day=1,
+                max_options_per_schedule=1,
+            )
+        else:
+            yield from ClassroomAssigner.assign_variants(
+                schedule,
+                courses,
+                selected_programs,
+                classrooms,
+                slots,
+                proctor_config,
+                allow_unassigned=allow_unassigned,
+            )
 
 
 class AppController:
@@ -51,11 +120,25 @@ class AppController:
         exporter: IOutputExporter,
         generator: IScheduleGenerator,
         selected_programs: list[str],
+        threshold_filter: IThresholdFilter | None = None,
+        threshold_settings: ThresholdSettings | None = None,
+        classrooms: list[Classroom] | None = None,
+        time_slots: list[TimeSlot] | None = None,
+        proctor_config: ProctorConfig | None = None,
+        allow_unassigned_classrooms: bool = False,
+        classroom_variant_mode: str = CLASSROOM_VARIANT_MODE_ALL,
     ) -> None:
         self._data_provider = data_provider
         self._exporter = exporter
         self._generator = generator
         self._selected_programs = selected_programs
+        self._threshold_filter = threshold_filter
+        self._threshold_settings = threshold_settings
+        self._classrooms = classrooms or []
+        self._time_slots = time_slots or []
+        self._proctor_config = proctor_config
+        self._allow_unassigned_classrooms = allow_unassigned_classrooms
+        self._classroom_variant_mode = classroom_variant_mode
 
     def run(self) -> None:
         logger.info("Starting exam schedule generation")
@@ -97,9 +180,31 @@ class AppController:
             # Converting to a list would materialise all schedules into RAM,
             # destroying the O(PAGE_SIZE) memory guarantee of PaginatedExporter
             # and defeating the entire purpose of the yield-based generator.
-            schedules_by_period[period_key] = self._generator.generate_schedules(
-                relevant_courses, period
-            )
+            raw_iter = self._generator.generate_schedules(relevant_courses, period)
+
+            schedule_iter = raw_iter
+            if self._threshold_filter is not None and self._threshold_settings is not None:
+                schedule_iter = _apply_filter(
+                    raw_iter,
+                    self._threshold_filter,
+                    self._threshold_settings,
+                    relevant_courses,
+                    self._selected_programs,
+                )
+
+            if self._classrooms and self._time_slots and self._proctor_config:
+                schedule_iter = _apply_classroom_assignment(
+                    schedule_iter,
+                    relevant_courses,
+                    self._selected_programs,
+                    self._classrooms,
+                    self._time_slots,
+                    self._proctor_config,
+                    self._allow_unassigned_classrooms,
+                    self._classroom_variant_mode,
+                )
+
+            schedules_by_period[period_key] = schedule_iter
 
         self._exporter.export_schedules(schedules_by_period, courses_by_id)
         logger.info("Export complete")

@@ -17,6 +17,10 @@ jobs:
     name: Run Python tests
     runs-on: ubuntu-latest
 
+    # Qt needs a display; offscreen lets the PyQt UI tests run headless in CI.
+    env:
+      QT_QPA_PLATFORM: offscreen
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,6 +29,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      # PyQt6 wheels ship the Qt binaries but still dlopen system libraries at
+      # import time. Without these, `import PyQt6.QtWidgets` raises ImportError
+      # and the UI tests (importorskip) would silently SKIP instead of running.
+      - name: Install Qt system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
 
       - name: Cache pip dependencies
         uses: actions/cache@v4
@@ -40,9 +55,26 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      # Fail loudly if the PyQt UI tests would be skipped (missing Qt libs).
+      # These cover drag-drop ranking, RankingDialog, and SettingsScreen signals.
+      - name: Verify PyQt UI tests actually run (not skipped)
+        run: |
+          python -m pytest \
+            tests/unit/test_sort_priority_list.py \
+            tests/unit/test_ranking_dialog.py \
+            tests/unit/test_settings_screen_emissions.py \
+            -v -rsx | tee ui_test.log
+          if grep -qiE "skipped|no tests ran" ui_test.log; then
+            echo "::error::PyQt UI tests were skipped — Qt libraries are missing in CI."
+            exit 1
+          fi
+
+      # Default PR validation excludes slow tests so it stays fast and never
+      # hangs on the combinatorial stress suite (see slow-tests.yml).
       - name: Run Python tests
         run: |
-          python -m pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=85
+          python -m pytest tests/ -m "not slow" \
+            --cov=src --cov-report=term-missing --cov-fail-under=85
 
       - name: Run Pylint
         run: |

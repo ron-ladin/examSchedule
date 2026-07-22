@@ -4,20 +4,21 @@ Domain Entity: CourseOffering
 Represents a single program's enrollment in a course.
 
 Fields:
-    - program_id  (str)  : 5-digit program code (e.g. "83101")
-    - year        (int)  : study year within the program (e.g. 1, 2, 3)
-    - semester    (str)  : internal format: "FALL" | "SPRI" | "SUMM"
-    - requirement (str)  : "Obligatory" | "Elective"
+    - program_id    (str)            : 5-digit program code (e.g. "83101")
+    - year          (int)            : study year within the program (e.g. 1, 2, 3)
+    - semester      (str)            : internal format: "FALL" | "SPRI" | "SUMM"
+    - requirement   (str)            : "Obligatory" | "Elective"
+    - student_count (Optional[int])  : students enrolling from this program
+                                       (Feature 4, courses.txt index 4). None when
+                                       absent — keeps the field backward-compatible.
 
 Notes:
-    - Use @dataclass or Pydantic BaseModel.
     - No file I/O here — pure data container.
     - Semester values are compared using normalize_semester(), so both
       "SPRI" and "SPRING" are accepted and treated as "SPRI" internally.
 """
 
 from dataclasses import dataclass
-from typing import List
 
 from src.domain.semester import normalize_semester
 
@@ -28,8 +29,17 @@ class CourseOffering:
     year: int
     semester: str
     requirement: str  # Obligatory / Elective
+    student_count: int | None = None  # Feature 4 (SCRUM-285); None when absent
 
-    def is_relevant(self, selected_programs: List[str], semester: str) -> bool:
+    def __post_init__(self) -> None:
+        # student_count is optional; when present it is a count, so 0 is valid
+        # (spec 2.1.5) but a negative value is not.
+        if self.student_count is not None and (
+            isinstance(self.student_count, bool) or self.student_count < 0
+        ):
+            raise ValueError(f"student_count cannot be negative: {self.student_count}")
+
+    def is_relevant(self, selected_programs: list[str], semester: str) -> bool:
         return (
             self.program_id in selected_programs
             and normalize_semester(self.semester) == normalize_semester(semester)

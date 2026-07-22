@@ -62,30 +62,3 @@ class CalendarIcon(_BaseIcon):
         for ry in (0.58, 0.75):
             for rx in (0.25, 0.50, 0.75):
                 p.drawEllipse(QRectF(s*rx - r, s*ry - r, 2*r, 2*r))
-
-
-class GraduationIcon(_BaseIcon):
-    """Mortarboard / graduation cap."""
-
-    def _draw(self, p: QPainter, s: float) -> None:
-        pen = QPen(self._color, max(1.0, s * 0.09))
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        p.setBrush(self._color)
-        p.setPen(pen)
-        diamond = QPainterPath()
-        diamond.moveTo(s*0.50, s*0.05)
-        diamond.lineTo(s*0.94, s*0.32)
-        diamond.lineTo(s*0.50, s*0.50)
-        diamond.lineTo(s*0.06, s*0.32)
-        diamond.closeSubpath()
-        p.drawPath(diamond)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(pen)
-        p.drawLine(int(s*0.28), int(s*0.44), int(s*0.28), int(s*0.74))
-        p.drawLine(int(s*0.72), int(s*0.44), int(s*0.72), int(s*0.74))
-        p.drawArc(int(s*0.18), int(s*0.58), int(s*0.20), int(s*0.30), 180*16, -180*16)
-        p.drawArc(int(s*0.62), int(s*0.58), int(s*0.20), int(s*0.30), 0*16, -180*16)
-        p.drawLine(int(s*0.50), int(s*0.50), int(s*0.50), int(s*0.82))
-        p.drawLine(int(s*0.85), int(s*0.32), int(s*0.85), int(s*0.62))
-        p.drawEllipse(QRectF(s*0.79, s*0.61, s*0.12, s*0.12))

@@ -17,154 +17,80 @@ Notes:
     - Does NOT modify src/engine/app_controller.py.
 """
 
+import copy
+import gc
 import logging
-from collections.abc import Callable, Iterator
+import multiprocessing
+import sqlite3
+from collections.abc import Iterator
 from itertools import chain, islice
 from pathlib import Path
 
 from src.adapters.exact_conflict_strategy import ExactConflictStrategy
 from src.adapters.in_memory_data_provider import InMemoryDataProvider
+from src.adapters.sqlite_schedule_store import SQLiteScheduleExporter, SQLiteScheduleStore, StoredScheduleList
+from src.adapters.readers.classroom_file_reader import ClassroomFileReader
 from src.adapters.readers.course_file_reader import CourseFileReader
 from src.adapters.readers.exam_period_file_reader import ExamPeriodFileReader
+from src.adapters.readers.proctor_config_reader import ProctorConfigReader
+from src.adapters.readers.schedule_file_reader import (
+    EmptyScheduleImportError,
+    ImportedScheduleData,
+    ScheduleFileReader,
+)
 from src.adapters.readers.program_selector_reader import ProgramSelectorReader
+from src.adapters.readers.settings_file_reader import SettingsFileReader
+from src.adapters.readers.slots_file_reader import SlotsFileReader
 from src.adapters.text_file_exporter import TextFileExporter
+from src.domain.classroom import Classroom
 from src.domain.course import Course
 from src.domain.exam_period import ExamPeriod
+from src.domain.feature4_validator import Feature4Validator
+from src.domain.heavy_task_manager import HeavyTaskManager, HeavyTaskToken
+from src.domain.period_order import sort_period_mapping_canonically
+from src.domain.performance_metrics import PerformanceMetrics
+from src.domain.proctor import ProctorConfig
 from src.domain.schedule import Schedule
-from src.domain.semester import normalize_semester
-from src.engine.app_controller import AppController as _EngineController
+from src.domain.settings import Settings
+from src.domain.sorting import SortingConfig
+from src.domain.sorting_engine import SortingEngine
+from src.domain.threshold import ThresholdSettings
+from src.domain.threshold_filter import ThresholdFilter
+from src.domain.time_slot import TimeSlot
+from src.engine.app_controller import (
+    AppController as _EngineController,
+    CLASSROOM_VARIANT_MODE_FIRST,
+)
+from src.engine.combined_schedule_indexer import CombinedScheduleIndexer
+from src.engine.generation_workers import _MemoryExporter
+# Re-exported so existing callers (config_screen, tests) keep importing it here.
+from src.engine.generation_workers import _run_generation_process  # noqa: F401
+from src.engine.load_worker_pool import LoadWorkerPool
+from src.engine.proctor_report import build_proctor_report
+from src.engine.ranking_worker import RankingJob
 from src.engine.schedule_generator import ScheduleGenerator
-from src.interfaces.i_output_exporter import IOutputExporter
+from src.utils.merge_utils import merge_by_key, update_merge_courses
 
 logger = logging.getLogger(__name__)
 
 
-# Kept for backward compatibility with existing UI/tests that import this name.
-# Full generation uses cap=None, so this value is only used by legacy helpers.
-RESULT_BATCH_SIZE: int = 1000
-RESULT_CAP: int = RESULT_BATCH_SIZE
+# All result auto-loading uses the same batch size.
+# This controls both:
+# 1. date-option loading / Auto Dates
+# 2. same-date classroom variant loading / Auto Variants
+#
+# Increase this value to load more blocks per request.
+# Decrease it if the UI feels slow or freezes during loading.
+LOAD_BATCH_SIZE: int = 5000
 
 
-class _MemoryExporter(IOutputExporter):
+class MissingStudentCountError(ValueError):
+    """Raised when a courses load would leave Exam offerings without a
+    StudentCount while Feature 4 is enabled (spec 4.3 file-load abort).
+
+    Subclasses ValueError so callers may catch either type; the UI catches
+    this specific type to show the dedicated 'Missing Student Counts' dialog.
     """
-    Captures generated schedules in memory instead of writing to disk.
-
-    cap=None means full generation:
-        collect all schedules for each period.
-
-    cap=<number> means legacy batched generation:
-        collect only cap schedules per period and mark truncated periods.
-    """
-
-    def __init__(
-        self,
-        cap: int | None = None,
-        offset_by_period: dict[str, int] | None = None,
-        only_period_keys: set[str] | None = None,
-    ) -> None:
-        self._cap = cap
-        self._offset_by_period = offset_by_period or {}
-        self._only_period_keys = only_period_keys
-
-        self.schedules_by_period: dict[str, list[Schedule]] = {}
-        self.courses_by_id: dict[str, Course] = {}
-        self.truncated_periods: set[str] = set()
-        self.remaining_iterators: dict[str, Iterator[Schedule]] = {}
-        self.has_more_by_period: dict[str, bool] = {}
-
-    def export_schedules(
-        self,
-        schedules_by_period: dict[str, Iterator[Schedule]],
-        courses_by_id: dict[str, Course],
-    ) -> None:
-        self.courses_by_id = dict(courses_by_id)
-        self.schedules_by_period.clear()
-        self.truncated_periods.clear()
-        self.remaining_iterators.clear()
-        self.has_more_by_period.clear()
-
-        for key, schedule_iter in schedules_by_period.items():
-            if self._only_period_keys is not None and key not in self._only_period_keys:
-                continue
-
-            offset = self._offset_by_period.get(key, 0)
-
-            if self._cap is None:
-                self.schedules_by_period[key] = list(islice(schedule_iter, offset, None))
-                self.has_more_by_period[key] = False
-                continue
-
-            batch = list(islice(schedule_iter, offset, offset + self._cap + 1))
-
-            if len(batch) > self._cap:
-                self.schedules_by_period[key] = batch[: self._cap]
-                self.truncated_periods.add(key)
-                self.has_more_by_period[key] = True
-
-                self.remaining_iterators[key] = chain(
-                    [batch[self._cap]],
-                    schedule_iter,
-                )
-            else:
-                self.schedules_by_period[key] = batch
-                self.has_more_by_period[key] = False
-
-
-def _run_generation_process(
-    result_queue,
-    courses: "list[Course]",
-    exam_periods: "list[ExamPeriod]",
-    selected_programs: "list[str]",
-    cap: "int | None" = None,
-    period_key: "str | None" = None,
-    offset: int = 0,
-) -> None:
-    """
-    Entry point for multiprocessing.Process-based schedule generation.
-
-    Puts (True, schedules_by_period, courses_by_id, truncated_periods) on success
-    or (False, error_message) on failure.
-
-    Default behavior:
-        cap=None -> generate all schedules up front.
-
-    Optional legacy batching:
-        cap=<number>, period_key=<key>, offset=<already loaded>.
-    """
-    try:
-        data_provider = InMemoryDataProvider(
-            courses=courses,
-            exam_periods=exam_periods,
-            selected_programs=selected_programs,
-        )
-        conflict_strategy = ExactConflictStrategy(selected_programs=selected_programs)
-        generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
-
-        memory_exporter = _MemoryExporter(
-            cap=cap,
-            offset_by_period={period_key: offset} if period_key else None,
-            only_period_keys={period_key} if period_key else None,
-        )
-
-        engine = _EngineController(
-            data_provider=data_provider,
-            exporter=memory_exporter,
-            generator=generator,
-            selected_programs=selected_programs,
-        )
-        engine.run()
-
-        result_queue.put(
-            (
-                True,
-                dict(memory_exporter.schedules_by_period),
-                dict(memory_exporter.courses_by_id),
-                memory_exporter.truncated_periods,
-            )
-        )
-    except Exception as exc:
-        logger.exception("Generation process failed")
-        result_queue.put((False, str(exc)))
 
 
 class DesktopController:
@@ -178,10 +104,218 @@ class DesktopController:
         self._exam_periods: list[ExamPeriod] = []
         self._selected_programs: list[str] = []
         self._loaded_program_ids: list[str] = []
+        self._classrooms: list[Classroom] = []
+        self._time_slots: list[TimeSlot] = []
+        self._proctor_config: ProctorConfig | None = None
+        self._allow_unassigned_classrooms: bool = False
+        self._feature4_enabled: bool = False
         self._remaining_schedule_iterators: dict[str, Iterator[Schedule]] = {}
         self._has_more_schedules: dict[str, bool] = {}
         self._iterator_overflows: dict[str, Schedule] = {}
         self._results_stale: bool = False
+        self._settings: Settings = Settings(
+            thresholds=ThresholdSettings(),
+            sorting=SortingConfig(),
+        )
+        self._imported_courses_by_id: dict[str, Course] = {}
+
+        # True while the cached results come from an imported schedules.txt file
+        # (read-only mode), so a sort-only change must re-render the imported
+        # schedule rather than fall back to stale generated results.
+        self._read_only_import: bool = False
+
+        # Cache of the last threshold-valid results, kept so a sort-only change
+        # can re-rank in place instead of regenerating from scratch.
+        self._last_results: dict[str, list[Schedule]] | None = None
+
+        # Store owned by the legacy in-process generation path. Subprocess UI
+        # generation may still create a panel-owned store and then cache its
+        # StoredScheduleList views here.
+        self._schedule_store: SQLiteScheduleStore | None = None
+
+        # Persistent Load More / Auto Load workers — lifecycle managed by pool.
+        self._worker_pool = LoadWorkerPool()
+
+        # UI-wide throttle: generation/loading/ranking should not compete for
+        # CPU, RAM, and SQLite I/O at the same time.
+        self._heavy_tasks = HeavyTaskManager()
+        self._heavy_task_token: HeavyTaskToken | None = None
+        self._performance_metrics = PerformanceMetrics()
+
+    @property
+    def settings(self) -> Settings:
+        return self._settings
+
+    def set_imported_state(self, courses_by_id: dict[str, "Course"]) -> None:
+        """Store courses from an imported schedule file for proctor report resolution."""
+        self._imported_courses_by_id = dict(courses_by_id)
+
+    def clear_imported_state(self) -> None:
+        """Clear imported-schedule state when a normal generation run starts."""
+        self._imported_courses_by_id = {}
+        self._read_only_import = False
+
+    @property
+    def read_only_import(self) -> bool:
+        """True while the cached results come from an imported schedule file."""
+        return self._read_only_import
+
+    @property
+    def heavy_task_kind(self) -> str | None:
+        """Return the active CPU/disk-heavy UI task kind, if any."""
+        return self._heavy_tasks.active_kind
+
+    @property
+    def performance_metrics(self) -> PerformanceMetrics:
+        """Return diagnostic workload metrics for the current UI session."""
+        return self._performance_metrics
+
+    def cached_schedule_count(self) -> int:
+        """Return the number of schedules currently cached for display/export."""
+        if self._last_results is None:
+            return 0
+        return sum(len(schedules) for schedules in self._last_results.values())
+
+    def begin_heavy_task(self, kind: str) -> bool:
+        """Reserve the single heavy-task slot for *kind* if available."""
+        token = self._heavy_tasks.begin(kind)
+        if token is None:
+            return False
+        self._heavy_task_token = token
+        return True
+
+    def end_heavy_task(self, kind: str | None = None) -> bool:
+        """Release the heavy-task slot when it matches *kind* or kind is omitted."""
+        token = self._heavy_task_token
+        if token is None:
+            return False
+        if kind is not None and token.kind != kind:
+            return False
+        if not self._heavy_tasks.end(token):
+            return False
+        self._heavy_task_token = None
+        return True
+
+    def _reset_owned_schedule_store(self) -> SQLiteScheduleStore:
+        """Replace the controller-owned SQLite store for a new generation run."""
+        if self._schedule_store is not None:
+            self._schedule_store.close(delete=True)
+        self._schedule_store = SQLiteScheduleStore()
+        return self._schedule_store
+
+    def _cached_sqlite_stores(self) -> set[SQLiteScheduleStore]:
+        """Return every SQLite store referenced by cached result facades."""
+        stores: set[SQLiteScheduleStore] = set()
+        if self._schedule_store is not None:
+            stores.add(self._schedule_store)
+        if self._last_results is not None:
+            for schedules in self._last_results.values():
+                if isinstance(schedules, StoredScheduleList):
+                    stores.add(schedules.store)
+        return stores
+
+    def discard_results(self, *, delete_db: bool = True) -> None:
+        """Drop generated/imported result state and close temporary SQLite DBs.
+
+        Input data and settings remain loaded. The method is intentionally
+        idempotent so app shutdown, Back-to-input cleanup, and failed runs can
+        all call it safely.
+        """
+        self.shutdown_load_workers()
+        for store in self._cached_sqlite_stores():
+            try:
+                store.close(delete=delete_db)
+            except Exception:
+                logger.debug("Failed closing cached SQLite result store", exc_info=True)
+
+        self._schedule_store = None
+        self._last_results = None
+        self._remaining_schedule_iterators.clear()
+        self._iterator_overflows.clear()
+        self._has_more_schedules.clear()
+        self._results_stale = False
+        self.clear_imported_state()
+        self.end_heavy_task()
+        if delete_db:
+            gc.collect()
+
+    def shutdown(self) -> None:
+        """Stop workers and release result resources before app teardown."""
+        self.discard_results(delete_db=True)
+
+    def import_schedule(self, path: Path) -> ImportedScheduleData:
+        """Parse a previously exported schedules.txt file and cache it as
+        read-only imported results.
+
+        Parsing, course-metadata resolution, and result caching all live here so
+        the view only chooses a path and renders the returned data (MVC).
+
+        Course metadata is taken from the currently loaded courses when an id is
+        present there, otherwise from the metadata parsed out of the file.
+        """
+        # Parse and validate FULLY before touching any controller state, so a
+        # failed import (empty file, malformed data, reader error) leaves the
+        # previous results, read-only flag and imported courses exactly as they
+        # were. The import is atomic: all-or-nothing.
+        imported = ScheduleFileReader().read_with_metadata(Path(path))
+
+        if not imported.schedules_by_period:
+            raise EmptyScheduleImportError(
+                "No schedules were found in the selected file."
+            )
+
+        loaded_courses_by_id = {course.id: course for course in self._courses}
+        courses_by_id = {
+            course_id: loaded_courses_by_id.get(course_id, imported_course)
+            for course_id, imported_course in imported.courses_by_id.items()
+        }
+
+        # Validation passed — now commit the new imported state. Importing does
+        # not change the underlying input data, so results are not stale; they
+        # are simply read-only.
+        self.clear_results_stale()
+        self.set_imported_state(courses_by_id)
+        self._read_only_import = True
+        self._last_results = sort_period_mapping_canonically(
+            imported.schedules_by_period
+        )
+
+        return ImportedScheduleData(
+            schedules_by_period=imported.schedules_by_period,
+            courses_by_id=courses_by_id,
+        )
+
+    def apply_sort(self, config: SortingConfig) -> None:
+        """Store a new sort config immediately on sort-list change (§281).
+
+        Preserves existing thresholds. Called live — does NOT restart generation.
+        """
+        self._settings = Settings(thresholds=self._settings.thresholds, sorting=config)
+        logger.info("apply_sort: %d active rules", len(config.rules))
+
+    def apply_settings(self, settings: Settings) -> None:
+        """Persist the full settings object (thresholds + sort) from the dialog OK path.
+
+        A threshold change can invalidate already-generated results (they may no
+        longer satisfy the new rules), so existing results are marked stale and
+        must be regenerated before they can be trusted or exported. A sorting-only
+        change does NOT invalidate results — they are simply re-ranked in place.
+        """
+        previous = self._settings
+        self._settings = settings
+        if settings.thresholds != previous.thresholds:
+            self.mark_results_stale()
+        logger.info(
+            "apply_settings: thresholds=%d active, sort=%d rules, stale=%s",
+            sum(1 for e in settings.thresholds.entries if e.enabled),
+            len(settings.sorting.rules),
+            self._results_stale,
+        )
+
+    def load_settings(self, path: Path) -> None:
+        """Load settings from a file and apply them (§1.1 CLI path)."""
+        settings = SettingsFileReader(Path(path)).read()
+        self.apply_settings(settings)
 
     def load_courses(self, path: Path, mode: str = "replace") -> int:
         """
@@ -193,11 +327,28 @@ class DesktopController:
         reader = CourseFileReader(Path(path))
         new_courses = reader.read()
 
+        # Pre-merge validation (spec 4.3): build the would-be-merged result without
+        # mutating committed state.  update_merge_courses modifies Course objects
+        # in-place, so it needs a deep copy. replace/append only mutate the list
+        # structure (not the Course objects themselves), so a shallow copy suffices.
         if mode == "update":
-            self._update_merge_courses(new_courses)
+            candidate = copy.deepcopy(self._courses)
+            update_merge_courses(candidate, new_courses)
         else:
-            self._merge_by_key(self._courses, new_courses, mode, key_fn=lambda c: c.id)
+            candidate = list(self._courses)
+            merge_by_key(candidate, new_courses, mode, key_fn=lambda c: c.id)
 
+        # When Feature 4 is enabled, every Exam offering must carry a
+        # StudentCount. Reject BEFORE committing — self._courses is untouched.
+        if self._feature4_enabled and Feature4Validator.any_exam_missing_student_count(
+            candidate
+        ):
+            raise MissingStudentCountError(
+                "Feature 4 is enabled, but this courses file would leave Exam "
+                "offerings without a StudentCount (spec 4.3). The load was aborted."
+            )
+
+        self._courses = candidate
         self.mark_results_stale()
 
         logger.info(
@@ -208,31 +359,81 @@ class DesktopController:
         )
         return len(self._courses)
 
-    def _update_merge_courses(self, new_courses: list[Course]) -> None:
-        """Update mode: merge offerings into existing courses; add unknown courses."""
-        existing_by_id: dict[str, Course] = {c.id: c for c in self._courses}
+    def load_classrooms(self, path: Path) -> int:
+        """Load and validate the optional Feature 4 classrooms file."""
+        self._classrooms = ClassroomFileReader(Path(path)).read()
+        self.mark_results_stale()
+        return len(self._classrooms)
 
-        for new_course in new_courses:
-            if new_course.id in existing_by_id:
-                existing = existing_by_id[new_course.id]
-                existing_keys = {
-                    (o.program_id, o.year, normalize_semester(o.semester))
-                    for o in existing.offerings
-                }
+    def set_classrooms_from_text(self, text: str) -> int:
+        """
+        Parse classrooms from manual GUI input.
 
-                for offering in new_course.offerings:
-                    key = (
-                        offering.program_id,
-                        offering.year,
-                        normalize_semester(offering.semester),
-                    )
+        Uses the same format and validation rules as the classrooms file:
+            $$$$
+            Room Name
+            Capacity
 
-                    if key not in existing_keys:
-                        existing.add_offering(offering)
-                        existing_keys.add(key)
-            else:
-                self._courses.append(new_course)
-                existing_by_id[new_course.id] = new_course
+        Returns the number of valid classrooms loaded.
+        """
+        self._classrooms = ClassroomFileReader.parse_text(text)
+        self.mark_results_stale()
+        return len(self._classrooms)
+
+    def load_time_slots(self, path: Path) -> int:
+        """Load and validate the optional Feature 4 slots file."""
+        self._time_slots = SlotsFileReader(Path(path)).read()
+        self.mark_results_stale()
+        return len(self._time_slots)
+
+    def load_proctor_config(self, path: Path) -> ProctorConfig:
+        """Load and validate the optional Feature 4 proctor configuration."""
+        self._proctor_config = ProctorConfigReader(Path(path)).read()
+        self.mark_results_stale()
+        return self._proctor_config
+
+    def set_time_slots_from_text(self, text: str) -> int:
+        """
+        Parse comma-separated HH:MM slots from an in-memory value.
+
+        Kept as a compatibility helper; the GUI loads slots from a .txt file.
+        Raises ValueError on invalid input.
+        """
+        self._time_slots = SlotsFileReader.parse_line(text)
+        self.mark_results_stale()
+        return len(self._time_slots)
+
+    def set_proctor_config_from_text(self, text: str) -> ProctorConfig:
+        """
+        Parse a '1:X' proctor ratio from an in-memory value.
+
+        Kept as a compatibility helper; the GUI loads the ratio from a .txt
+        file. Raises ValueError on invalid input.
+        """
+        self._proctor_config = ProctorConfigReader.parse_line(text)
+        self.mark_results_stale()
+        return self._proctor_config
+
+    def set_feature4_enabled(self, enabled: bool) -> None:
+        """Toggle Feature 4 on/off (spec 4.1 dedicated activation toggle)."""
+        self._feature4_enabled = enabled
+        self.mark_results_stale()
+
+    def clear_classrooms(self) -> None:
+        self._classrooms = []
+        self.mark_results_stale()
+
+    def clear_time_slots(self) -> None:
+        self._time_slots = []
+        self.mark_results_stale()
+
+    def clear_proctor_config(self) -> None:
+        self._proctor_config = None
+        self.mark_results_stale()
+
+    def set_allow_unassigned_classrooms(self, allow: bool) -> None:
+        """Preserve the user's soft-warning choice for subsequent result batches."""
+        self._allow_unassigned_classrooms = bool(allow)
 
     def load_programs(self, path: Path) -> int:
         """
@@ -277,52 +478,17 @@ class DesktopController:
         )
         return len(self._exam_periods)
 
-    def _merge_by_key(
-        self,
-        existing: list,
-        new_items: list,
-        mode: str,
-        key_fn: Callable,
-    ) -> None:
-        """Apply replace / append / update merge strategy to an in-memory list."""
-        if mode == "replace":
-            existing.clear()
-            existing.extend(new_items)
-
-        elif mode == "append":
-            existing.extend(new_items)
-
-        elif mode == "update":
-            key_to_idx: dict[str, int] = {
-                key_fn(item): i for i, item in enumerate(existing)
-            }
-            seen_new: set[str] = set()
-
-            for item in new_items:
-                key = key_fn(item)
-
-                if key in seen_new:
-                    logger.warning(
-                        "_merge_by_key: duplicate key '%s' in new items — "
-                        "last occurrence kept",
-                        key,
-                    )
-
-                seen_new.add(key)
-
-                if key in key_to_idx:
-                    existing[key_to_idx[key]] = item
-                else:
-                    existing.append(item)
-                    key_to_idx[key] = len(existing) - 1
-        else:
-            raise ValueError(
-                f"Unknown merge mode: '{mode}'. Use replace, append, or update."
-            )
+    def _merge_by_key(self, existing: list, new_items: list, mode: str, key_fn) -> None:
+        merge_by_key(existing, new_items, mode, key_fn)
 
     @property
     def courses(self) -> list[Course]:
         return list(self._courses)
+
+    @property
+    def selected_programs(self) -> list[str]:
+        """Return the currently selected programme IDs."""
+        return list(self._selected_programs)
 
     @property
     def results_stale(self) -> bool:
@@ -332,6 +498,7 @@ class DesktopController:
     def mark_results_stale(self) -> None:
         """Mark generated schedules as stale after input data was edited."""
         self._results_stale = True
+        self._last_results = None
 
     def clear_results_stale(self) -> None:
         """Mark generated schedules as fresh after successful regeneration."""
@@ -344,6 +511,109 @@ class DesktopController:
     @property
     def has_periods(self) -> bool:
         return bool(self._exam_periods)
+
+    @property
+    def classrooms(self) -> list[Classroom]:
+        return list(self._classrooms)
+
+    @property
+    def time_slots(self) -> list[TimeSlot]:
+        return list(self._time_slots)
+
+    @property
+    def proctor_config(self) -> ProctorConfig | None:
+        return self._proctor_config
+
+    @property
+    def feature4_enabled(self) -> bool:
+        """Whether the user turned the Feature 4 toggle on (spec 4.1)."""
+        return self._feature4_enabled
+
+    @property
+    def feature4_inputs_valid(self) -> bool:
+        """True when all three Feature 4 inputs have been loaded and validated."""
+        return bool(self._classrooms and self._time_slots and self._proctor_config)
+
+    @property
+    def feature4_active(self) -> bool:
+        """
+        Feature 4 is active only when the toggle is on AND all inputs are valid
+        (spec 4.1 — activated via a dedicated toggle).
+        """
+        return self._feature4_enabled and self.feature4_inputs_valid
+
+    def _relevant_offerings_for_course(self, course: Course) -> list:
+        """Delegates to Feature4Validator (spec 4.3/4.4)."""
+        return Feature4Validator.relevant_offerings_for_course(
+            course, self._selected_programs, self._exam_periods
+        )
+
+    def engine_classrooms(self) -> list[Classroom]:
+        """Classrooms passed to the engine — empty unless Feature 4 is active.
+
+        Gating here (not only in the UI) guarantees that disabling the toggle
+        truly disables classroom assignment, even if files remain loaded
+        (spec 4.1).
+        """
+        return list(self._classrooms) if self.feature4_active else []
+
+    def engine_time_slots(self) -> list[TimeSlot]:
+        """Time slots passed to the engine — empty unless Feature 4 is active."""
+        return list(self._time_slots) if self.feature4_active else []
+
+    def engine_proctor_config(self) -> ProctorConfig | None:
+        """Proctor config passed to the engine — None unless Feature 4 is active."""
+        return self._proctor_config if self.feature4_active else None
+
+    def any_exam_missing_student_count(self) -> bool:
+        """
+        True if ANY exam course has an offering without a StudentCount,
+        regardless of programme selection (spec 4.3 file-load abort).
+
+        Used at courses-file load time, before programmes/periods are known,
+        to reject a file that cannot satisfy Feature 4. Unlike
+        feature4_missing_student_counts this is not filtered by relevance.
+        """
+        return Feature4Validator.any_exam_missing_student_count(self._courses)
+
+    def feature4_missing_student_counts(self) -> bool:
+        """
+        True if any *relevant* exam offering lacks a StudentCount (spec 4.3).
+        Delegates to Feature4Validator.
+        """
+        return Feature4Validator.missing_student_counts(
+            self._courses, self._selected_programs, self._exam_periods
+        )
+
+    def feature4_ready(self) -> bool:
+        """
+        True when Feature 4 may proceed to generation (spec 4.2): toggle on,
+        all three inputs valid, and every exam offering has a StudentCount.
+        """
+        return (
+            self._feature4_enabled
+            and self.feature4_inputs_valid
+            and not self.feature4_missing_student_counts()
+        )
+
+    def _exam_student_totals(self) -> dict[tuple[str, str], int]:
+        """Delegates to Feature4Validator (spec 4.3/4.4)."""
+        return Feature4Validator.exam_student_totals(
+            self._courses, self._selected_programs, self._exam_periods
+        )
+
+    def feature4_capacity_shortfall(self) -> tuple[int, int] | None:
+        """
+        Pre-generation capacity warning (spec 4.4). Delegates to
+        Feature4Validator; returns None when inactive or capacity suffices.
+        """
+        return Feature4Validator.capacity_shortfall(
+            self._courses,
+            self._selected_programs,
+            self._exam_periods,
+            self._classrooms,
+            self.feature4_active,
+        )
 
     def has_more_schedules(self, period_key: str) -> bool:
         """Return True if more schedules can be loaded for the given period."""
@@ -404,6 +674,9 @@ class DesktopController:
             raise ValueError("Maximum 5 programmes may be selected.")
 
         self._selected_programs = list(program_ids)
+        # Changing the programme selection changes which exams are scheduled, so
+        # any previously generated results no longer match the inputs (spec §7).
+        self.mark_results_stale()
 
     def update_exam_periods(self, periods: list[ExamPeriod]) -> None:
         """Replace in-memory periods with edited versions from the UI."""
@@ -430,6 +703,8 @@ class DesktopController:
         self._remaining_schedule_iterators.clear()
         self._has_more_schedules.clear()
         self._iterator_overflows.clear()
+        self.clear_imported_state()
+        self._performance_metrics.start_generation(LOAD_BATCH_SIZE)
 
         data_provider = InMemoryDataProvider(
             courses=self._courses,
@@ -439,29 +714,287 @@ class DesktopController:
         conflict_strategy = ExactConflictStrategy(
             selected_programs=self._selected_programs
         )
-        generator = ScheduleGenerator(conflict_strategy=conflict_strategy)
+        generator = ScheduleGenerator(
+            conflict_strategy=conflict_strategy,
+            threshold_settings=self._settings.thresholds,
+            selected_programs=self._selected_programs,
+        )
 
-        memory_exporter = _MemoryExporter(cap=None)
+        # Full in-process generation is still supported for tests / legacy callers,
+        # but results are no longer accumulated in one unbounded Python list.
+        # They are streamed into a temporary SQLite store and exposed through
+        # list-like StoredScheduleList facades.  The actual backtracking
+        # algorithm remains lazy; ScheduleGenerator may prune internally with
+        # MRV/forward-checking/threshold metrics without materialising results.
+        sqlite_exporter = SQLiteScheduleExporter(
+            settings=self._settings,
+            selected_programs=self._selected_programs,
+            chunk_size=LOAD_BATCH_SIZE,
+            store=self._reset_owned_schedule_store(),
+        )
 
         engine = _EngineController(
             data_provider=data_provider,
-            exporter=memory_exporter,
+            exporter=sqlite_exporter,
             generator=generator,
             selected_programs=self._selected_programs,
+            threshold_filter=ThresholdFilter(),
+            threshold_settings=self._settings.thresholds,
+            classrooms=self.engine_classrooms(),
+            time_slots=self.engine_time_slots(),
+            proctor_config=self.engine_proctor_config(),
+            classroom_variant_mode=CLASSROOM_VARIANT_MODE_FIRST,
         )
-        engine.run()
+        try:
+            engine.run()
+        except (sqlite3.DatabaseError, OSError) as exc:
+            logger.exception("SQLite storage failed during generation")
+            if self._schedule_store is not None:
+                self._schedule_store.close(delete=True)
+                self._schedule_store = None
+            self._last_results = None
+            self._performance_metrics.finish_generation()
+            raise RuntimeError(
+                "Could not store generated schedules because the temporary "
+                "SQLite database or disk write failed."
+            ) from exc
 
+        ordered_results = sort_period_mapping_canonically(
+            sqlite_exporter.schedules_by_period
+        )
+        self._last_results = ordered_results
         self.on_generation_succeeded(set())
+
+        sqlite_count = (
+            self._schedule_store.total_count()
+            if self._schedule_store is not None
+            else sum(len(schedules) for schedules in ordered_results.values())
+        )
+        generator_metrics = generator.last_metrics
+        snapshot = self._performance_metrics.finish_generation(
+            total_generated_schedules=sum(
+                len(schedules) for schedules in ordered_results.values()
+            ),
+            schedules_stored_sqlite=sqlite_count,
+            sqlite_stored_row_count=sqlite_count,
+            domain_prunes=generator_metrics.domain_prunes,
+            threshold_rejections=generator_metrics.threshold_prunes,
+            forward_checking_rejections=generator_metrics.conflict_prunes,
+        )
+        logger.info(
+            "Generation performance summary: schedules=%s sqlite_rows=%s "
+            "domain_prunes=%s threshold_rejections=%s forward_checks=%s elapsed=%.3fs",
+            snapshot.total_generated_schedules,
+            snapshot.sqlite_stored_row_count,
+            snapshot.domain_prunes,
+            snapshot.threshold_rejections,
+            snapshot.forward_checking_rejections,
+            snapshot.generation_seconds,
+        )
 
         self._remaining_schedule_iterators.clear()
         self._has_more_schedules.clear()
         self._iterator_overflows.clear()
 
         return (
-            memory_exporter.schedules_by_period,
-            memory_exporter.courses_by_id,
+            dict(ordered_results),
+            dict(sqlite_exporter.courses_by_id),
             set(),
         )
+
+    def resort(self, config: SortingConfig) -> dict[str, list[Schedule]]:
+        """Re-rank cached threshold-valid results without regenerating schedules.
+
+        Plain in-memory results are sorted with SortingEngine.  SQLite-backed
+        results keep the schedules on disk and only update the ORDER BY rule used
+        by their StoredScheduleList facade, so re-ranking does not pull the whole
+        cache into RAM.
+        """
+        if self._last_results is None:
+            raise ValueError(
+                "No results to re-sort. Generate schedules before changing sort order."
+            )
+
+        self.apply_sort(config)
+
+        # Imported read-only schedules may have no courses file loaded, so use
+        # the imported course metadata when present. The UI's selected programs
+        # describe the *generation* context, not the imported file, so they must
+        # NOT constrain ranking of imported data — pass None so the engine ranks
+        # across all available imported courses instead of a stale UI selection.
+        if self._read_only_import and self._imported_courses_by_id:
+            courses = list(self._imported_courses_by_id.values())
+            selected_programs = None
+        else:
+            courses = list(self._courses)
+            selected_programs = self._selected_programs
+
+        resorted: dict[str, list[Schedule]] = {}
+        for period_key, schedules in self._last_results.items():
+            if isinstance(schedules, StoredScheduleList):
+                schedules.set_scoring_context(courses, selected_programs)
+                schedules.set_sorting(config)
+                resorted[period_key] = schedules
+            else:
+                resorted[period_key] = SortingEngine.sort(
+                    schedules, courses, config, selected_programs
+                )
+
+        self._last_results = sort_period_mapping_canonically(resorted)
+        return self._last_results
+
+    def _ranking_context(self) -> tuple[list[Course], list[str] | None]:
+        """Return the course/program context used for Result Ranking."""
+        if self._read_only_import and self._imported_courses_by_id:
+            return list(self._imported_courses_by_id.values()), None
+        return list(self._courses), list(self._selected_programs)
+
+    def build_ranking_job(self, config: SortingConfig) -> RankingJob:
+        """Build a background-ranking payload without regenerating schedules."""
+        if self._last_results is None:
+            raise ValueError(
+                "No results to re-sort. Generate schedules before changing sort order."
+            )
+
+        courses, selected_programs = self._ranking_context()
+        memory_periods: dict[str, list[Schedule]] = {}
+        sqlite_specs: dict[str, list[str]] = {}
+
+        for period_key, schedules in self._last_results.items():
+            if isinstance(schedules, StoredScheduleList):
+                sqlite_specs.setdefault(str(schedules.store.path), []).append(period_key)
+            else:
+                # Large generated result sets are SQLite-backed before they reach
+                # Result Ranking. This in-memory payload path is retained for
+                # small/imported snapshots and unit-test fixtures.
+                memory_periods[period_key] = list(schedules)
+
+        return RankingJob(
+            sorting=config,
+            courses=courses,
+            selected_programs=selected_programs,
+            schedules_by_period=memory_periods,
+            sqlite_store_specs=tuple(
+                (path, tuple(period_keys))
+                for path, period_keys in sqlite_specs.items()
+            ),
+        )
+
+    def apply_ranked_results(
+        self,
+        config: SortingConfig,
+        ranked_schedules_by_period: dict[str, list[Schedule]],
+    ) -> dict[str, list[Schedule]]:
+        """Commit a completed background ranking result to the cached results."""
+        if self._last_results is None:
+            raise ValueError(
+                "No results to re-sort. Generate schedules before changing sort order."
+            )
+
+        self.apply_sort(config)
+        courses, selected_programs = self._ranking_context()
+
+        resorted: dict[str, list[Schedule]] = {}
+        for period_key, schedules in self._last_results.items():
+            if isinstance(schedules, StoredScheduleList):
+                schedules.set_scoring_context(courses, selected_programs)
+                schedules.set_sorting(config)
+                resorted[period_key] = schedules
+            else:
+                resorted[period_key] = ranked_schedules_by_period[period_key]
+
+        self._last_results = sort_period_mapping_canonically(resorted)
+        return self._last_results
+
+    def cache_loaded_results_without_reranking(
+        self,
+        schedules_by_period: dict[str, list[Schedule]],
+    ) -> dict[str, list[Schedule]]:
+        """Cache appended Load More results without re-sorting the full result set."""
+        for schedules in schedules_by_period.values():
+            if isinstance(schedules, StoredScheduleList):
+                schedules.set_sorting(SortingConfig())
+        self._last_results = sort_period_mapping_canonically(schedules_by_period)
+        return self._last_results
+
+    def cache_generated_results(
+        self,
+        schedules_by_period: dict[str, list[Schedule]],
+    ) -> dict[str, list[Schedule]]:
+        """Cache subprocess results and apply the current sort order before display.
+
+        The subprocess already receives a settings snapshot and applies thresholds.
+        The parent process re-applies the current sorting config before displaying,
+        because sort order may have changed while generation was running.
+
+        If the values are StoredScheduleList objects, the data is already on disk;
+        changing ranking only updates the SQLite ORDER BY rule used on access.
+        """
+        self.clear_imported_state()
+
+        courses = list(self._courses)
+        sorting = self._settings.sorting
+
+        resorted: dict[str, list[Schedule]] = {}
+        for period_key, schedules in schedules_by_period.items():
+            if isinstance(schedules, StoredScheduleList):
+                schedules.set_scoring_context(courses, self._selected_programs)
+                schedules.set_sorting(sorting)
+                resorted[period_key] = schedules
+            else:
+                resorted[period_key] = SortingEngine.sort(
+                    schedules, courses, sorting, self._selected_programs
+                )
+
+        self._last_results = sort_period_mapping_canonically(resorted)
+        return self._last_results
+
+    def begin_streaming_cache(self) -> None:
+        """Reset the result cache at the start of a streaming generation run.
+
+        Streaming delivers one period at a time via
+        :meth:`cache_generated_results_incremental`. Call this once before the
+        first partial so leftover results from a previous run (or an imported
+        schedule) do not linger and merge into the new run.
+        """
+        self.clear_imported_state()
+        self._last_results = {}
+        self._remaining_schedule_iterators.clear()
+        self._iterator_overflows.clear()
+        self._has_more_schedules.clear()
+
+    def cache_generated_results_incremental(
+        self,
+        partial: dict[str, list[Schedule]],
+    ) -> dict[str, list[Schedule]]:
+        """Sort and merge one streamed batch of periods into the cache.
+
+        Unlike :meth:`cache_generated_results`, which replaces the whole cache,
+        this keeps periods streamed earlier in the same run so a later re-sort or
+        export sees every period. Sorting is re-applied in the parent process
+        because the active sort order may have changed while generation ran.
+        Returns only the sorted periods from *partial* (for incremental display).
+        """
+        courses = list(self._courses)
+        sorting = self._settings.sorting
+
+        sorted_partial: dict[str, list[Schedule]] = {}
+        for period_key, schedules in partial.items():
+            if isinstance(schedules, StoredScheduleList):
+                schedules.set_scoring_context(courses, self._selected_programs)
+                schedules.set_sorting(sorting)
+                sorted_partial[period_key] = schedules
+            else:
+                sorted_partial[period_key] = SortingEngine.sort(
+                    schedules, courses, sorting, self._selected_programs
+                )
+
+        if self._last_results is None:
+            self._last_results = {}
+        self._last_results.update(sorted_partial)
+        self._last_results = sort_period_mapping_canonically(self._last_results)
+
+        return sorted_partial
 
     def reset_generation_state(self) -> None:
         """Clear all iterator state after subprocess-based generation completes."""
@@ -478,39 +1011,102 @@ class DesktopController:
         """
         self._remaining_schedule_iterators.clear()
         self._iterator_overflows.clear()
-        self._has_more_schedules = {key: True for key in truncated_periods}
+        self._has_more_schedules = sort_period_mapping_canonically(
+            {key: True for key in truncated_periods}
+        )
+
+    def _get_or_start_load_worker(
+        self,
+        period_key: str,
+    ) -> "tuple[multiprocessing.Queue, multiprocessing.Queue, multiprocessing.Process]":
+        return self._worker_pool.get_or_start(period_key)
+
+    def _cleanup_load_worker(self, period_key: str, terminate: bool = False) -> None:
+        self._worker_pool.cleanup(period_key, terminate)
+
+    def shutdown_load_workers(self) -> None:
+        """Stop all persistent Load More / Auto Load workers."""
+        self._worker_pool.shutdown_all()
+
+    def start_load_more_date_options_for_period(
+        self,
+        period_key: str,
+        already_loaded_date_options: int,
+    ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
+        """Queue the next batch of different date options for one period.
+
+        A persistent worker process is reused per period, so Auto Dates does
+        not open a new Python process for every batch.
+        """
+        task_queue, result_queue, proc = self._get_or_start_load_worker(period_key)
+
+        task_queue.put(
+            (
+                "date_options",
+                (
+                    list(self._courses),
+                    list(self._exam_periods),
+                    list(self._selected_programs),
+                ),
+                {
+                    "settings": self._settings,
+                    "cap": LOAD_BATCH_SIZE,
+                    "period_key": period_key,
+                    "offset": already_loaded_date_options,
+                    "classrooms": self.engine_classrooms(),
+                    "time_slots": self.engine_time_slots(),
+                    "proctor_config": self.engine_proctor_config(),
+                    "allow_unassigned_classrooms": self._allow_unassigned_classrooms,
+                    "classroom_variant_mode": CLASSROOM_VARIANT_MODE_FIRST,
+                },
+            )
+        )
+
+        return result_queue, proc
+
+    def start_load_variants_for_schedule(
+        self,
+        period_key: str,
+        schedule: Schedule,
+        already_loaded_variants: int,
+    ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
+        """Queue the next classroom/time-slot variants for the current dates.
+
+        A persistent worker process is reused per period, so Auto Variants does
+        not open a new Python process for every batch.
+        """
+        task_queue, result_queue, proc = self._get_or_start_load_worker(period_key)
+
+        task_queue.put(
+            (
+                "variants",
+                (
+                    period_key,
+                    schedule,
+                    list(self._courses),
+                    list(self._selected_programs),
+                ),
+                {
+                    "settings": self._settings,
+                    "cap": LOAD_BATCH_SIZE,
+                    "offset": already_loaded_variants,
+                    "classrooms": self.engine_classrooms(),
+                    "time_slots": self.engine_time_slots(),
+                    "proctor_config": self.engine_proctor_config(),
+                    "allow_unassigned_classrooms": self._allow_unassigned_classrooms,
+                },
+            )
+        )
+
+        return result_queue, proc
 
     def start_load_more_for_period(
         self,
         period_key: str,
         already_loaded: int,
     ) -> "tuple[multiprocessing.Queue, multiprocessing.Process]":
-        """
-        Legacy helper for old batched UI flow.
-
-        Full generation no longer needs Load More. Kept so old UI/tests do not
-        break if they still import or call this method.
-        """
-        import multiprocessing as _mp
-
-        q: _mp.Queue = _mp.Queue()
-        proc = _mp.Process(
-            target=_run_generation_process,
-            args=(
-                q,
-                list(self._courses),
-                list(self._exam_periods),
-                list(self._selected_programs),
-            ),
-            kwargs={
-                "cap": RESULT_BATCH_SIZE,
-                "period_key": period_key,
-                "offset": already_loaded,
-            },
-            daemon=True,
-        )
-        proc.start()
-        return q, proc
+        """Backward-compatible alias for loading more date options."""
+        return self.start_load_more_date_options_for_period(period_key, already_loaded)
 
     def load_more_schedules(
         self,
@@ -523,7 +1119,7 @@ class DesktopController:
         Full generation normally returns everything in generate(), so this should
         usually return [] in the UI.
         """
-        batch_size = limit if limit is not None else RESULT_BATCH_SIZE
+        batch_size = limit if limit is not None else LOAD_BATCH_SIZE
 
         if batch_size < 0:
             raise ValueError("limit must be non-negative.")
@@ -557,71 +1153,70 @@ class DesktopController:
         self,
         schedules_by_period: dict[str, list[Schedule]],
     ) -> int:
-        """
-        Return the number of currently loaded combined schedules.
-
-        This is the Cartesian product size of the loaded schedules per period.
-        """
-        if not schedules_by_period:
-            return 0
-
-        total = 1
-        for schedules in schedules_by_period.values():
-            if not schedules:
-                return 0
-            total *= len(schedules)
-
-        return total
+        """Return the Cartesian product size of the loaded schedules per period."""
+        return CombinedScheduleIndexer.count(schedules_by_period)
 
     def get_combined_schedule_at(
         self,
         schedules_by_period: dict[str, list[Schedule]],
         index: int,
     ) -> dict[str, Schedule]:
-        """
-        Return one combined schedule by Cartesian-product index.
-
-        The returned dict maps period_key -> Schedule.
-        This avoids materialising list(product(...)) in memory.
-        """
-        total = self.get_combined_schedule_count(schedules_by_period)
-
-        if index < 0 or index >= total:
-            raise IndexError(
-                f"Combined schedule index {index} out of range for total {total}."
-            )
-
-        period_keys = list(schedules_by_period.keys())
-        selected_indexes: dict[str, int] = {}
-        remainder = index
-
-        for period_key in reversed(period_keys):
-            schedules = schedules_by_period[period_key]
-            selected_indexes[period_key] = remainder % len(schedules)
-            remainder //= len(schedules)
-
-        return {
-            period_key: schedules_by_period[period_key][selected_indexes[period_key]]
-            for period_key in period_keys
-        }
+        """Return one combined schedule by Cartesian-product index."""
+        return CombinedScheduleIndexer.at(schedules_by_period, index)
 
     def export(
         self,
         schedules_by_period: dict[str, list[Schedule]],
         output_path: Path,
+        courses_by_id: dict[str, Course] | None = None,
     ) -> None:
-        """Write selected schedules to a text file using TextFileExporter."""
+        """Write selected schedules to a text file using TextFileExporter.
+
+        If courses_by_id is provided, use it as the export metadata source.
+        This is needed for imported schedules, where the controller may not have
+        the original courses file loaded but the imported schedules.txt file
+        still contains course names and instructors.
+        """
         if self._results_stale:
             raise ValueError(
                 "Cannot export stale schedules. Generate schedules again first."
             )
 
-        courses_by_id = {course.id: course for course in self._courses}
+        export_courses_by_id = (
+            courses_by_id
+            if courses_by_id is not None
+            else {course.id: course for course in self._courses}
+        )
 
         exporter = TextFileExporter(
             output_path=Path(output_path),
             max_combinations=None,
         )
-        exporter.export_schedules(schedules_by_period, courses_by_id)
+        exporter.export_schedules(
+            sort_period_mapping_canonically(schedules_by_period),
+            export_courses_by_id,
+        )
 
         logger.info("Exported schedules to %s", output_path)
+
+    def proctor_report_text(self, schedule: Schedule) -> str:
+        """Return the spec 4.6 proctor report text for one schedule.
+
+        Uses imported courses state when present (set via set_imported_state),
+        otherwise falls back to courses loaded from the courses file.
+        """
+        resolved = self._imported_courses_by_id or {
+            course.id: course for course in self._courses
+        }
+        return build_proctor_report(schedule, resolved)
+
+    def export_proctor_report(self, schedule: Schedule, output_path: Path) -> None:
+        """Write the spec 4.6 proctor report for one schedule to a .txt file."""
+        if self._results_stale:
+            raise ValueError(
+                "Cannot export stale schedules. Generate schedules again first."
+            )
+
+        text = self.proctor_report_text(schedule)
+        Path(output_path).write_text(text, encoding="utf-8")
+        logger.info("Exported proctor report to %s", output_path)

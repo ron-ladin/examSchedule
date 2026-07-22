@@ -2,20 +2,45 @@ $$$$
 Physics 1
 83102
 Prof. O. Some
-83101,1,FALL,Obligatory
-83102,1,FALL,Obligatory
+83101,1,FALL,Obligatory,80
+83102,1,FALL,Obligatory,70
 Exam
 $$$$
 Software Project
 83533
 Dr. Terry Bell
-83101,3,SPRI,Elective
-83108,2,SPRI,Obligatory
+83101,3,SPRI,Elective,35
+83108,2,SPRI,Obligatory,40
 Project
 $$$$
 Calculus 1
 83112
 Dr. Erez Scheiner
-83101,1,FALL,Obligatory
-83102,1,FALL,Obligatory
+83101,1,FALL,Obligatory,75
+83102,1,FALL,Obligatory,65
 Exam
+$$$$
+Operating Systems
+10001
+Dr. Maya Cohen
+83103,2,FALL,Obligatory,220
+Exam
+$$$$
+Database Systems
+10002
+Dr. Daniel Levi
+83104,2,FALL,Obligatory,35
+Exam
+$$$$
+Computer Networks
+10003
+Dr. Noa Shalev
+83105,2,FALL,Obligatory,35
+Exam
+$$$$
+Advanced Materials Engineering
+10004
+Dr. Yael Barak
+83109,3,FALL,Obligatory,400
+Exam
+$$$$
